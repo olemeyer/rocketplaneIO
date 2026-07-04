@@ -1,8 +1,9 @@
 import type { Metadata } from 'next';
 import { LoginForm } from '@/components/auth/login-form';
+import { Wordmark } from '@/components/brand/wordmark';
 
 export const metadata: Metadata = {
-  title: 'Sign in — rocketplane',
+  title: 'Sign in — rocketplaneIO',
 };
 
 export default async function LoginPage({
@@ -19,7 +20,7 @@ export default async function LoginPage({
       <div className="relative w-full max-w-sm">
         <a href="/" className="mb-8 flex items-center gap-2.5">
           <span className="beacon h-7 w-7 rounded-lg" aria-hidden />
-          <span className="font-display text-lg font-semibold tracking-tight text-strong">rocketplane</span>
+          <Wordmark className="font-display text-lg font-semibold tracking-tight text-strong" />
         </a>
         <LoginForm next={target} />
         <p className="mt-6 text-center text-[12px] text-faint">

@@ -3,7 +3,7 @@ import { FilterBar, ServiceHealthPanel } from '@/components/explore/service-heal
 import { TraceWaterfall } from '@/components/explore/trace-waterfall';
 
 export const metadata: Metadata = {
-  title: 'Explore — rocketplane',
+  title: 'Explore — rocketplaneIO',
   description: 'Live service health and distributed traces.',
 };
 

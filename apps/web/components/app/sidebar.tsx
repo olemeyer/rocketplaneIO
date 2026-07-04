@@ -3,6 +3,7 @@
 import type { ComponentType, SVGProps } from 'react';
 import { usePathname } from 'next/navigation';
 import { Bell, Compass, Cube, Dashboards, Gear, Logs, Metrics, Waterfall } from '@/components/icons';
+import { Wordmark } from '@/components/brand/wordmark';
 
 type NavItem = {
   label: string;
@@ -30,7 +31,7 @@ export function Sidebar() {
     <aside className="flex w-[224px] shrink-0 flex-col border-r border-line bg-raised">
       <div className="flex h-14 items-center gap-2.5 border-b border-line px-4">
         <span className="beacon h-6 w-6 rounded-[7px]" aria-hidden />
-        <span className="font-display text-[15px] font-semibold tracking-tight text-strong">rocketplane</span>
+        <Wordmark className="font-display text-[15px] font-semibold tracking-tight text-strong" />
       </div>
 
       <nav className="flex-1 space-y-0.5 overflow-y-auto p-2.5">

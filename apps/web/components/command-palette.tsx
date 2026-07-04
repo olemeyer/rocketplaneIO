@@ -151,7 +151,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             <CornerReturn className="h-3 w-3" /> select
           </span>
           <span className="ml-auto flex items-center gap-1.5 text-muted">
-            <span className="h-1.5 w-1.5 rounded-full bg-accent" /> rocketplane
+            <span className="h-1.5 w-1.5 rounded-full bg-accent" /> rocketplaneIO
           </span>
         </div>
       </div>

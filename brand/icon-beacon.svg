@@ -1,0 +1,24 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="aurora" x1="40" y1="40" x2="472" y2="472" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2dd4bf"/>
+      <stop offset="0.5" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#818cf8"/>
+    </linearGradient>
+    <radialGradient id="hl" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(150 120) rotate(45) scale(430)">
+      <stop stop-color="#ffffff" stop-opacity="0.24"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="12" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="116" fill="url(#aurora)"/>
+  <rect x="16" y="16" width="480" height="480" rx="116" fill="url(#hl)"/>
+  <rect x="16.75" y="16.75" width="478.5" height="478.5" rx="115.25" stroke="#ffffff" stroke-opacity="0.16" stroke-width="1.5"/>
+  <g filter="url(#glow)">
+    <path d="M256 92 C 268 196 316 244 420 256 C 316 268 268 316 256 420 C 244 316 196 268 92 256 C 196 244 244 196 256 92 Z" fill="#ffffff"/>
+  </g>
+  <path d="M388 116 C 392 143 401 152 428 156 C 401 160 392 169 388 196 C 384 169 375 160 348 156 C 375 152 384 143 388 116 Z" fill="#ffffff" fill-opacity="0.92"/>
+</svg>

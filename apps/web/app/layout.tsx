@@ -4,10 +4,10 @@ import { cssVars } from '@rocketplane/ui';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'rocketplane — observability engineers love',
+  title: 'rocketplaneIO — observability engineers love',
   description:
     'Open-source, OpenTelemetry-native observability with a keyboard-first UI. Traces, metrics, logs, RUM and synthetics on one canvas. Self-hostable, no lock-in.',
-  applicationName: 'rocketplane',
+  applicationName: 'rocketplaneIO',
 };
 
 export const viewport: Viewport = {

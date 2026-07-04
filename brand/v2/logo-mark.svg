@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="g" x1="40" y1="24" x2="472" y2="488" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2dd4bf"/>
+      <stop offset="0.5" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#818cf8"/>
+    </linearGradient>
+    <radialGradient id="hl" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(150 110) rotate(48) scale(440)">
+      <stop stop-color="#ffffff" stop-opacity="0.26"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#g)"/>
+  <rect width="512" height="512" fill="url(#hl)"/>
+  <g transform="rotate(-22 256 262)">
+    <ellipse cx="256" cy="262" rx="198" ry="94" stroke="#ffffff" stroke-opacity="0.6" stroke-width="9"
+             fill="none" stroke-dasharray="1.5 28" stroke-linecap="round"/>
+    <circle cx="454" cy="262" r="16" fill="#ffffff"/>
+  </g>
+  <g transform="translate(256 262) scale(0.78) translate(-256 -262)">
+    <path d="M198 298 L150 372 L198 354 Z" fill="#ffffff" fill-opacity="0.92"/>
+    <path d="M314 298 L362 372 L314 354 Z" fill="#ffffff" fill-opacity="0.92"/>
+    <path d="M232 362 C 240 408 272 408 280 362 Z" fill="#ffffff" fill-opacity="0.55"/>
+    <path fill-rule="evenodd" clip-rule="evenodd" fill="#ffffff"
+      d="M256 106 C 302 156 314 222 314 294 C 314 328 308 350 298 362 L 214 362 C 204 350 198 328 198 294 C 198 222 210 156 256 106 Z
+         M226 202 a30 30 0 1 0 60 0 a30 30 0 1 0 -60 0 Z"/>
+  </g>
+</svg>

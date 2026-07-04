@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@500;600;700;800&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <style>
+      * { box-sizing: border-box; margin: 0; }
+      body {
+        width: 1040px; background: #0a0e14;
+        background-image:
+          radial-gradient(44% 40% at 16% 10%, rgba(45,212,191,0.13), transparent 70%),
+          radial-gradient(40% 34% at 84% 16%, rgba(129,140,248,0.13), transparent 72%);
+        color: #e9eef5; font-family: 'Schibsted Grotesk', system-ui, sans-serif; padding: 54px;
+      }
+      .mono { font-family: 'Geist Mono', ui-monospace, monospace; }
+      .lockup { display: flex; align-items: center; gap: 22px; margin-bottom: 8px; }
+      .lockup img { width: 88px; height: 88px; }
+      .word { font-size: 48px; font-weight: 600; letter-spacing: -0.035em; }
+      .word .io { font-weight: 800; background: linear-gradient(120deg,#5eead4,#7dd3fc,#a5b4fc);
+        -webkit-background-clip: text; background-clip: text; color: transparent; }
+      .tagline { color: #8a96a7; font-size: 14.5px; margin: 12px 0 44px 110px; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+      .card { border: 1px solid #1c2531; border-radius: 18px; background: #0e131b; padding: 26px;
+        box-shadow: 0 24px 48px -28px rgba(0,0,0,0.7); }
+      .card.rec { border-color: #2dd4bf66; }
+      .hero { display: grid; place-items: center; }
+      .hero img { width: 140px; height: 140px; }
+      .name { margin-top: 20px; font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+      .pill { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.08em; color: #04140f;
+        background: #2dd4bf; border-radius: 999px; padding: 2px 8px; font-weight: 700; }
+      .tag { color: #8a96a7; font-size: 12.5px; line-height: 1.5; margin-top: 6px; min-height: 54px; }
+      .sizes { display: flex; align-items: center; gap: 18px; margin-top: 16px; padding-top: 16px; border-top: 1px solid #1c2531; }
+      .sw { display: flex; flex-direction: column; align-items: center; gap: 7px; }
+      .sw span { font-size: 10px; color: #55606f; }
+      .chip-light { background: #f7f9fb; border: 1px solid #e2e8f0; border-radius: 9px; padding: 6px; display: grid; place-items: center; }
+    </style>
+  </head>
+  <body>
+    <div class="lockup">
+      <img src="icon-rocket.svg" alt="rocketplaneIO" />
+      <div class="word">rocketplane<span class="io">IO</span></div>
+    </div>
+    <div class="tagline mono">damit überwachst du deine Rakete · observability at the speed of thought</div>
+
+    <div class="grid">
+      <div class="card rec">
+        <div class="hero"><img src="icon-rocket.svg" /></div>
+        <div class="name">Rocket <span class="pill">Empfehlung</span></div>
+        <div class="tag">Klare, aufrechte Rakete mit Fenster-Aussparung. Am iconischsten, bestes Favicon — Silicon-Valley-Startup pur.</div>
+        <div class="sizes">
+          <div class="sw"><img src="icon-rocket.svg" width="44" height="44" /><span>44</span></div>
+          <div class="sw"><img src="icon-rocket.svg" width="28" height="28" /><span>28</span></div>
+          <div class="sw"><img src="icon-rocket.svg" width="16" height="16" /><span>16</span></div>
+          <div class="sw"><div class="chip-light"><img src="icon-rocket.svg" width="28" height="28" /></div><span>light</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="hero"><img src="icon-ascent.svg" /></div>
+        <div class="name">Ascent</div>
+        <div class="tag">Aufsteigende Rakete mit Telemetrie-Spur (Datenpunkte). Dynamisch — verbindet Rakete + Observability.</div>
+        <div class="sizes">
+          <div class="sw"><img src="icon-ascent.svg" width="44" height="44" /><span>44</span></div>
+          <div class="sw"><img src="icon-ascent.svg" width="28" height="28" /><span>28</span></div>
+          <div class="sw"><img src="icon-ascent.svg" width="16" height="16" /><span>16</span></div>
+          <div class="sw"><div class="chip-light"><img src="icon-ascent.svg" width="28" height="28" /></div><span>light</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="hero"><img src="icon-orbit.svg" /></div>
+        <div class="name">Orbit</div>
+        <div class="tag">Rakete im Monitoring-Orbit mit Satellit. „Überwache deine Rakete" am wörtlichsten.</div>
+        <div class="sizes">
+          <div class="sw"><img src="icon-orbit.svg" width="44" height="44" /><span>44</span></div>
+          <div class="sw"><img src="icon-orbit.svg" width="28" height="28" /><span>28</span></div>
+          <div class="sw"><img src="icon-orbit.svg" width="16" height="16" /><span>16</span></div>
+          <div class="sw"><div class="chip-light"><img src="icon-orbit.svg" width="28" height="28" /></div><span>light</span></div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

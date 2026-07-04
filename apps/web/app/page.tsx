@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { AppShellMock } from '../components/app-shell-mock';
 import { CommandPalette } from '../components/command-palette';
+import { Wordmark } from '../components/brand/wordmark';
 import { ArrowRight, Bolt, Github, Layers, Shield } from '../components/icons';
 
 const NAV_LINKS = ['Product', 'Docs', 'Changelog', 'Pricing'];
@@ -56,9 +57,7 @@ export default function Page() {
         <nav className="mx-auto flex h-14 max-w-6xl items-center gap-6 px-6">
           <a href="#top" className="flex items-center gap-2.5">
             <span className="beacon h-6 w-6 rounded-[7px]" aria-hidden />
-            <span className="font-display text-[15px] font-semibold tracking-tight text-strong">
-              rocketplane
-            </span>
+            <Wordmark className="font-display text-[15px] font-semibold tracking-tight text-strong" />
           </a>
           <div className="ml-2 hidden items-center gap-6 md:flex">
             {NAV_LINKS.map((l) => (
@@ -184,7 +183,7 @@ export default function Page() {
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-6 py-8 sm:flex-row">
           <div className="flex items-center gap-2.5">
             <span className="beacon h-5 w-5 rounded-md" aria-hidden />
-            <span className="font-display text-[13px] font-semibold text-strong">rocketplane</span>
+            <Wordmark className="font-display text-[13px] font-semibold text-strong" />
             <span className="font-mono text-[11px] text-faint">· Apache-2.0</span>
           </div>
           <div className="flex items-center gap-5 font-mono text-[12px] text-muted">
