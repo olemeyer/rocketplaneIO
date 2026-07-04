@@ -13,21 +13,21 @@ test.describe('rocketplane — /explore (live gegen query-Service)', () => {
   });
 
   test('lädt Service-Health live', async ({ page }) => {
-    // exact:true, sonst kollidiert z.B. "inventory" mit dem Span "inventory.reserve".
-    await expect(page.getByText('payment-gateway', { exact: true })).toBeVisible();
-    await expect(page.getByText('cart-service', { exact: true })).toBeVisible();
-    await expect(page.getByText('inventory', { exact: true })).toBeVisible();
+    // Service-Namen erscheinen auch im Waterfall -> auf die Health-Cards (Links) einschränken.
+    for (const svc of ['payment-gateway', 'cart-service', 'inventory']) {
+      await expect(page.getByRole('link', { name: new RegExp(svc) }).first()).toBeVisible();
+    }
   });
 
   test('rendert den Trace-Waterfall mit echten Spans', async ({ page }) => {
     await expect(page.getByText('POST /checkout', { exact: true })).toBeVisible();
     await expect(page.getByText('payment.charge', { exact: true })).toBeVisible();
-    await expect(page.getByText('stripe.charge', { exact: true })).toBeVisible();
+    await expect(page.getByText('email.enqueue', { exact: true })).toBeVisible();
   });
 
   test('Screenshot der Explore-Seite (live, Dark Mode)', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await expect(page.getByText('payment-gateway', { exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: /payment-gateway/ }).first()).toBeVisible();
     await expect(page.getByText('POST /checkout', { exact: true })).toBeVisible();
     await page.waitForTimeout(500);
     await page.screenshot({ path: 'e2e/screenshots/explore-dark.png' });

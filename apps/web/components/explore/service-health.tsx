@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { getServiceHealth } from '@/lib/api/query';
 import { useLiveQuery } from '@/lib/hooks/use-live-query';
 import { FilterChip, Sparkline, StatusDot, formatErrorRate, formatRate } from './primitives';
@@ -54,7 +55,11 @@ export function ServiceHealthPanel() {
       {(status === 'success' || status === 'refreshing') && (
         <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
           {services.map((s) => (
-            <div key={s.name} className="rounded-lg border border-line bg-base p-2.5">
+            <Link
+              key={s.name}
+              href={`/traces?service=${encodeURIComponent(s.name)}`}
+              className="rounded-lg border border-line bg-base p-2.5 transition-colors hover:border-faint hover:bg-overlay"
+            >
               <div className="flex items-center gap-1.5">
                 <StatusDot state={s.state} />
                 <span className="truncate text-[12px] text-strong">{s.name}</span>
@@ -69,7 +74,7 @@ export function ServiceHealthPanel() {
                 </span>
                 <span className="text-faint">{formatRate(s.throughput)}</span>
               </div>
-            </div>
+            </Link>
           ))}
         </div>
       )}

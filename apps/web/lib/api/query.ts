@@ -84,6 +84,28 @@ export async function getLatestTrace(service: string, sig?: AbortSignal): Promis
   return getTrace(first.traceId, sig);
 }
 
+// Filter für die Trace-Liste (deckt die Backend-Query-Params ab).
+export interface TraceFilter {
+  service?: string;
+  status?: 'ok' | 'error';
+  minDurationMs?: number;
+  sort?: 'start' | 'duration';
+  limit?: number;
+  cursor?: string;
+}
+
+// getTraces liefert eine gefilterte, paginierte Trace-Liste.
+export async function getTraces(f: TraceFilter, sig?: AbortSignal): Promise<TraceListResponse> {
+  const p = new URLSearchParams();
+  if (f.service) p.set('service', f.service);
+  if (f.status) p.set('status', f.status);
+  if (f.minDurationMs) p.set('minDurationMs', String(f.minDurationMs));
+  if (f.sort) p.set('sort', f.sort);
+  p.set('limit', String(f.limit ?? 25));
+  if (f.cursor) p.set('cursor', f.cursor);
+  return rpFetch<TraceListResponse>(`/v1/traces?${p.toString()}`, { signal: sig });
+}
+
 function toTraceSpan(sp: Span, totalMs: number): TraceSpan {
   const total = totalMs || 1;
   return {

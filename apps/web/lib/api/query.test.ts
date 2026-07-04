@@ -1,15 +1,41 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { colorForService, getServiceHealth, getTrace } from './query';
-import { servicesResponse, traceDetail } from '@/src/test/fixtures/explore';
+import { colorForService, getServiceHealth, getTrace, getTraces } from './query';
+import { servicesResponse, traceDetail, traceList } from '@/src/test/fixtures/explore';
 
 function stubFetch(data: unknown) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ status: 'success', data }) }) as unknown as Response),
+  const fetchMock = vi.fn(
+    async (_url: string) =>
+      ({ ok: true, status: 200, json: async () => ({ status: 'success', data }) }) as unknown as Response,
   );
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('getTraces', () => {
+  it('baut Query-Params aus dem Filter und liefert die Liste', async () => {
+    const fetchMock = stubFetch(traceList);
+    const res = await getTraces({ service: 'checkout-api', status: 'error', minDurationMs: 100, limit: 25 });
+
+    expect(res.traces).toHaveLength(1);
+    const url = String(fetchMock.mock.calls[0]?.[0]);
+    expect(url).toContain('/api/rp/v1/traces?');
+    expect(url).toContain('service=checkout-api');
+    expect(url).toContain('status=error');
+    expect(url).toContain('minDurationMs=100');
+    expect(url).toContain('limit=25');
+  });
+
+  it('lässt leere Filter weg', async () => {
+    const fetchMock = stubFetch(traceList);
+    await getTraces({});
+    const url = String(fetchMock.mock.calls[0]?.[0]);
+    expect(url).not.toContain('service=');
+    expect(url).not.toContain('status=');
+    expect(url).toContain('limit=25');
+  });
+});
 
 describe('getServiceHealth', () => {
   it('mappt Service -> ServiceHealth (Status -> State, spark, p95)', async () => {

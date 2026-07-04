@@ -1,8 +1,10 @@
 'use client';
 
+import Link from 'next/link';
 import { getLatestTrace } from '@/lib/api/query';
 import { useLiveQuery } from '@/lib/hooks/use-live-query';
-import { Waterfall } from '../icons';
+import { Waterfall as WaterfallIcon } from '../icons';
+import { Waterfall } from './waterfall';
 
 const loadLatest = (signal: AbortSignal) => getLatestTrace('checkout-api', signal);
 
@@ -14,11 +16,13 @@ export function TraceWaterfall() {
   return (
     <div className="rounded-lg border border-line bg-base p-3">
       <div className="mb-2.5 flex items-center gap-2 font-mono text-[11px]">
-        <Waterfall className="h-3.5 w-3.5 text-accent" />
+        <WaterfallIcon className="h-3.5 w-3.5 text-accent" />
         <span className="text-muted">trace</span>
         {detail ? (
           <>
-            <span className="text-strong">{detail.traceId.slice(0, 12)}…</span>
+            <Link href={`/traces/${detail.traceId}`} className="text-strong hover:text-accent">
+              {detail.traceId.slice(0, 12)}…
+            </Link>
             <span className="text-faint">·</span>
             <span className="text-strong">{Math.round(detail.durationMs)}ms</span>
             <span className="text-faint">·</span>
@@ -60,38 +64,7 @@ export function TraceWaterfall() {
         <div className="py-3 text-center text-[12px] text-muted">Kein Trace gefunden.</div>
       )}
 
-      {(status === 'success' || status === 'refreshing') && (
-        <div className="space-y-[3px]">
-          {spans.map((sp, i) => (
-            <div key={i} className="grid grid-cols-[168px_1fr_52px] items-center gap-2">
-              <div
-                className="flex items-center gap-1.5 truncate font-mono text-[11px]"
-                style={{ paddingLeft: `${sp.depth * 12}px` }}
-              >
-                <span className="h-2.5 w-[3px] shrink-0 rounded-full" style={{ background: sp.color }} />
-                <span className={`truncate ${sp.isError ? 'text-status-critical' : 'text-strong'}`}>
-                  {sp.name}
-                </span>
-              </div>
-              <div className="relative h-3.5 rounded-[3px] bg-overlay">
-                <div
-                  className="absolute top-0 h-full rounded-[3px]"
-                  style={{
-                    left: `${sp.offsetPct}%`,
-                    width: `${sp.widthPct}%`,
-                    background: sp.color,
-                    opacity: sp.isError ? 1 : 0.85,
-                    boxShadow: sp.isError ? `0 0 0 1px ${sp.color}` : undefined,
-                  }}
-                />
-              </div>
-              <span className="text-right font-mono text-[11px] text-muted">
-                {Math.round(sp.durationMs)}ms
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
+      {(status === 'success' || status === 'refreshing') && <Waterfall spans={spans} />}
     </div>
   );
 }
