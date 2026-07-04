@@ -1,0 +1,35 @@
+{
+  "name": "rocketplane",
+  "version": "0.0.0",
+  "private": true,
+  "description": "rocketplaneIO — open-source, OpenTelemetry-native observability platform with a keyboard-first UI.",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:e2e": "playwright test",
+    "test:e2e:report": "playwright show-report",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yaml,yml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yaml,yml}\"",
+    "go:build": "go build ./services/...",
+    "go:test": "go test ./services/...",
+    "go:tidy": "cd services/ingest && go mod tidy && cd ../query && go mod tidy",
+    "compose:up": "docker compose -f deploy/compose/docker-compose.yml up -d",
+    "compose:down": "docker compose -f deploy/compose/docker-compose.yml down",
+    "compose:logs": "docker compose -f deploy/compose/docker-compose.yml logs -f"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0",
+    "prettier": "^3.4.2",
+    "turbo": "^2.3.4",
+    "typescript": "^5.7.2"
+  }
+}

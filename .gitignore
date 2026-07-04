@@ -1,0 +1,64 @@
+# ── Node / pnpm ─────────────────────────────────────────────
+node_modules/
+.pnpm-store/
+.pnpm-debug.log*
+npm-debug.log*
+yarn-error.log*
+
+# ── Build output ────────────────────────────────────────────
+dist/
+build/
+out/
+.output/
+*.tsbuildinfo
+
+# ── Turborepo ───────────────────────────────────────────────
+.turbo/
+
+# ── Next.js ─────────────────────────────────────────────────
+.next/
+next-env.d.ts
+
+# ── Go ──────────────────────────────────────────────────────
+# Compiled binaries (we build into ./bin)
+/bin/
+services/*/bin/
+*.exe
+*.test
+*.out
+# go.work.sum is machine-specific; keep go.work checked in
+go.work.sum
+
+# ── Env / secrets ───────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.local
+
+# ── Data volumes (local compose) ────────────────────────────
+deploy/compose/.data/
+*.clickhouse
+*.pgdata
+
+# ── Editor / OS ─────────────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ── Coverage / logs ─────────────────────────────────────────
+coverage/
+*.log
+
+# ── Playwright (E2E) ────────────────────────────────────────
+playwright-report/
+test-results/
+e2e/.output/
+e2e/screenshots/
+
+# NOTE: Die interne Recherche-/Produkt-Doku liegt bewusst im
+# Eltern-Ordner (../docs) AUSSERHALB dieses Repos und kann daher
+# gar nicht versehentlich committet werden. Siehe README.
