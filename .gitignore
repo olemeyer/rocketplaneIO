@@ -62,3 +62,6 @@ e2e/screenshots/
 # NOTE: Die interne Recherche-/Produkt-Doku liegt bewusst im
 # Eltern-Ordner (../docs) AUSSERHALB dieses Repos und kann daher
 # gar nicht versehentlich committet werden. Siehe README.
+
+# ── Brand (generierte Previews) ─────────────────────────────
+brand/**/*.png

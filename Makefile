@@ -29,8 +29,33 @@ dev-ingest: ## Ingest-Service starten (Go)
 	cd services/ingest && go run ./cmd/ingest
 
 .PHONY: dev-query
-dev-query: ## Query-Service starten (Go)
+dev-query: ## Query-Service starten (Go, Seed-Store)
 	cd services/query && go run ./cmd/query
+
+## ── Live-Daten (ClickHouse) ────────────────────────────────
+CH_ENV := CLICKHOUSE_URL=http://localhost:8123 CLICKHOUSE_DB=otel CLICKHOUSE_USER=rocketplane CLICKHOUSE_PASSWORD=rocketplane
+
+.PHONY: ch-schema
+ch-schema: ## otel_traces-Schema in ClickHouse anlegen
+	curl -s -u rocketplane:rocketplane "http://localhost:8123/?database=otel" \
+		--data-binary @deploy/clickhouse/otel_traces.sql && echo "schema ok"
+
+.PHONY: tracegen
+tracegen: ## Live-Trace-Generator: speist otel_traces (Ctrl-C zum Stoppen)
+	cd services/query && $(CH_ENV) go run ./cmd/tracegen -backfill 15m -every 2s
+
+.PHONY: dev-query-ch
+dev-query-ch: ## Query-Service gegen ClickHouse starten (echte Daten)
+	cd services/query && QUERY_STORE=clickhouse $(CH_ENV) go run ./cmd/query
+
+.PHONY: live
+live: up ## Voller Live-Stack-Hinweis (Infra hoch + Anleitung)
+	@sleep 2 && $(MAKE) ch-schema
+	@echo ""
+	@echo "Live-Stack — in drei Terminals starten:"
+	@echo "  make tracegen       # kontinuierliche otel_traces-Daten"
+	@echo "  make dev-query-ch   # query-Service gegen ClickHouse (:7080)"
+	@echo "  make dev            # Web-App (:4173) -> /explore"
 
 ## ── Build / Check ──────────────────────────────────────────
 .PHONY: build
