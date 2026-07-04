@@ -76,11 +76,14 @@ export default function Page() {
               <Github className="h-4 w-4" />
               <span className="font-mono">4.8k</span>
             </a>
-            <a href="#" className="hidden text-[13px] text-muted transition-colors hover:text-strong sm:block">
+            <a
+              href="/login"
+              className="hidden text-[13px] text-muted transition-colors hover:text-strong sm:block"
+            >
               Sign in
             </a>
             <a
-              href="#"
+              href="/login"
               className="rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-[#04140f] transition-[filter] hover:brightness-110"
             >
               Start free
@@ -119,7 +122,7 @@ export default function Page() {
 
           <div className="reveal mt-8 flex items-center justify-center gap-3" style={delay(210)}>
             <a
-              href="#"
+              href="/login"
               className="group flex items-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-[14px] font-medium text-[#04140f] transition-[filter] hover:brightness-110"
             >
               Start free
