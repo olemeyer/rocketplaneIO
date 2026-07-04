@@ -1,0 +1,8 @@
+{
+  "name": "@rocketplane/tsconfig",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Geteilte TypeScript-Konfigurationen für das rocketplane-Monorepo.",
+  "license": "Apache-2.0",
+  "files": ["base.json", "react.json"]
+}
