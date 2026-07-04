@@ -19,9 +19,9 @@
     "test:e2e:report": "playwright show-report",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yaml,yml}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yaml,yml}\"",
-    "go:build": "go build ./services/...",
-    "go:test": "go test ./services/...",
-    "go:tidy": "cd services/ingest && go mod tidy && cd ../query && go mod tidy",
+    "go:build": "go -C services/ingest build ./... && go -C services/query build ./...",
+    "go:test": "go -C services/ingest test ./... && go -C services/query test ./...",
+    "go:tidy": "go -C services/ingest mod tidy && go -C services/query mod tidy",
     "compose:up": "docker compose -f deploy/compose/docker-compose.yml up -d",
     "compose:down": "docker compose -f deploy/compose/docker-compose.yml down",
     "compose:logs": "docker compose -f deploy/compose/docker-compose.yml logs -f"

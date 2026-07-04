@@ -25,8 +25,8 @@ dev: ## Frontend-Dev-Server (Next.js) starten
 	pnpm --filter @rocketplane/web dev
 
 .PHONY: dev-ingest
-dev-ingest: ## Ingest-Service starten (Go)
-	cd services/ingest && go run ./cmd/ingest
+dev-ingest: ## OTLP-Ingest-Service starten (:4318 -> ClickHouse)
+	cd services/ingest && $(CH_ENV) go run ./cmd/ingest
 
 .PHONY: dev-query
 dev-query: ## Query-Service starten (Go, Seed-Store)
@@ -41,8 +41,12 @@ ch-schema: ## otel_traces-Schema in ClickHouse anlegen
 		--data-binary @deploy/clickhouse/otel_traces.sql && echo "schema ok"
 
 .PHONY: tracegen
-tracegen: ## Live-Trace-Generator: speist otel_traces (Ctrl-C zum Stoppen)
+tracegen: ## Direkter Generator: schreibt otel_traces (ohne OTLP; Backfill)
 	cd services/query && $(CH_ENV) go run ./cmd/tracegen -backfill 15m -every 2s
+
+.PHONY: otlpgen
+otlpgen: ## OTLP-Generator: sendet echte OTLP-Traces an den ingest-Service
+	cd services/ingest && go run ./cmd/otlpgen -endpoint http://localhost:4318 -every 2s
 
 .PHONY: dev-query-ch
 dev-query-ch: ## Query-Service gegen ClickHouse starten (echte Daten)
@@ -52,10 +56,13 @@ dev-query-ch: ## Query-Service gegen ClickHouse starten (echte Daten)
 live: up ## Voller Live-Stack-Hinweis (Infra hoch + Anleitung)
 	@sleep 2 && $(MAKE) ch-schema
 	@echo ""
-	@echo "Live-Stack — in drei Terminals starten:"
-	@echo "  make tracegen       # kontinuierliche otel_traces-Daten"
+	@echo "Live-Stack (OTLP-Pfad) — in vier Terminals starten:"
+	@echo "  make dev-ingest     # OTLP-Ingest (:4318) -> ClickHouse"
+	@echo "  make otlpgen        # sendet OTLP-Traces an den Ingest"
 	@echo "  make dev-query-ch   # query-Service gegen ClickHouse (:7080)"
 	@echo "  make dev            # Web-App (:4173) -> /explore"
+	@echo ""
+	@echo "Alternativ ohne OTLP: 'make tracegen' schreibt direkt in otel_traces."
 
 ## ── Build / Check ──────────────────────────────────────────
 .PHONY: build
@@ -71,7 +78,8 @@ test: ## Alle Tests (turbo + go)
 .PHONY: lint
 lint: ## Lint (turbo) + go vet
 	pnpm lint
-	go vet ./services/...
+	go -C services/ingest vet ./...
+	go -C services/query vet ./...
 
 ## ── Infra (lokal) ──────────────────────────────────────────
 .PHONY: up
