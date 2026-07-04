@@ -5,6 +5,10 @@ import { test, expect } from '@playwright/test';
 //   QUERY_STORE=seed query &  +  next dev  ->  pnpm exec playwright test explore
 test.describe('rocketplane — /explore (live gegen query-Service)', () => {
   test.beforeEach(async ({ page }) => {
+    // /explore ist geschützt -> zuerst per Demo-Login eine Session setzen.
+    await page.request.post('/api/auth/login', {
+      data: { email: 'demo@rocketplane.io', password: 'rocketplane' },
+    });
     await page.goto('/explore');
   });
 
