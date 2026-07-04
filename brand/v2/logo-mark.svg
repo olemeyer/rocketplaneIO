@@ -12,17 +12,18 @@
   </defs>
   <rect width="512" height="512" fill="url(#g)"/>
   <rect width="512" height="512" fill="url(#hl)"/>
-  <g transform="rotate(-22 256 262)">
-    <ellipse cx="256" cy="262" rx="198" ry="94" stroke="#ffffff" stroke-opacity="0.6" stroke-width="9"
-             fill="none" stroke-dasharray="1.5 28" stroke-linecap="round"/>
-    <circle cx="454" cy="262" r="16" fill="#ffffff"/>
-  </g>
-  <g transform="translate(256 262) scale(0.78) translate(-256 -262)">
-    <path d="M198 298 L150 372 L198 354 Z" fill="#ffffff" fill-opacity="0.92"/>
-    <path d="M314 298 L362 372 L314 354 Z" fill="#ffffff" fill-opacity="0.92"/>
-    <path d="M232 362 C 240 408 272 408 280 362 Z" fill="#ffffff" fill-opacity="0.55"/>
+  <g transform="translate(256 232) scale(0.76) translate(-256 -256)">
+    <path d="M198 292 L150 366 L198 348 Z" fill="#ffffff" fill-opacity="0.92"/>
+    <path d="M314 292 L362 366 L314 348 Z" fill="#ffffff" fill-opacity="0.92"/>
+    <path d="M232 356 C 240 402 272 402 280 356 Z" fill="#ffffff" fill-opacity="0.55"/>
     <path fill-rule="evenodd" clip-rule="evenodd" fill="#ffffff"
-      d="M256 106 C 302 156 314 222 314 294 C 314 328 308 350 298 362 L 214 362 C 204 350 198 328 198 294 C 198 222 210 156 256 106 Z
-         M226 202 a30 30 0 1 0 60 0 a30 30 0 1 0 -60 0 Z"/>
+      d="M256 100 C 302 150 314 216 314 288 C 314 322 308 344 298 356 L 214 356 C 204 344 198 322 198 288 C 198 216 210 150 256 100 Z
+         M226 196 a30 30 0 1 0 60 0 a30 30 0 1 0 -60 0 Z"/>
+  </g>
+  <g>
+    <path d="M104 404 L196 404 L220 404 L236 380 L250 404 L262 352 L276 404 L290 388 L304 404 L408 404"
+          stroke="#ffffff" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <circle cx="140" cy="404" r="7" fill="#ffffff"/>
+    <circle cx="372" cy="404" r="7" fill="#ffffff"/>
   </g>
 </svg>
