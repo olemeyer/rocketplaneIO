@@ -1,0 +1,58 @@
+# rocketplane Helm-Values (Stub). Die Templates folgen mit den Services.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  registry: ghcr.io
+  repository: rocketplaneio/rocketplane
+  tag: "" # default: .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+# ── Anwendungs-Services ─────────────────────────────────────
+web:
+  enabled: true
+  replicas: 1
+  service:
+    port: 3000
+
+ingest:
+  enabled: true
+  replicas: 1
+  otlp:
+    grpcPort: 4317
+    httpPort: 4318
+
+query:
+  enabled: true
+  replicas: 1
+  service:
+    port: 7080
+
+# ── Abhängigkeiten ──────────────────────────────────────────
+# Für echte Deployments bevorzugt die offiziellen Subcharts referenzieren.
+clickhouse:
+  enabled: true
+  auth:
+    database: otel
+    username: rocketplane
+    existingSecret: "" # Secret mit CLICKHOUSE_PASSWORD
+
+postgresql:
+  enabled: true
+  auth:
+    database: rocketplane
+    username: rocketplane
+    existingSecret: ""
+
+# ── Netzwerk ────────────────────────────────────────────────
+ingress:
+  enabled: false
+  className: ""
+  hosts: []
+  tls: []
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,10 @@
+rocketplane wurde (als Stub) installiert.
+
+Dieses Chart ist derzeit ein Platzhalter: Die Kubernetes-Manifeste für web,
+ingest und query sowie die ClickHouse-/Postgres-Abhängigkeiten werden mit
+Meilenstein M0 (Ingest & Store) ergänzt.
+
+Für lokale Entwicklung nutze stattdessen Docker Compose:
+
+  cp deploy/compose/.env.example deploy/compose/.env
+  docker compose -f deploy/compose/docker-compose.yml up -d

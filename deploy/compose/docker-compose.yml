@@ -1,0 +1,67 @@
+name: rocketplane
+
+# Lokale Entwicklungs-Infra:
+#   OTLP (4317/4318) → OTel-Collector → ClickHouse (Telemetrie)
+#   Postgres = Settings/Metadaten
+#
+# Laeuft out-of-the-box mit sinnvollen Defaults:
+#   docker compose -f deploy/compose/docker-compose.yml up -d
+#
+# Zugangsdaten ueberschreiben (optional): Werte als Umgebungsvariablen setzen
+# oder `--env-file deploy/compose/.env` anhaengen (Vorlage: .env.example).
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: rp-clickhouse
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-rocketplane}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-rocketplane}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-otel}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    ports:
+      - "8123:8123" # HTTP
+      - "9000:9000" # native TCP
+    volumes:
+      - ./.data/clickhouse:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: rp-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rocketplane}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rocketplane}
+      POSTGRES_DB: ${POSTGRES_DB:-rocketplane}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./.data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.116.0
+    container_name: rp-otel-collector
+    command: ["--config=/etc/otelcol/config.yaml"]
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-rocketplane}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-rocketplane}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-otel}
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+    depends_on:
+      clickhouse:
+        condition: service_healthy
