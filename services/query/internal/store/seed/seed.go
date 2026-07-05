@@ -10,6 +10,7 @@ import (
 	"hash/fnv"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rocketplaneio/rocketplane/services/query/internal/model"
@@ -47,6 +48,7 @@ type Store struct {
 	now       func() time.Time
 	summaries []model.TraceSummary         // nach StartTime absteigend
 	details   map[string]model.TraceDetail // traceID -> Detail
+	logs      []model.LogRecord            // nach Timestamp absteigend
 }
 
 // Option konfiguriert den Seed-Store.
@@ -184,6 +186,48 @@ func (s *Store) Trace(_ context.Context, traceID string) (model.TraceDetail, err
 	return d, nil
 }
 
+// --- Logs -------------------------------------------------------------------
+
+func (s *Store) Logs(_ context.Context, q store.LogsQuery) (model.LogList, error) {
+	filtered := make([]model.LogRecord, 0, len(s.logs))
+	search := strings.ToLower(q.Search)
+	for _, l := range s.logs {
+		if q.Service != "" && l.ServiceName != q.Service {
+			continue
+		}
+		if q.TraceID != "" && l.TraceID != q.TraceID {
+			continue
+		}
+		if q.MinSeverity > 0 && l.SeverityNumber < q.MinSeverity {
+			continue
+		}
+		if search != "" && !strings.Contains(strings.ToLower(l.Body), search) {
+			continue
+		}
+		filtered = append(filtered, l)
+	}
+
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	offset := decodeCursor(q.Cursor)
+	if offset > len(filtered) {
+		offset = len(filtered)
+	}
+	end := offset + limit
+	next := ""
+	if end < len(filtered) {
+		next = encodeCursor(end)
+	} else {
+		end = len(filtered)
+	}
+	return model.LogList{Logs: filtered[offset:end], NextCursor: next}, nil
+}
+
 // --- Katalog-Aufbau ---------------------------------------------------------
 
 func (s *Store) build() {
@@ -203,6 +247,72 @@ func (s *Store) build() {
 	sort.SliceStable(s.summaries, func(i, j int) bool {
 		return s.summaries[i].StartTimeUnixMs > s.summaries[j].StartTimeUnixMs
 	})
+
+	s.buildLogs()
+}
+
+// logMessages sind deterministische Body-Vorlagen je Root-Operation.
+var logMessages = map[string][]string{
+	"POST /checkout": {"checkout requested", "cart validated", "reserving inventory"},
+	"POST /charge":   {"charge initiated", "contacting payment provider"},
+	"GET /cart":      {"cart loaded", "cache hit"},
+	"POST /reserve":  {"reservation created"},
+}
+
+// buildLogs erzeugt Logs, die mit den Traces korrelieren (gleiche TraceId): pro
+// Trace ein INFO-Startlog + bei Error-Traces ein ERROR-Log; zusätzlich einige
+// standalone-Logs ohne Trace.
+func (s *Store) buildLogs() {
+	for _, sum := range s.summaries {
+		tmpls := logMessages[sum.RootName]
+		if len(tmpls) == 0 {
+			tmpls = []string{"request handled"}
+		}
+		h := hash64(sum.TraceID)
+		body := tmpls[h%uint64(len(tmpls))]
+		s.logs = append(s.logs, model.LogRecord{
+			Timestamp:      sum.StartTimeUnixMs,
+			ServiceName:    sum.RootService,
+			Severity:       "INFO",
+			SeverityNumber: 9,
+			Body:           body + " trace=" + sum.TraceID[:8],
+			TraceID:        sum.TraceID,
+			SpanID:         hexN(sum.TraceID+"log", 16),
+			Attributes:     map[string]string{"http.method": strings.Fields(sum.RootName)[0]},
+		})
+		if sum.ErrorCount > 0 {
+			s.logs = append(s.logs, model.LogRecord{
+				Timestamp:      sum.StartTimeUnixMs + int64(sum.DurationMs),
+				ServiceName:    sum.RootService,
+				Severity:       "ERROR",
+				SeverityNumber: 17,
+				Body:           sum.RootName + " failed: downstream error",
+				TraceID:        sum.TraceID,
+				SpanID:         hexN(sum.TraceID+"errlog", 16),
+				Attributes:     map[string]string{"exception.type": "DownstreamError"},
+			})
+		}
+	}
+	// ein paar Infrastruktur-Logs ohne Trace-Bezug
+	base := s.now()
+	infra := []struct {
+		svc, sev, body string
+		num            int32
+	}{
+		{"cart-service", "WARN", "connection pool at 80% capacity", 13},
+		{"payment-gateway", "INFO", "config reloaded", 9},
+		{"inventory", "DEBUG", "stock cache warmed", 5},
+	}
+	for i, l := range infra {
+		s.logs = append(s.logs, model.LogRecord{
+			Timestamp:      base.UnixMilli() - int64(i)*45_000,
+			ServiceName:    l.svc,
+			Severity:       l.sev,
+			SeverityNumber: l.num,
+			Body:           l.body,
+		})
+	}
+	sort.SliceStable(s.logs, func(i, j int) bool { return s.logs[i].Timestamp > s.logs[j].Timestamp })
 }
 
 func summaryOf(d model.TraceDetail) model.TraceSummary {

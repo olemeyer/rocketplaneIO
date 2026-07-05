@@ -210,6 +210,87 @@ func sortServices(s []model.Service, by string) {
 	})
 }
 
+// --- Logs -------------------------------------------------------------------
+
+func (s *Store) Logs(ctx context.Context, q store.LogsQuery) (model.LogList, error) {
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	offset := decodeCursor(q.Cursor)
+
+	end := q.End
+	if end.IsZero() {
+		end = time.Now()
+	}
+	start := q.Start
+	if start.IsZero() {
+		start = end.Add(-1 * time.Hour)
+	}
+
+	params := map[string]string{
+		"start":   chTime(start),
+		"end":     chTime(end),
+		"service": q.Service,
+		"minSev":  fmt.Sprintf("%d", q.MinSeverity),
+		"search":  q.Search,
+		"trace":   q.TraceID,
+		"limit":   fmt.Sprintf("%d", limit+1),
+		"offset":  fmt.Sprintf("%d", offset),
+	}
+
+	const sql = `
+SELECT toUnixTimestamp64Milli(Timestamp) AS timestamp,
+       ServiceName AS serviceName,
+       SeverityText AS severity,
+       toInt32(SeverityNumber) AS severityNumber,
+       Body AS body,
+       TraceId AS traceId,
+       SpanId AS spanId,
+       LogAttributes AS attributes
+FROM otel_logs
+WHERE Timestamp >= {start:DateTime64(9)} AND Timestamp < {end:DateTime64(9)}
+  AND ({service:String}='' OR ServiceName={service:String})
+  AND ({minSev:UInt8}=0 OR SeverityNumber >= {minSev:UInt8})
+  AND ({trace:String}='' OR TraceId={trace:String})
+  AND ({search:String}='' OR positionCaseInsensitive(Body, {search:String}) > 0)
+ORDER BY Timestamp DESC
+LIMIT {limit:UInt32} OFFSET {offset:UInt32}`
+
+	var rows []struct {
+		Timestamp      int64             `json:"timestamp"`
+		ServiceName    string            `json:"serviceName"`
+		Severity       string            `json:"severity"`
+		SeverityNumber int32             `json:"severityNumber"`
+		Body           string            `json:"body"`
+		TraceID        string            `json:"traceId"`
+		SpanID         string            `json:"spanId"`
+		Attributes     map[string]string `json:"attributes"`
+	}
+	if err := s.query(ctx, sql, params, &rows); err != nil {
+		return model.LogList{}, err
+	}
+
+	next := ""
+	if len(rows) > limit {
+		rows = rows[:limit]
+		next = encodeCursor(offset + limit)
+	}
+
+	logs := make([]model.LogRecord, 0, len(rows))
+	for _, r := range rows {
+		logs = append(logs, model.LogRecord{
+			Timestamp: r.Timestamp, ServiceName: r.ServiceName, Severity: r.Severity,
+			SeverityNumber: r.SeverityNumber, Body: r.Body, TraceID: r.TraceID, SpanID: r.SpanID,
+			Attributes: r.Attributes,
+		})
+	}
+	return model.LogList{Logs: logs, NextCursor: next}, nil
+}
+
 // --- Traces -----------------------------------------------------------------
 
 func (s *Store) Traces(ctx context.Context, q store.TracesQuery) (model.TraceList, error) {

@@ -26,6 +26,33 @@ func (s *Server) handleServices(w http.ResponseWriter, r *http.Request) {
 	writeSuccess(w, res)
 }
 
+// GET /api/v1/logs — gefilterte Log-Liste (cursor-paginiert, neueste zuerst).
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	start, _ := parseTime(q.Get("start"))
+	end, _ := parseTime(q.Get("end"))
+	traceID := q.Get("traceId")
+	if traceID != "" && !isHex(traceID, 32) {
+		writeError(w, http.StatusBadRequest, "bad_data", "traceId must be 32 hex characters")
+		return
+	}
+	res, err := s.store.Logs(r.Context(), store.LogsQuery{
+		Service:     q.Get("service"),
+		Start:       start,
+		End:         end,
+		MinSeverity: int32(parseInt(q.Get("minSeverity"))),
+		Search:      q.Get("search"),
+		TraceID:     traceID,
+		Limit:       parseInt(q.Get("limit")),
+		Cursor:      q.Get("cursor"),
+	})
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeSuccess(w, res)
+}
+
 // GET /api/v1/traces — kompakte Trace-Liste (gefiltert, cursor-paginiert).
 func (s *Server) handleTraces(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()

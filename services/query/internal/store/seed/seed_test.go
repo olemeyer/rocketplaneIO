@@ -80,6 +80,52 @@ func TestServicesStatusAndSort(t *testing.T) {
 	}
 }
 
+func TestLogsCorrelateWithTraces(t *testing.T) {
+	s := newSeed()
+	ctx := context.Background()
+
+	// Alle Logs: es gibt welche.
+	all, err := s.Logs(ctx, store.LogsQuery{})
+	if err != nil {
+		t.Fatalf("Logs: %v", err)
+	}
+	if len(all.Logs) == 0 {
+		t.Fatal("expected seed logs")
+	}
+
+	// Logs des Referenz-Trace (korreliert über TraceId): mind. ein Error-Log.
+	byTrace, err := s.Logs(ctx, store.LogsQuery{TraceID: refTraceID})
+	if err != nil {
+		t.Fatalf("Logs(trace): %v", err)
+	}
+	if len(byTrace.Logs) == 0 {
+		t.Fatal("expected correlated logs for reference trace")
+	}
+	hasError := false
+	for _, l := range byTrace.Logs {
+		if l.TraceID != refTraceID {
+			t.Fatalf("correlated log has wrong trace: %q", l.TraceID)
+		}
+		if l.Severity == "ERROR" {
+			hasError = true
+		}
+	}
+	if !hasError {
+		t.Error("reference trace is an error trace -> expected an ERROR log")
+	}
+
+	// Severity-Filter: nur ERROR (>=17) liefert weniger als alle.
+	errOnly, _ := s.Logs(ctx, store.LogsQuery{MinSeverity: 17})
+	if len(errOnly.Logs) == 0 || len(errOnly.Logs) >= len(all.Logs) {
+		t.Errorf("severity filter unexpected: %d of %d", len(errOnly.Logs), len(all.Logs))
+	}
+	for _, l := range errOnly.Logs {
+		if l.SeverityNumber < 17 {
+			t.Fatalf("severity filter leaked: %d", l.SeverityNumber)
+		}
+	}
+}
+
 func TestTracesFilterAndPagination(t *testing.T) {
 	s := newSeed()
 	// Filter auf checkout-api.

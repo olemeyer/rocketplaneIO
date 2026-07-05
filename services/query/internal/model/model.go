@@ -112,6 +112,24 @@ type TraceDetail struct {
 	Spans           []Span   `json:"spans"`
 }
 
+// LogRecord ist eine Zeile im Log-Explorer.
+type LogRecord struct {
+	Timestamp      int64             `json:"timestamp"` // epoch ms
+	ServiceName    string            `json:"serviceName"`
+	Severity       string            `json:"severity"`       // INFO | WARN | ERROR | DEBUG ...
+	SeverityNumber int32             `json:"severityNumber"` // OTLP 1..24
+	Body           string            `json:"body"`
+	TraceID        string            `json:"traceId,omitempty"`
+	SpanID         string            `json:"spanId,omitempty"`
+	Attributes     map[string]string `json:"attributes,omitempty"`
+}
+
+// LogList ist die Antwort von GET /api/v1/logs.
+type LogList struct {
+	Logs       []LogRecord `json:"logs"`
+	NextCursor string      `json:"nextCursor,omitempty"`
+}
+
 // DeriveHealth leitet den Health-Status aus Error-Ratio und p95 gegen ein
 // p95-SLO ab. Bewusst zentral, damit Seed und ClickHouse identisch klassifizieren.
 func DeriveHealth(errorRatio, p95, sloP95 float64) HealthStatus {

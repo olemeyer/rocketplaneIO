@@ -88,6 +88,36 @@ func TestTraceBadRequestAndNotFound(t *testing.T) {
 	}
 }
 
+func TestLogsEnvelopeAndFilters(t *testing.T) {
+	f := &storetest.Fake{LogList: model.LogList{Logs: []model.LogRecord{
+		{Timestamp: 1, ServiceName: "checkout-api", Severity: "ERROR", SeverityNumber: 17, Body: "boom", TraceID: validTraceID},
+	}}}
+	rec := do(newTestServer(f), http.MethodGet, "/api/v1/logs?service=checkout-api&minSeverity=17&search=boom", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var env struct {
+		Status string        `json:"status"`
+		Data   model.LogList `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Status != "success" || len(env.Data.Logs) != 1 || env.Data.Logs[0].Body != "boom" {
+		t.Fatalf("unexpected: %+v", env)
+	}
+	if f.LastLogsQuery.Service != "checkout-api" || f.LastLogsQuery.MinSeverity != 17 || f.LastLogsQuery.Search != "boom" {
+		t.Errorf("filters not forwarded: %+v", f.LastLogsQuery)
+	}
+}
+
+func TestLogsBadTraceID(t *testing.T) {
+	rec := do(newTestServer(&storetest.Fake{}), http.MethodGet, "/api/v1/logs?traceId=nothex", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("bad traceId = %d, want 400", rec.Code)
+	}
+}
+
 func TestQueryNotImplemented(t *testing.T) {
 	h := newTestServer(&storetest.Fake{})
 	if rec := do(h, http.MethodGet, "/api/v1/query", ""); rec.Code != http.StatusBadRequest {

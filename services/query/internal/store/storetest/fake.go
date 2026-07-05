@@ -14,15 +14,19 @@ type Fake struct {
 	TraceList      model.TraceList
 	TraceDetail    model.TraceDetail
 
+	LogList model.LogList
+
 	ServicesErr error
 	TracesErr   error
 	TraceErr    error
+	LogsErr     error
 	PingErr     error
 
 	// Aufzeichnungen zur Assertion.
 	LastServicesQuery store.ServicesQuery
 	LastTracesQuery   store.TracesQuery
 	LastTraceID       string
+	LastLogsQuery     store.LogsQuery
 }
 
 var _ store.Store = (*Fake)(nil)
@@ -40,6 +44,11 @@ func (f *Fake) Traces(_ context.Context, q store.TracesQuery) (model.TraceList, 
 func (f *Fake) Trace(_ context.Context, traceID string) (model.TraceDetail, error) {
 	f.LastTraceID = traceID
 	return f.TraceDetail, f.TraceErr
+}
+
+func (f *Fake) Logs(_ context.Context, q store.LogsQuery) (model.LogList, error) {
+	f.LastLogsQuery = q
+	return f.LogList, f.LogsErr
 }
 
 func (f *Fake) Ping(context.Context) error { return f.PingErr }

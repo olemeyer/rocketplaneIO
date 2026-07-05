@@ -38,6 +38,17 @@ type TracesQuery struct {
 	Sort          string  // "start"|"duration" (default "start" desc)
 }
 
+// LogsQuery bündelt Filter + Cursor-Pagination für die Log-Liste.
+type LogsQuery struct {
+	Service    string
+	Start, End time.Time
+	MinSeverity int32  // 0 = alle; sonst OTLP SeverityNumber (>= MinSeverity)
+	Search     string // Volltext im Body (case-insensitive contains)
+	TraceID    string // Korrelation: nur Logs dieses Trace
+	Limit      int    // default 100, max 1000
+	Cursor     string // opak
+}
+
 // Store ist der einzige Read-Port der Explore-Domäne.
 type Store interface {
 	// Services liefert die RED-Health je Service über das Fenster.
@@ -46,6 +57,8 @@ type Store interface {
 	Traces(ctx context.Context, q TracesQuery) (model.TraceList, error)
 	// Trace liefert alle Spans eines Trace depth-first; unbekannt -> ErrNotFound.
 	Trace(ctx context.Context, traceID string) (model.TraceDetail, error)
+	// Logs liefert gefilterte Log-Records, cursor-paginiert (neueste zuerst).
+	Logs(ctx context.Context, q LogsQuery) (model.LogList, error)
 
 	// Ping prüft die Backend-Bereitschaft (Seed: nil; ClickHouse: HTTP-Ping).
 	Ping(ctx context.Context) error
