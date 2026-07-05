@@ -362,6 +362,137 @@ GROUP BY child.ServiceName ORDER BY callCount DESC LIMIT 20`
 
 func round4(f float64) float64 { return float64(int64(f*10000+0.5)) / 10000 }
 
+// --- Metrics ----------------------------------------------------------------
+
+func (s *Store) Metrics(ctx context.Context, start, end time.Time) (model.MetricList, error) {
+	if end.IsZero() {
+		end = time.Now()
+	}
+	if start.IsZero() {
+		start = end.Add(-15 * time.Minute)
+	}
+	p := map[string]string{"start": chTime(start), "end": chTime(end)}
+
+	const sql = `
+SELECT MetricName AS name, any(MetricUnit) AS unit, 'gauge' AS type
+FROM otel_metrics_gauge
+WHERE TimeUnix >= {start:DateTime64(9)} AND TimeUnix < {end:DateTime64(9)}
+GROUP BY MetricName
+UNION ALL
+SELECT MetricName AS name, any(MetricUnit) AS unit, 'sum' AS type
+FROM otel_metrics_sum
+WHERE TimeUnix >= {start:DateTime64(9)} AND TimeUnix < {end:DateTime64(9)}
+GROUP BY MetricName`
+
+	var rows []struct {
+		Name string `json:"name"`
+		Unit string `json:"unit"`
+		Type string `json:"type"`
+	}
+	if err := s.query(ctx, sql, p, &rows); err != nil {
+		return model.MetricList{}, err
+	}
+	metrics := make([]model.MetricMeta, 0, len(rows))
+	for _, r := range rows {
+		metrics = append(metrics, model.MetricMeta{Name: r.Name, Type: r.Type, Unit: r.Unit})
+	}
+	sort.SliceStable(metrics, func(i, j int) bool { return metrics[i].Name < metrics[j].Name })
+	return model.MetricList{Metrics: metrics}, nil
+}
+
+func (s *Store) Metric(ctx context.Context, q store.MetricQuery) (model.MetricData, error) {
+	end := q.End
+	if end.IsZero() {
+		end = time.Now()
+	}
+	start := q.Start
+	if start.IsZero() {
+		start = end.Add(-15 * time.Minute)
+	}
+	step := q.Step
+	if step <= 0 {
+		step = end.Sub(start) / 24
+	}
+	if step <= 0 {
+		step = time.Minute
+	}
+	stepSec := int64(step.Seconds())
+	if stepSec < 1 {
+		stepSec = 1
+	}
+
+	// Metrik-Typ bestimmen (gauge zuerst).
+	typ, unit := s.metricMeta(ctx, q.Name, start, end)
+	if typ == "" {
+		return model.MetricData{}, store.ErrNotFound
+	}
+	table := "otel_metrics_gauge"
+	agg := "avg(Value)"
+	if typ == "sum" {
+		table = "otel_metrics_sum"
+		agg = "sum(Value)"
+	}
+
+	groupCol := "'' AS label"
+	if q.GroupByService {
+		groupCol = "ServiceName AS label"
+	}
+	p := map[string]string{
+		"start": chTime(start), "end": chTime(end), "name": q.Name, "stepSec": fmt.Sprintf("%d", stepSec),
+	}
+	sql := `
+SELECT ` + groupCol + `,
+       toUnixTimestamp(toStartOfInterval(TimeUnix, INTERVAL {stepSec:UInt32} SECOND)) AS bucket,
+       ` + agg + ` AS value
+FROM ` + table + `
+WHERE TimeUnix >= {start:DateTime64(9)} AND TimeUnix < {end:DateTime64(9)} AND MetricName={name:String}
+GROUP BY label, bucket ORDER BY label, bucket ASC`
+
+	var rows []struct {
+		Label  string  `json:"label"`
+		Bucket int64   `json:"bucket"`
+		Value  float64 `json:"value"`
+	}
+	if err := s.query(ctx, sql, p, &rows); err != nil {
+		return model.MetricData{}, err
+	}
+
+	byLabel := map[string][]model.Point{}
+	order := []string{}
+	for _, r := range rows {
+		if _, ok := byLabel[r.Label]; !ok {
+			order = append(order, r.Label)
+		}
+		byLabel[r.Label] = append(byLabel[r.Label], model.Point{T: r.Bucket, V: round4(r.Value)})
+	}
+	series := make([]model.MetricSeries, 0, len(order))
+	for _, l := range order {
+		series = append(series, model.MetricSeries{Label: l, Points: byLabel[l]})
+	}
+
+	return model.MetricData{
+		Name: q.Name, Type: typ, Unit: unit,
+		Window: model.Window{Start: start.Unix(), End: end.Unix(), Step: stepSec},
+		Series: series,
+	}, nil
+}
+
+// metricMeta ermittelt Typ + Einheit einer Metrik (gauge bevorzugt).
+func (s *Store) metricMeta(ctx context.Context, name string, start, end time.Time) (string, string) {
+	p := map[string]string{"start": chTime(start), "end": chTime(end), "name": name}
+	for _, t := range []struct{ table, typ string }{{"otel_metrics_gauge", "gauge"}, {"otel_metrics_sum", "sum"}} {
+		var rows []struct {
+			Unit string `json:"unit"`
+		}
+		sql := `SELECT any(MetricUnit) AS unit FROM ` + t.table +
+			` WHERE TimeUnix >= {start:DateTime64(9)} AND TimeUnix < {end:DateTime64(9)} AND MetricName={name:String} HAVING count() > 0`
+		if err := s.query(ctx, sql, p, &rows); err == nil && len(rows) > 0 {
+			return t.typ, rows[0].Unit
+		}
+	}
+	return "", ""
+}
+
 // --- Service-Map ------------------------------------------------------------
 
 func (s *Store) ServiceMap(ctx context.Context, start, end time.Time) (model.ServiceMap, error) {

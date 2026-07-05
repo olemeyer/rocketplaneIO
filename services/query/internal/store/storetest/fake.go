@@ -18,10 +18,14 @@ type Fake struct {
 	LogList          model.LogList
 	ServiceDetail    model.ServiceDetail
 	ServiceMapResult model.ServiceMap
+	MetricList       model.MetricList
+	MetricData       model.MetricData
 
 	ServicesErr   error
 	ServiceErr    error
 	ServiceMapErr error
+	MetricsErr    error
+	MetricErr     error
 	TracesErr     error
 	TraceErr      error
 	LogsErr       error
@@ -49,6 +53,14 @@ func (f *Fake) Service(_ context.Context, q store.ServiceQuery) (model.ServiceDe
 
 func (f *Fake) ServiceMap(context.Context, time.Time, time.Time) (model.ServiceMap, error) {
 	return f.ServiceMapResult, f.ServiceMapErr
+}
+
+func (f *Fake) Metrics(context.Context, time.Time, time.Time) (model.MetricList, error) {
+	return f.MetricList, f.MetricsErr
+}
+
+func (f *Fake) Metric(_ context.Context, _ store.MetricQuery) (model.MetricData, error) {
+	return f.MetricData, f.MetricErr
 }
 
 func (f *Fake) Traces(_ context.Context, q store.TracesQuery) (model.TraceList, error) {

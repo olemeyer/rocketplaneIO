@@ -136,6 +136,33 @@ type Point struct {
 	V float64 `json:"v"`
 }
 
+// MetricMeta beschreibt eine verfügbare Metrik (Name + Typ + Einheit).
+type MetricMeta struct {
+	Name string `json:"name"`
+	Type string `json:"type"` // "gauge" | "sum"
+	Unit string `json:"unit,omitempty"`
+}
+
+// MetricList ist die Antwort von GET /api/v1/metrics.
+type MetricList struct {
+	Metrics []MetricMeta `json:"metrics"`
+}
+
+// MetricSeries ist eine benannte Zeitreihe (Label = Service bzw. leer für aggregiert).
+type MetricSeries struct {
+	Label  string  `json:"label"`
+	Points []Point `json:"points"`
+}
+
+// MetricData ist die Antwort von GET /api/v1/metrics/{name}.
+type MetricData struct {
+	Name   string         `json:"name"`
+	Type   string         `json:"type"`
+	Unit   string         `json:"unit,omitempty"`
+	Window Window         `json:"window"`
+	Series []MetricSeries `json:"series"`
+}
+
 // Alert ist eine ausgewertete Alert-Regel gegen den aktuellen Service-Zustand.
 type Alert struct {
 	ID        string  `json:"id"`

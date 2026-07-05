@@ -36,11 +36,15 @@ dev-query: ## Query-Service starten (Go, Seed-Store)
 CH_ENV := CLICKHOUSE_URL=http://localhost:8123 CLICKHOUSE_DB=otel CLICKHOUSE_USER=rocketplane CLICKHOUSE_PASSWORD=rocketplane
 
 .PHONY: ch-schema
-ch-schema: ## otel_traces + otel_logs Schema in ClickHouse anlegen
+ch-schema: ## otel_traces + otel_logs + otel_metrics Schema in ClickHouse anlegen
 	curl -s -u rocketplane:rocketplane "http://localhost:8123/?database=otel" \
 		--data-binary @deploy/clickhouse/otel_traces.sql && echo "otel_traces ok"
 	curl -s -u rocketplane:rocketplane "http://localhost:8123/?database=otel" \
 		--data-binary @deploy/clickhouse/otel_logs.sql && echo "otel_logs ok"
+	@# otel_metrics.sql enthält mehrere Statements -> pro Statement senden.
+	awk 'BEGIN{RS=";"} /CREATE TABLE/ { print $$0 ";" > "/tmp/rp-ch-stmt.sql"; \
+		system("curl -s -u rocketplane:rocketplane \"http://localhost:8123/?database=otel\" --data-binary @/tmp/rp-ch-stmt.sql") }' \
+		deploy/clickhouse/otel_metrics.sql && echo "otel_metrics ok"
 
 .PHONY: tracegen
 tracegen: ## Direkter Generator: schreibt otel_traces (ohne OTLP; Backfill)

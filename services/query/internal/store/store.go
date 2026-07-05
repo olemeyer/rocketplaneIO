@@ -56,6 +56,14 @@ type ServiceQuery struct {
 	Step       time.Duration // 0 => window/24
 }
 
+// MetricQuery bündelt Fenster + Optionen für eine Metrik-Zeitreihe.
+type MetricQuery struct {
+	Name           string
+	Start, End     time.Time
+	Step           time.Duration // 0 => window/24
+	GroupByService bool
+}
+
 // Store ist der einzige Read-Port der Explore-Domäne.
 type Store interface {
 	// Services liefert die RED-Health je Service über das Fenster.
@@ -65,6 +73,10 @@ type Store interface {
 	Service(ctx context.Context, q ServiceQuery) (model.ServiceDetail, error)
 	// ServiceMap liefert die Fleet-Topologie (Knoten + Aufruf-Kanten).
 	ServiceMap(ctx context.Context, start, end time.Time) (model.ServiceMap, error)
+	// Metrics listet die verfügbaren Metriken (Name + Typ + Einheit).
+	Metrics(ctx context.Context, start, end time.Time) (model.MetricList, error)
+	// Metric liefert die Zeitreihe(n) einer Metrik; unbekannt -> ErrNotFound.
+	Metric(ctx context.Context, q MetricQuery) (model.MetricData, error)
 	// Traces liefert kompakte Trace-Summaries, cursor-paginiert.
 	Traces(ctx context.Context, q TracesQuery) (model.TraceList, error)
 	// Trace liefert alle Spans eines Trace depth-first; unbekannt -> ErrNotFound.

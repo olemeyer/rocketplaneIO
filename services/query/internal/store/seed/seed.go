@@ -191,6 +191,102 @@ func (s *Store) Service(_ context.Context, q store.ServiceQuery) (model.ServiceD
 	}, nil
 }
 
+// seedMetrics ist der feste Metrik-Katalog des Seed-Stores.
+var seedMetrics = []struct {
+	name, typ, unit string
+	base, amp       float64 // Basiswert + Amplitude je Service
+}{
+	{"system.cpu.utilization", "gauge", "1", 0.35, 0.25},
+	{"system.memory.usage", "gauge", "By", 512, 180},
+	{"http.server.active_requests", "gauge", "{requests}", 24, 18},
+	{"http.server.request.count", "sum", "{requests}", 900, 400},
+}
+
+func (s *Store) Metrics(_ context.Context, _, _ time.Time) (model.MetricList, error) {
+	out := make([]model.MetricMeta, 0, len(seedMetrics))
+	for _, m := range seedMetrics {
+		out = append(out, model.MetricMeta{Name: m.name, Type: m.typ, Unit: m.unit})
+	}
+	return model.MetricList{Metrics: out}, nil
+}
+
+func (s *Store) Metric(_ context.Context, q store.MetricQuery) (model.MetricData, error) {
+	var spec *struct {
+		name, typ, unit string
+		base, amp       float64
+	}
+	for i := range seedMetrics {
+		if seedMetrics[i].name == q.Name {
+			spec = &seedMetrics[i]
+			break
+		}
+	}
+	if spec == nil {
+		return model.MetricData{}, store.ErrNotFound
+	}
+
+	end := q.End
+	if end.IsZero() {
+		end = s.now()
+	}
+	start := q.Start
+	if start.IsZero() {
+		start = end.Add(-15 * time.Minute)
+	}
+	step := q.Step
+	if step <= 0 {
+		step = end.Sub(start) / 24
+	}
+	if step <= 0 {
+		step = time.Minute
+	}
+	buckets := int(end.Sub(start) / step)
+	if buckets < 1 {
+		buckets = 1
+	}
+	if buckets > 200 {
+		buckets = 200
+	}
+
+	series := make([]model.MetricSeries, 0, len(serviceSpecs))
+	for _, sp := range serviceSpecs {
+		pts := make([]model.Point, 0, buckets)
+		for i := 0; i < buckets; i++ {
+			t := start.Add(time.Duration(i) * step).Unix()
+			h := hash64(spec.name + sp.name + strconv.Itoa(i))
+			frac := float64(h%1000) / 1000.0 // 0..1
+			v := spec.base + spec.amp*(frac-0.5)*2
+			if v < 0 {
+				v = 0
+			}
+			pts = append(pts, model.Point{T: t, V: round4(v)})
+		}
+		series = append(series, model.MetricSeries{Label: sp.name, Points: pts})
+	}
+	// Ohne GroupByService: zu einer Reihe aggregieren (Mittel bzw. Summe).
+	if !q.GroupByService {
+		agg := make([]model.Point, buckets)
+		for _, s := range series {
+			for i, p := range s.Points {
+				agg[i].T = p.T
+				agg[i].V += p.V
+			}
+		}
+		if spec.typ == "gauge" {
+			for i := range agg {
+				agg[i].V = round4(agg[i].V / float64(len(series)))
+			}
+		}
+		series = []model.MetricSeries{{Label: "", Points: agg}}
+	}
+
+	return model.MetricData{
+		Name: spec.name, Type: spec.typ, Unit: spec.unit,
+		Window: model.Window{Start: start.Unix(), End: end.Unix(), Step: int64(step.Seconds())},
+		Series: series,
+	}, nil
+}
+
 func (s *Store) ServiceMap(_ context.Context, start, end time.Time) (model.ServiceMap, error) {
 	if end.IsZero() {
 		end = s.now()

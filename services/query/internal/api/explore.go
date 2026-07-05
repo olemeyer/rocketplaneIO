@@ -60,6 +60,43 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	writeSuccess(w, alerts.Evaluate(res.Services, alerts.DefaultRules()))
 }
 
+// GET /api/v1/metrics — verfügbare Metriken (Name + Typ + Einheit).
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	start, _ := parseTime(q.Get("start"))
+	end, _ := parseTime(q.Get("end"))
+	res, err := s.store.Metrics(r.Context(), start, end)
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeSuccess(w, res)
+}
+
+// GET /api/v1/metrics/{name} — Zeitreihe(n) einer Metrik.
+func (s *Server) handleMetric(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "bad_data", "metric name required")
+		return
+	}
+	q := r.URL.Query()
+	start, _ := parseTime(q.Get("start"))
+	end, _ := parseTime(q.Get("end"))
+	res, err := s.store.Metric(r.Context(), store.MetricQuery{
+		Name:           name,
+		Start:          start,
+		End:            end,
+		Step:           parseDurationSeconds(q.Get("step")),
+		GroupByService: q.Get("groupBy") == "service",
+	})
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeSuccess(w, res)
+}
+
 // GET /api/v1/service-map — Fleet-Topologie (Knoten + Aufruf-Kanten).
 func (s *Server) handleServiceMap(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
