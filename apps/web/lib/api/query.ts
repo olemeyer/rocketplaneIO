@@ -5,6 +5,7 @@ import type {
   HealthStatus,
   LogListResponse,
   Service,
+  ServiceDetail,
   ServiceHealth,
   ServicesResponse,
   Span,
@@ -62,6 +63,11 @@ function toServiceHealth(s: Service): ServiceHealth {
     throughput: s.rate,
     spark: s.sparkline.values,
   };
+}
+
+// getServiceDetail liefert RED-Zeitreihen, Operationen und Abhängigkeiten.
+export async function getServiceDetail(name: string, sig?: AbortSignal): Promise<ServiceDetail> {
+  return rpFetch<ServiceDetail>(`/v1/services/${encodeURIComponent(name)}`, { signal: sig });
 }
 
 export interface TraceView {

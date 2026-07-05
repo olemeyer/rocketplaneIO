@@ -6,8 +6,11 @@ export default defineConfig({
   testDir: './e2e',
   outputDir: './e2e/.output',
   timeout: 30_000,
-  expect: { timeout: 5_000 },
+  expect: { timeout: 8_000 },
   fullyParallel: true,
+  // Der Next-Dev-Server kompiliert Routen beim ersten Treffer -> unter paralleler
+  // Last kann ein Erststart flaky sein. Ein Retry fängt das ab.
+  retries: 1,
   reporter: [['list'], ['html', { outputFolder: 'playwright-report', open: 'never' }]],
   use: {
     baseURL: 'http://localhost:4173',

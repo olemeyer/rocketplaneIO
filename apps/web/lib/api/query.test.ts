@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { colorForService, getLogs, getServiceHealth, getTrace, getTraces, severityTone } from './query';
-import { logList, servicesResponse, traceDetail, traceList } from '@/src/test/fixtures/explore';
+import {
+  colorForService,
+  getLogs,
+  getServiceDetail,
+  getServiceHealth,
+  getTrace,
+  getTraces,
+  severityTone,
+} from './query';
+import { logList, serviceDetail, servicesResponse, traceDetail, traceList } from '@/src/test/fixtures/explore';
 
 function stubFetch(data: unknown) {
   const fetchMock = vi.fn(
@@ -74,6 +82,16 @@ describe('getLogs', () => {
     expect(url).toContain('minSeverity=17');
     expect(url).toContain('search=boom');
     expect(url).toContain('traceId=abc');
+  });
+});
+
+describe('getServiceDetail', () => {
+  it('ruft /v1/services/{name} und liefert das Detail', async () => {
+    const fetchMock = stubFetch(serviceDetail);
+    const res = await getServiceDetail('checkout-api');
+    expect(res.name).toBe('checkout-api');
+    expect(res.operations).toHaveLength(2);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/rp/v1/services/checkout-api');
   });
 });
 

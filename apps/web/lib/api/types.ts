@@ -65,6 +65,40 @@ export interface TraceDetail {
   spans: Span[];
 }
 
+// ---- GET /api/v1/services/{name} ----
+export interface Point {
+  t: number; // unix seconds
+  v: number;
+}
+export interface OperationStat {
+  name: string;
+  spanCount: number;
+  errorCount: number;
+  errorRatio: number;
+  p95Ms: number;
+}
+export interface Dependency {
+  service: string;
+  callCount: number;
+  errorRatio: number;
+  p95Ms: number;
+}
+export interface ServiceDetail {
+  name: string;
+  status: HealthStatus;
+  rate: number;
+  errorRatio: number;
+  latencyMs: { p50: number; p95: number; p99: number };
+  spanCount: number;
+  errorCount: number;
+  window: { start: number; end: number; step: number };
+  p95Series: Point[];
+  rateSeries: Point[];
+  errorSeries: Point[];
+  operations: OperationStat[];
+  dependencies: Dependency[];
+}
+
 // ---- GET /api/v1/logs ----
 export interface LogRecord {
   timestamp: number; // epoch ms

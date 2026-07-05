@@ -1,5 +1,6 @@
 import type {
   LogListResponse,
+  ServiceDetail,
   ServiceHealth,
   ServicesResponse,
   TraceDetail,
@@ -76,6 +77,40 @@ export const traceSpansSample: TraceSpan[] = [
 ];
 
 export const traceViewSample = { detail: traceDetail, spans: traceSpansSample };
+
+export const serviceDetail: ServiceDetail = {
+  name: 'checkout-api',
+  status: 'critical',
+  rate: 1204,
+  errorRatio: 0.042,
+  latencyMs: { p50: 210, p95: 842, p99: 1310 },
+  spanCount: 100000,
+  errorCount: 4200,
+  window: { start: 1, end: 901, step: 60 },
+  p95Series: [
+    { t: 1, v: 800 },
+    { t: 61, v: 842 },
+    { t: 121, v: 900 },
+  ],
+  rateSeries: [
+    { t: 1, v: 1180 },
+    { t: 61, v: 1204 },
+    { t: 121, v: 1220 },
+  ],
+  errorSeries: [
+    { t: 1, v: 0.04 },
+    { t: 61, v: 0.042 },
+    { t: 121, v: 0.05 },
+  ],
+  operations: [
+    { name: 'POST /checkout', spanCount: 5000, errorCount: 210, errorRatio: 0.042, p95Ms: 842 },
+    { name: 'GET /checkout/status', spanCount: 800, errorCount: 2, errorRatio: 0.0025, p95Ms: 40 },
+  ],
+  dependencies: [
+    { service: 'payment-gateway', callCount: 4800, errorRatio: 0.02, p95Ms: 310 },
+    { service: 'inventory', callCount: 4700, errorRatio: 0.0002, p95Ms: 54 },
+  ],
+};
 
 export const logList: LogListResponse = {
   logs: [

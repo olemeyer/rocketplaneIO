@@ -16,7 +16,7 @@ type NavItem = {
 
 const NAV: NavItem[] = [
   { label: 'Explore', href: '/explore', icon: Compass, ready: true },
-  { label: 'Services', href: '#', icon: Cube, badge: '38' },
+  { label: 'Services', href: '/services', icon: Cube, ready: true },
   { label: 'Traces', href: '/traces', icon: Waterfall, ready: true },
   { label: 'Logs', href: '/logs', icon: Logs, ready: true },
   { label: 'Metrics', href: '#', icon: Metrics },
