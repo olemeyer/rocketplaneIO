@@ -1,4 +1,5 @@
 import type {
+  AlertListResponse,
   LogListResponse,
   ServiceDetail,
   ServiceHealth,
@@ -110,6 +111,16 @@ export const serviceDetail: ServiceDetail = {
   dependencies: [
     { service: 'payment-gateway', callCount: 4800, errorRatio: 0.02, p95Ms: 310 },
     { service: 'inventory', callCount: 4700, errorRatio: 0.0002, p95Ms: 54 },
+  ],
+};
+
+export const alertList: AlertListResponse = {
+  firing: 2,
+  total: 3,
+  alerts: [
+    { id: 'err-crit-checkout', name: 'checkout-api error rate high', service: 'checkout-api', metric: 'errorRatio', threshold: 0.02, severity: 'critical', value: 0.042, firing: true },
+    { id: 'lat-warn-payment', name: 'payment-gateway p95 latency', service: 'payment-gateway', metric: 'p95', threshold: 300, severity: 'warning', value: 336, firing: true },
+    { id: 'err-warn-cart', name: 'cart-service errors elevated', service: 'cart-service', metric: 'errorRatio', threshold: 0.005, severity: 'warning', value: 0.001, firing: false },
   ],
 };
 

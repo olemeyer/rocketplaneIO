@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   colorForService,
+  formatMetricValue,
+  getAlerts,
   getLogs,
   getServiceDetail,
   getServiceHealth,
@@ -10,6 +12,7 @@ import {
   severityTone,
 } from './query';
 import {
+  alertList,
   logList,
   serviceDetail,
   serviceMap,
@@ -110,6 +113,19 @@ describe('getServiceMap', () => {
     expect(res.nodes.length).toBeGreaterThan(0);
     expect(res.edges.length).toBeGreaterThan(0);
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/rp/v1/service-map');
+  });
+});
+
+describe('getAlerts & formatMetricValue', () => {
+  it('ruft /v1/alerts und liefert die Auswertung', async () => {
+    const fetchMock = stubFetch(alertList);
+    const res = await getAlerts();
+    expect(res.firing).toBe(2);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/rp/v1/alerts');
+  });
+  it('formatiert Metrik-Werte je Typ', () => {
+    expect(formatMetricValue('p95', 336)).toBe('336ms');
+    expect(formatMetricValue('errorRatio', 0.042)).toBe('4.20%');
   });
 });
 

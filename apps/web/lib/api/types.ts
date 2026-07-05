@@ -65,6 +65,23 @@ export interface TraceDetail {
   spans: Span[];
 }
 
+// ---- GET /api/v1/alerts ----
+export interface Alert {
+  id: string;
+  name: string;
+  service: string;
+  metric: 'errorRatio' | 'p95';
+  threshold: number;
+  severity: 'warning' | 'critical';
+  value: number;
+  firing: boolean;
+}
+export interface AlertListResponse {
+  alerts: Alert[];
+  firing: number;
+  total: number;
+}
+
 // ---- GET /api/v1/service-map ----
 export interface MapNode {
   name: string;

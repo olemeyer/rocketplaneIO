@@ -1,6 +1,7 @@
 import { brand, signal as signalColors, status as statusColors } from '@rocketplane/ui';
 import { rpFetch } from './client';
 import type {
+  AlertListResponse,
   HealthState,
   HealthStatus,
   LogListResponse,
@@ -74,6 +75,16 @@ export async function getServiceDetail(name: string, sig?: AbortSignal): Promise
 // getServiceMap liefert die Fleet-Topologie (Knoten + Aufruf-Kanten).
 export async function getServiceMap(sig?: AbortSignal): Promise<ServiceMapResponse> {
   return rpFetch<ServiceMapResponse>('/v1/service-map', { signal: sig });
+}
+
+// getAlerts liefert die ausgewerteten Alert-Regeln (feuernde zuerst).
+export async function getAlerts(sig?: AbortSignal): Promise<AlertListResponse> {
+  return rpFetch<AlertListResponse>('/v1/alerts', { signal: sig });
+}
+
+// formatMetricValue formatiert einen Alert-Wert je Metrik.
+export function formatMetricValue(metric: string, value: number): string {
+  return metric === 'p95' ? `${Math.round(value)}ms` : `${(value * 100).toFixed(2)}%`;
 }
 
 export interface TraceView {

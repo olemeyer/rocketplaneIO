@@ -21,7 +21,7 @@ const NAV: NavItem[] = [
   { label: 'Logs', href: '/logs', icon: Logs, ready: true },
   { label: 'Metrics', href: '#', icon: Metrics },
   { label: 'Dashboards', href: '#', icon: Dashboards },
-  { label: 'Alerts', href: '#', icon: Bell, badge: '3', alert: true },
+  { label: 'Alerts', href: '/alerts', icon: Bell, ready: true },
 ];
 
 export function Sidebar() {
