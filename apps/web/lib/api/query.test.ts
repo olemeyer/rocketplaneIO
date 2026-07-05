@@ -4,11 +4,19 @@ import {
   getLogs,
   getServiceDetail,
   getServiceHealth,
+  getServiceMap,
   getTrace,
   getTraces,
   severityTone,
 } from './query';
-import { logList, serviceDetail, servicesResponse, traceDetail, traceList } from '@/src/test/fixtures/explore';
+import {
+  logList,
+  serviceDetail,
+  serviceMap,
+  servicesResponse,
+  traceDetail,
+  traceList,
+} from '@/src/test/fixtures/explore';
 
 function stubFetch(data: unknown) {
   const fetchMock = vi.fn(
@@ -92,6 +100,16 @@ describe('getServiceDetail', () => {
     expect(res.name).toBe('checkout-api');
     expect(res.operations).toHaveLength(2);
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/rp/v1/services/checkout-api');
+  });
+});
+
+describe('getServiceMap', () => {
+  it('ruft /v1/service-map und liefert Knoten + Kanten', async () => {
+    const fetchMock = stubFetch(serviceMap);
+    const res = await getServiceMap();
+    expect(res.nodes.length).toBeGreaterThan(0);
+    expect(res.edges.length).toBeGreaterThan(0);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/rp/v1/service-map');
   });
 });
 

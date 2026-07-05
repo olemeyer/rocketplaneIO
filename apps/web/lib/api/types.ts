@@ -65,6 +65,27 @@ export interface TraceDetail {
   spans: Span[];
 }
 
+// ---- GET /api/v1/service-map ----
+export interface MapNode {
+  name: string;
+  status: HealthStatus;
+  rate: number;
+  errorRatio: number;
+  p95Ms: number;
+  spanCount: number;
+}
+export interface MapEdge {
+  from: string;
+  to: string;
+  callCount: number;
+  errorRatio: number;
+}
+export interface ServiceMapResponse {
+  window: { start: number; end: number };
+  nodes: MapNode[];
+  edges: MapEdge[];
+}
+
 // ---- GET /api/v1/services/{name} ----
 export interface Point {
   t: number; // unix seconds

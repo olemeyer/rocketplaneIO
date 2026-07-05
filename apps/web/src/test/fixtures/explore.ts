@@ -2,6 +2,7 @@ import type {
   LogListResponse,
   ServiceDetail,
   ServiceHealth,
+  ServiceMapResponse,
   ServicesResponse,
   TraceDetail,
   TraceListResponse,
@@ -109,6 +110,21 @@ export const serviceDetail: ServiceDetail = {
   dependencies: [
     { service: 'payment-gateway', callCount: 4800, errorRatio: 0.02, p95Ms: 310 },
     { service: 'inventory', callCount: 4700, errorRatio: 0.0002, p95Ms: 54 },
+  ],
+};
+
+export const serviceMap: ServiceMapResponse = {
+  window: { start: 1, end: 901 },
+  nodes: [
+    { name: 'checkout-api', status: 'critical', rate: 1204, errorRatio: 0.042, p95Ms: 842, spanCount: 5000 },
+    { name: 'payment-gateway', status: 'degraded', rate: 640, errorRatio: 0.008, p95Ms: 310, spanCount: 3000 },
+    { name: 'inventory', status: 'healthy', rate: 880, errorRatio: 0.0002, p95Ms: 54, spanCount: 2000 },
+    { name: 'stripe', status: 'degraded', rate: 200, errorRatio: 0.01, p95Ms: 130, spanCount: 900 },
+  ],
+  edges: [
+    { from: 'checkout-api', to: 'payment-gateway', callCount: 900, errorRatio: 0.02 },
+    { from: 'checkout-api', to: 'inventory', callCount: 880, errorRatio: 0.0 },
+    { from: 'payment-gateway', to: 'stripe', callCount: 600, errorRatio: 0.01 },
   ],
 };
 

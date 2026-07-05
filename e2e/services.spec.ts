@@ -15,6 +15,16 @@ test.describe('rocketplaneIO — Service Catalog & Detail (M3)', () => {
     await expect(page.getByRole('link', { name: /payment-gateway/ }).first()).toBeVisible();
   });
 
+  test('Service-Map rendert Knoten und ist klickbar', async ({ page }) => {
+    await page.goto('/services');
+    await expect(page.getByText('Service map')).toBeVisible();
+    // Map-Knoten sind SVG-Gruppen mit role=link.
+    const node = page.locator('svg[aria-label="service map"] [role="link"]').first();
+    await expect(node).toBeVisible();
+    await node.click();
+    await expect(page).toHaveURL(/\/services\/[a-z-]+/);
+  });
+
   test('Klick auf einen Service öffnet das Detail mit Charts & Dependencies', async ({ page }) => {
     await page.goto('/services');
     await page.getByRole('link', { name: /checkout-api/ }).first().click();

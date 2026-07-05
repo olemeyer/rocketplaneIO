@@ -7,6 +7,7 @@ import type {
   Service,
   ServiceDetail,
   ServiceHealth,
+  ServiceMapResponse,
   ServicesResponse,
   Span,
   TraceDetail,
@@ -68,6 +69,11 @@ function toServiceHealth(s: Service): ServiceHealth {
 // getServiceDetail liefert RED-Zeitreihen, Operationen und Abhängigkeiten.
 export async function getServiceDetail(name: string, sig?: AbortSignal): Promise<ServiceDetail> {
   return rpFetch<ServiceDetail>(`/v1/services/${encodeURIComponent(name)}`, { signal: sig });
+}
+
+// getServiceMap liefert die Fleet-Topologie (Knoten + Aufruf-Kanten).
+export async function getServiceMap(sig?: AbortSignal): Promise<ServiceMapResponse> {
+  return rpFetch<ServiceMapResponse>('/v1/service-map', { signal: sig });
 }
 
 export interface TraceView {
