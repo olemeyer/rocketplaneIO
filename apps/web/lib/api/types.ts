@@ -65,6 +65,22 @@ export interface TraceDetail {
   spans: Span[];
 }
 
+// ---- GET /api/v1/logs ----
+export interface LogRecord {
+  timestamp: number; // epoch ms
+  serviceName: string;
+  severity: string; // INFO | WARN | ERROR | DEBUG | ...
+  severityNumber: number; // OTLP 1..24
+  body: string;
+  traceId?: string;
+  spanId?: string;
+  attributes?: Record<string, string>;
+}
+export interface LogListResponse {
+  logs: LogRecord[];
+  nextCursor?: string;
+}
+
 // ---- UI-Domäne (Adapter-Output, an @rocketplane/ui-Tokens gebunden) ----
 export type HealthState = Status; // 'resolved'|'degraded'|'critical'|'unknown'
 

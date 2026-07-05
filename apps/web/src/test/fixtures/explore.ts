@@ -1,4 +1,5 @@
 import type {
+  LogListResponse,
   ServiceHealth,
   ServicesResponse,
   TraceDetail,
@@ -75,3 +76,26 @@ export const traceSpansSample: TraceSpan[] = [
 ];
 
 export const traceViewSample = { detail: traceDetail, spans: traceSpansSample };
+
+export const logList: LogListResponse = {
+  logs: [
+    {
+      timestamp: 1_700_000_000_000,
+      serviceName: 'checkout-api',
+      severity: 'ERROR',
+      severityNumber: 17,
+      body: 'POST /checkout failed: downstream error',
+      traceId: traceDetail.traceId,
+      spanId: 'a1b2c3d4',
+    },
+    {
+      timestamp: 1_700_000_000_100,
+      serviceName: 'cart-service',
+      severity: 'INFO',
+      severityNumber: 9,
+      body: 'cart loaded',
+      traceId: 'f00dbabe0000000000000000cafef00d',
+    },
+  ],
+  nextCursor: 'o60',
+};

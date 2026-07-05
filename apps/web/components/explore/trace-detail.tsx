@@ -7,6 +7,7 @@ import { colorForService } from '@/lib/api';
 import { useLiveQuery } from '@/lib/hooks/use-live-query';
 import { ArrowRight, Waterfall as WaterfallIcon } from '../icons';
 import { Waterfall } from './waterfall';
+import { RelatedLogs } from './related-logs';
 
 export function TraceDetail({ traceId }: { traceId: string }) {
   const load = useCallback((signal: AbortSignal) => getTrace(traceId, signal), [traceId]);
@@ -90,6 +91,9 @@ export function TraceDetail({ traceId }: { traceId: string }) {
             </div>
             <Waterfall spans={view.spans} />
           </div>
+
+          {/* Related Logs (korreliert über TraceId) */}
+          <RelatedLogs traceId={view.detail.traceId} />
         </>
       )}
     </div>

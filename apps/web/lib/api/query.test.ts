@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { colorForService, getServiceHealth, getTrace, getTraces } from './query';
-import { servicesResponse, traceDetail, traceList } from '@/src/test/fixtures/explore';
+import { colorForService, getLogs, getServiceHealth, getTrace, getTraces, severityTone } from './query';
+import { logList, servicesResponse, traceDetail, traceList } from '@/src/test/fixtures/explore';
 
 function stubFetch(data: unknown) {
   const fetchMock = vi.fn(
@@ -60,6 +60,29 @@ describe('getTrace', () => {
     expect(payment?.widthPct).toBeCloseTo((158 / 342) * 100, 1);
     expect(payment?.isError).toBe(true);
     expect(spans[0]?.widthPct).toBe(100); // Root deckt das ganze Fenster
+  });
+});
+
+describe('getLogs', () => {
+  it('baut Query-Params aus dem Filter', async () => {
+    const fetchMock = stubFetch(logList);
+    const res = await getLogs({ service: 'checkout-api', minSeverity: 17, search: 'boom', traceId: 'abc' });
+    expect(res.logs).toHaveLength(2);
+    const url = String(fetchMock.mock.calls[0]?.[0]);
+    expect(url).toContain('/api/rp/v1/logs?');
+    expect(url).toContain('service=checkout-api');
+    expect(url).toContain('minSeverity=17');
+    expect(url).toContain('search=boom');
+    expect(url).toContain('traceId=abc');
+  });
+});
+
+describe('severityTone', () => {
+  it('mappt Severity auf Ton-Klassen', () => {
+    expect(severityTone('ERROR').className).toContain('critical');
+    expect(severityTone('WARN').className).toContain('degraded');
+    expect(severityTone('INFO').label).toBe('INFO');
+    expect(severityTone('').label).toBe('INFO');
   });
 });
 

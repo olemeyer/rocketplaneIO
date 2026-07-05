@@ -3,6 +3,7 @@ import { rpFetch } from './client';
 import type {
   HealthState,
   HealthStatus,
+  LogListResponse,
   Service,
   ServiceHealth,
   ServicesResponse,
@@ -104,6 +105,39 @@ export async function getTraces(f: TraceFilter, sig?: AbortSignal): Promise<Trac
   p.set('limit', String(f.limit ?? 25));
   if (f.cursor) p.set('cursor', f.cursor);
   return rpFetch<TraceListResponse>(`/v1/traces?${p.toString()}`, { signal: sig });
+}
+
+// Filter für die Log-Liste (deckt die Backend-Query-Params ab).
+export interface LogFilter {
+  service?: string;
+  minSeverity?: number; // OTLP SeverityNumber (>=)
+  search?: string;
+  traceId?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+// getLogs liefert eine gefilterte, paginierte Log-Liste (neueste zuerst).
+export async function getLogs(f: LogFilter, sig?: AbortSignal): Promise<LogListResponse> {
+  const p = new URLSearchParams();
+  if (f.service) p.set('service', f.service);
+  if (f.minSeverity) p.set('minSeverity', String(f.minSeverity));
+  if (f.search) p.set('search', f.search);
+  if (f.traceId) p.set('traceId', f.traceId);
+  p.set('limit', String(f.limit ?? 100));
+  if (f.cursor) p.set('cursor', f.cursor);
+  return rpFetch<LogListResponse>(`/v1/logs?${p.toString()}`, { signal: sig });
+}
+
+// severityTone bildet einen Severity-Text auf eine Token-Farbe/Klasse ab.
+export function severityTone(sev: string): { label: string; className: string } {
+  const s = sev.toUpperCase();
+  if (s.startsWith('ERROR') || s.startsWith('FATAL'))
+    return { label: s, className: 'bg-[rgba(242,85,90,0.14)] text-status-critical' };
+  if (s.startsWith('WARN')) return { label: s, className: 'bg-[rgba(245,181,68,0.14)] text-status-degraded' };
+  if (s.startsWith('DEBUG') || s.startsWith('TRACE'))
+    return { label: s, className: 'bg-overlay text-faint' };
+  return { label: s || 'INFO', className: 'bg-overlay text-muted' };
 }
 
 function toTraceSpan(sp: Span, totalMs: number): TraceSpan {

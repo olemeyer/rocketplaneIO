@@ -6,6 +6,8 @@ vi.mock('next/link', () => ({
 }));
 // useLiveQuery direkt mocken: entkoppelt den Rendering-Test vom Fetch/Promise.
 vi.mock('@/lib/hooks/use-live-query', () => ({ useLiveQuery: vi.fn() }));
+// RelatedLogs hat einen eigenen useLiveQuery-Aufruf -> hier ausblenden.
+vi.mock('./related-logs', () => ({ RelatedLogs: () => null }));
 
 import { useLiveQuery } from '@/lib/hooks/use-live-query';
 import { TraceDetail } from './trace-detail';
