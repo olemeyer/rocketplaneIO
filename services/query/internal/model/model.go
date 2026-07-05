@@ -153,6 +153,31 @@ type Dependency struct {
 	P95Ms      float64 `json:"p95Ms"`
 }
 
+// MapNode ist ein Service-Knoten in der Service-Map.
+type MapNode struct {
+	Name       string       `json:"name"`
+	Status     HealthStatus `json:"status"`
+	Rate       float64      `json:"rate"`
+	ErrorRatio float64      `json:"errorRatio"`
+	P95Ms      float64      `json:"p95Ms"`
+	SpanCount  int64        `json:"spanCount"`
+}
+
+// MapEdge ist eine gerichtete Aufruf-Kante (from ruft to auf).
+type MapEdge struct {
+	From       string  `json:"from"`
+	To         string  `json:"to"`
+	CallCount  int64   `json:"callCount"`
+	ErrorRatio float64 `json:"errorRatio"`
+}
+
+// ServiceMap ist die Antwort von GET /api/v1/service-map.
+type ServiceMap struct {
+	Window Window    `json:"window"`
+	Nodes  []MapNode `json:"nodes"`
+	Edges  []MapEdge `json:"edges"`
+}
+
 // ServiceDetail ist die Antwort von GET /api/v1/services/{name}.
 type ServiceDetail struct {
 	Name         string          `json:"name"`

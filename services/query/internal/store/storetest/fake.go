@@ -3,6 +3,7 @@ package storetest
 
 import (
 	"context"
+	"time"
 
 	"github.com/rocketplaneio/rocketplane/services/query/internal/model"
 	"github.com/rocketplaneio/rocketplane/services/query/internal/store"
@@ -14,15 +15,17 @@ type Fake struct {
 	TraceList      model.TraceList
 	TraceDetail    model.TraceDetail
 
-	LogList       model.LogList
-	ServiceDetail model.ServiceDetail
+	LogList          model.LogList
+	ServiceDetail    model.ServiceDetail
+	ServiceMapResult model.ServiceMap
 
-	ServicesErr error
-	ServiceErr  error
-	TracesErr   error
-	TraceErr    error
-	LogsErr     error
-	PingErr     error
+	ServicesErr   error
+	ServiceErr    error
+	ServiceMapErr error
+	TracesErr     error
+	TraceErr      error
+	LogsErr       error
+	PingErr       error
 
 	// Aufzeichnungen zur Assertion.
 	LastServicesQuery store.ServicesQuery
@@ -42,6 +45,10 @@ func (f *Fake) Services(_ context.Context, q store.ServicesQuery) (model.Service
 func (f *Fake) Service(_ context.Context, q store.ServiceQuery) (model.ServiceDetail, error) {
 	f.LastServiceQuery = q
 	return f.ServiceDetail, f.ServiceErr
+}
+
+func (f *Fake) ServiceMap(context.Context, time.Time, time.Time) (model.ServiceMap, error) {
+	return f.ServiceMapResult, f.ServiceMapErr
 }
 
 func (f *Fake) Traces(_ context.Context, q store.TracesQuery) (model.TraceList, error) {

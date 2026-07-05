@@ -191,6 +191,96 @@ func (s *Store) Service(_ context.Context, q store.ServiceQuery) (model.ServiceD
 	}, nil
 }
 
+func (s *Store) ServiceMap(_ context.Context, start, end time.Time) (model.ServiceMap, error) {
+	if end.IsZero() {
+		end = s.now()
+	}
+	if start.IsZero() {
+		start = end.Add(-15 * time.Minute)
+	}
+
+	// Knoten: alle Services aus den Trace-Spans, mit Span-/Fehler-Aggregat.
+	type nAcc struct {
+		spanCount, errCount int64
+		durSum              float64
+	}
+	nodeMap := map[string]*nAcc{}
+	type eKey struct{ from, to string }
+	type eAcc struct {
+		calls, errs int64
+	}
+	edgeMap := map[eKey]*eAcc{}
+
+	for _, d := range s.details {
+		byID := map[string]model.Span{}
+		for _, sp := range d.Spans {
+			byID[sp.SpanID] = sp
+			a := nodeMap[sp.Service]
+			if a == nil {
+				a = &nAcc{}
+				nodeMap[sp.Service] = a
+			}
+			a.spanCount++
+			a.durSum += sp.DurationMs
+			if sp.Status == model.TraceError {
+				a.errCount++
+			}
+		}
+		for _, sp := range d.Spans {
+			if sp.ParentSpanID == "" {
+				continue
+			}
+			parent, ok := byID[sp.ParentSpanID]
+			if !ok || parent.Service == sp.Service {
+				continue
+			}
+			k := eKey{parent.Service, sp.Service}
+			e := edgeMap[k]
+			if e == nil {
+				e = &eAcc{}
+				edgeMap[k] = e
+			}
+			e.calls++
+			if sp.Status == model.TraceError {
+				e.errs++
+			}
+		}
+	}
+
+	// SLO-Defaults je Service für die Health-Ableitung.
+	slo := func(name string) float64 {
+		if v, ok := map[string]float64{"checkout-api": 400, "payment-gateway": 300, "cart-service": 150, "inventory": 100}[name]; ok {
+			return v
+		}
+		return 300
+	}
+
+	nodes := make([]model.MapNode, 0, len(nodeMap))
+	for name, a := range nodeMap {
+		errRatio := ratio(a.errCount, a.spanCount)
+		p95 := round1(avg(a.durSum, a.spanCount) * 1.6)
+		nodes = append(nodes, model.MapNode{
+			Name: name, Status: model.DeriveHealth(errRatio, p95, slo(name)),
+			Rate: round1(float64(a.spanCount) / end.Sub(start).Seconds()), ErrorRatio: round4(errRatio),
+			P95Ms: p95, SpanCount: a.spanCount,
+		})
+	}
+	sort.SliceStable(nodes, func(i, j int) bool { return nodes[i].SpanCount > nodes[j].SpanCount })
+
+	edges := make([]model.MapEdge, 0, len(edgeMap))
+	for k, e := range edgeMap {
+		edges = append(edges, model.MapEdge{
+			From: k.from, To: k.to, CallCount: e.calls, ErrorRatio: round4(ratio(e.errs, e.calls)),
+		})
+	}
+	sort.SliceStable(edges, func(i, j int) bool { return edges[i].CallCount > edges[j].CallCount })
+
+	return model.ServiceMap{
+		Window: model.Window{Start: start.Unix(), End: end.Unix()},
+		Nodes:  nodes, Edges: edges,
+	}, nil
+}
+
 // opsAndDeps aggregiert Operationen (SpanName des Service) und nachgelagerte
 // Services (Child-Spans mit anderem Service) aus den Traces, die bei name wurzeln.
 func (s *Store) opsAndDeps(name string) ([]model.OperationStat, []model.Dependency) {

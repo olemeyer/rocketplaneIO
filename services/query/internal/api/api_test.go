@@ -135,6 +135,27 @@ func TestServiceDetailEnvelope(t *testing.T) {
 	}
 }
 
+func TestServiceMapEnvelope(t *testing.T) {
+	f := &storetest.Fake{ServiceMapResult: model.ServiceMap{
+		Nodes: []model.MapNode{{Name: "checkout-api", Status: model.HealthCritical}},
+		Edges: []model.MapEdge{{From: "checkout-api", To: "payment-gateway", CallCount: 10}},
+	}}
+	rec := do(newTestServer(f), http.MethodGet, "/api/v1/service-map", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var env struct {
+		Status string           `json:"status"`
+		Data   model.ServiceMap `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(env.Data.Nodes) != 1 || len(env.Data.Edges) != 1 || env.Data.Edges[0].To != "payment-gateway" {
+		t.Fatalf("unexpected: %+v", env)
+	}
+}
+
 func TestServiceDetailNotFound(t *testing.T) {
 	f := &storetest.Fake{ServiceErr: store.ErrNotFound}
 	rec := do(newTestServer(f), http.MethodGet, "/api/v1/services/ghost", "")

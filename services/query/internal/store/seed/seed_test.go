@@ -123,6 +123,35 @@ func TestServiceDetail(t *testing.T) {
 	}
 }
 
+func TestServiceMap(t *testing.T) {
+	m, err := newSeed().ServiceMap(context.Background(), time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("ServiceMap: %v", err)
+	}
+	if len(m.Nodes) < 4 {
+		t.Fatalf("nodes = %d, want >= 4", len(m.Nodes))
+	}
+	if len(m.Edges) == 0 {
+		t.Fatal("expected edges")
+	}
+	// Kante checkout-api -> payment-gateway muss existieren.
+	found := false
+	for _, e := range m.Edges {
+		if e.From == "checkout-api" && e.To == "payment-gateway" {
+			found = true
+			if e.CallCount == 0 {
+				t.Error("edge has zero calls")
+			}
+		}
+		if e.From == e.To {
+			t.Errorf("self-edge: %+v", e)
+		}
+	}
+	if !found {
+		t.Error("expected checkout-api -> payment-gateway edge")
+	}
+}
+
 func TestLogsCorrelateWithTraces(t *testing.T) {
 	s := newSeed()
 	ctx := context.Background()

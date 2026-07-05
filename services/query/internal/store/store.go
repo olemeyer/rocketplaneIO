@@ -63,6 +63,8 @@ type Store interface {
 	// Service liefert RED-Zeitreihen, Operationen und Abhängigkeiten eines Service;
 	// unbekannt -> ErrNotFound.
 	Service(ctx context.Context, q ServiceQuery) (model.ServiceDetail, error)
+	// ServiceMap liefert die Fleet-Topologie (Knoten + Aufruf-Kanten).
+	ServiceMap(ctx context.Context, start, end time.Time) (model.ServiceMap, error)
 	// Traces liefert kompakte Trace-Summaries, cursor-paginiert.
 	Traces(ctx context.Context, q TracesQuery) (model.TraceList, error)
 	// Trace liefert alle Spans eines Trace depth-first; unbekannt -> ErrNotFound.

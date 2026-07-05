@@ -362,6 +362,83 @@ GROUP BY child.ServiceName ORDER BY callCount DESC LIMIT 20`
 
 func round4(f float64) float64 { return float64(int64(f*10000+0.5)) / 10000 }
 
+// --- Service-Map ------------------------------------------------------------
+
+func (s *Store) ServiceMap(ctx context.Context, start, end time.Time) (model.ServiceMap, error) {
+	if end.IsZero() {
+		end = time.Now()
+	}
+	if start.IsZero() {
+		start = end.Add(-15 * time.Minute)
+	}
+	windowSec := end.Sub(start).Seconds()
+	if windowSec <= 0 {
+		windowSec = 1
+	}
+	p := map[string]string{"start": chTime(start), "end": chTime(end), "winSec": fmt.Sprintf("%f", windowSec)}
+
+	// Knoten: alle Services mit Span-/Fehler-/Latenz-Aggregat.
+	var nodeRows []struct {
+		Name       string  `json:"name"`
+		SpanCount  int64   `json:"spanCount"`
+		ErrorRatio float64 `json:"errorRatio"`
+		Rate       float64 `json:"rate"`
+		P95        float64 `json:"p95"`
+	}
+	const nodeSQL = `
+SELECT ServiceName AS name, count() AS spanCount,
+       countIf(StatusCode='Error')/count() AS errorRatio, count()/{winSec:Float64} AS rate,
+       quantile(0.95)(Duration)/1e6 AS p95
+FROM otel_traces
+WHERE Timestamp >= {start:DateTime64(9)} AND Timestamp < {end:DateTime64(9)}
+GROUP BY ServiceName ORDER BY spanCount DESC LIMIT 100`
+	if err := s.query(ctx, nodeSQL, p, &nodeRows); err != nil {
+		return model.ServiceMap{}, err
+	}
+
+	slo := map[string]float64{"checkout-api": 400, "payment-gateway": 300, "cart-service": 150, "inventory": 100}
+	nodes := make([]model.MapNode, 0, len(nodeRows))
+	for _, n := range nodeRows {
+		s95 := slo[n.Name]
+		if s95 == 0 {
+			s95 = 300
+		}
+		nodes = append(nodes, model.MapNode{
+			Name: n.Name, Status: model.DeriveHealth(n.ErrorRatio, n.P95, s95),
+			Rate: round1(n.Rate), ErrorRatio: n.ErrorRatio, P95Ms: round1(n.P95), SpanCount: n.SpanCount,
+		})
+	}
+
+	// Kanten: Parent-Service -> Child-Service (Self-Join).
+	var edgeRows []struct {
+		From       string  `json:"from"`
+		To         string  `json:"to"`
+		CallCount  int64   `json:"callCount"`
+		ErrorRatio float64 `json:"errorRatio"`
+	}
+	const edgeSQL = `
+SELECT parent.ServiceName AS from, child.ServiceName AS to, count() AS callCount,
+       countIf(child.StatusCode='Error')/count() AS errorRatio
+FROM otel_traces AS child
+INNER JOIN otel_traces AS parent
+  ON child.TraceId = parent.TraceId AND child.ParentSpanId = parent.SpanId
+WHERE child.Timestamp >= {start:DateTime64(9)} AND child.Timestamp < {end:DateTime64(9)}
+  AND parent.ServiceName != child.ServiceName
+GROUP BY parent.ServiceName, child.ServiceName ORDER BY callCount DESC LIMIT 200`
+	if err := s.query(ctx, edgeSQL, p, &edgeRows); err != nil {
+		return model.ServiceMap{}, err
+	}
+	edges := make([]model.MapEdge, 0, len(edgeRows))
+	for _, e := range edgeRows {
+		edges = append(edges, model.MapEdge{From: e.From, To: e.To, CallCount: e.CallCount, ErrorRatio: e.ErrorRatio})
+	}
+
+	return model.ServiceMap{
+		Window: model.Window{Start: start.Unix(), End: end.Unix()},
+		Nodes:  nodes, Edges: edges,
+	}, nil
+}
+
 // --- Logs -------------------------------------------------------------------
 
 func (s *Store) Logs(ctx context.Context, q store.LogsQuery) (model.LogList, error) {
