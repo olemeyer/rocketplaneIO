@@ -15,6 +15,7 @@ import (
 
 	"github.com/rocketplaneio/rocketplane/services/ingest/internal/chsink"
 
+	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -25,6 +26,7 @@ const maxBody = 16 << 20 // 16 MiB
 // Sink ist die Schreibsenke (von chsink.Sink erfüllt).
 type Sink interface {
 	Insert(ctx context.Context, rows []chsink.Row) error
+	InsertLogs(ctx context.Context, rows []chsink.LogRow) error
 	Ping(ctx context.Context) error
 }
 
@@ -45,8 +47,8 @@ func (h *Handler) Mux() http.Handler {
 	mux.HandleFunc("GET /healthz", h.health)
 	mux.HandleFunc("GET /readyz", h.ready)
 	mux.HandleFunc("POST /v1/traces", h.traces)
+	mux.HandleFunc("POST /v1/logs", h.logs)
 	mux.HandleFunc("POST /v1/metrics", h.notImplemented("metrics"))
-	mux.HandleFunc("POST /v1/logs", h.notImplemented("logs"))
 	return h.withLogging(mux)
 }
 
@@ -93,6 +95,49 @@ func (h *Handler) traces(w http.ResponseWriter, r *http.Request) {
 
 	// Erfolgreiche, leere OTLP-Response im selben Encoding wie der Request.
 	resp := &coltracepb.ExportTraceServiceResponse{}
+	if isJSON {
+		out, _ := protojson.Marshal(resp)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(out)
+		return
+	}
+	out, _ := proto.Marshal(resp)
+	w.Header().Set("Content-Type", "application/x-protobuf")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(out)
+}
+
+// logs verarbeitet OTLP/HTTP-Log-Exporte.
+func (h *Handler) logs(w http.ResponseWriter, r *http.Request) {
+	body, err := readBody(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	req := &collogspb.ExportLogsServiceRequest{}
+	isJSON := isJSONContentType(r.Header.Get("Content-Type"))
+	if isJSON {
+		err = protojson.Unmarshal(body, req)
+	} else {
+		err = proto.Unmarshal(body, req)
+	}
+	if err != nil {
+		h.log.Warn("otlp logs decode", "err", err, "json", isJSON)
+		http.Error(w, "malformed OTLP payload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	rows := logsToRows(req.GetResourceLogs())
+	if err := h.sink.InsertLogs(r.Context(), rows); err != nil {
+		h.log.Error("clickhouse insert logs", "err", err, "records", len(rows))
+		http.Error(w, "storage error", http.StatusServiceUnavailable)
+		return
+	}
+	h.log.Debug("ingested logs", "records", len(rows))
+
+	resp := &collogspb.ExportLogsServiceResponse{}
 	if isJSON {
 		out, _ := protojson.Marshal(resp)
 		w.Header().Set("Content-Type", "application/json")

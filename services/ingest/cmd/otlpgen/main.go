@@ -24,8 +24,10 @@ import (
 	"syscall"
 	"time"
 
+	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/proto"
@@ -77,7 +79,9 @@ func main() {
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	rng := mrand.New(mrand.NewSource(7))
-	url := strings.TrimRight(endpoint, "/") + "/v1/traces"
+	base := strings.TrimRight(endpoint, "/")
+	tracesURL := base + "/v1/traces"
+	logsURL := base + "/v1/logs"
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -85,7 +89,7 @@ func main() {
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	log.Info("otlpgen started", "endpoint", url, "every", interval.String())
+	log.Info("otlpgen started", "endpoint", base, "every", interval.String())
 
 	for {
 		select {
@@ -93,34 +97,42 @@ func main() {
 			log.Info("stopping")
 			return
 		case <-ticker.C:
-			req := buildRequest(rng)
-			body, _ := proto.Marshal(req)
-			spans := countSpans(req)
-			if err := send(ctx, client, url, body); err != nil {
-				log.Error("send", "err", err)
-			} else {
-				log.Info("sent", "spans", spans)
+			traceReq, logReq := buildRequests(rng)
+			tbody, _ := proto.Marshal(traceReq)
+			if err := send(ctx, client, tracesURL, tbody); err != nil {
+				log.Error("send traces", "err", err)
+				continue
 			}
+			lbody, _ := proto.Marshal(logReq)
+			if err := send(ctx, client, logsURL, lbody); err != nil {
+				log.Error("send logs", "err", err)
+				continue
+			}
+			log.Info("sent", "spans", countSpans(traceReq), "logs", countLogs(logReq))
 		}
 	}
 }
 
-func buildRequest(rng *mrand.Rand) *coltracepb.ExportTraceServiceRequest {
+// buildRequests erzeugt korrelierte Traces + Logs (gleiche TraceId je Trace).
+func buildRequests(rng *mrand.Rand) (*coltracepb.ExportTraceServiceRequest, *collogspb.ExportLogsServiceRequest) {
 	now := time.Now()
 	var rss []*tracepb.ResourceSpans
+	var rls []*logspb.ResourceLogs
 	for _, sp := range specs {
 		n := 1 + rng.Intn(3)
 		for i := 0; i < n; i++ {
-			rss = append(rss, traceResourceSpans(sp, now, rng)...)
+			spans, logs := traceWithLogs(sp, now, rng)
+			rss = append(rss, spans...)
+			rls = append(rls, logs...)
 		}
 	}
-	return &coltracepb.ExportTraceServiceRequest{ResourceSpans: rss}
+	return &coltracepb.ExportTraceServiceRequest{ResourceSpans: rss},
+		&collogspb.ExportLogsServiceRequest{ResourceLogs: rls}
 }
 
-// traceResourceSpans erzeugt einen Trace als MEHRERE ResourceSpans — je Span die
-// eigene service.name im Resource, so wie es verteilte OTLP-Exports tun. So bleibt
-// die Per-Span-Service-Identität im Waterfall erhalten.
-func traceResourceSpans(sp svcSpec, now time.Time, rng *mrand.Rand) []*tracepb.ResourceSpans {
+// traceWithLogs erzeugt einen Trace (mehrere ResourceSpans) plus korrelierte Logs
+// (gleiche TraceId): ein INFO-Startlog + bei Fehlern ein ERROR-Log.
+func traceWithLogs(sp svcSpec, now time.Time, rng *mrand.Rand) ([]*tracepb.ResourceSpans, []*logspb.ResourceLogs) {
 	traceID := randBytes(16)
 	rootID := randBytes(8)
 	durMs := sampleDurationMs(sp.p50, sp.p99, rng)
@@ -136,7 +148,42 @@ func traceResourceSpans(sp svcSpec, now time.Time, rng *mrand.Rand) []*tracepb.R
 		out = append(out, oneSpanResource(c.service,
 			span(traceID, randBytes(8), rootID, c.op, c.kind, startNs+offNs, cdur, isErr && c.errWith)))
 	}
-	return out
+
+	// korrelierte Logs (gleiche TraceId)
+	logs := []*logspb.ResourceLogs{
+		oneLogResource(sp.name, logRecord(traceID, rootID, startNs, "INFO", 9, sp.rootOp+" started")),
+	}
+	if isErr {
+		endNs := startNs + uint64(durMs*1e6)
+		logs = append(logs, oneLogResource(sp.name,
+			logRecord(traceID, rootID, endNs, "ERROR", 17, sp.rootOp+" failed: downstream error")))
+	}
+	return out, logs
+}
+
+func oneLogResource(service string, lr *logspb.LogRecord) *logspb.ResourceLogs {
+	return &logspb.ResourceLogs{
+		Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+			strKV("service.name", service),
+			strKV("deployment.environment", "production"),
+		}},
+		ScopeLogs: []*logspb.ScopeLogs{{
+			Scope:      &commonpb.InstrumentationScope{Name: "rocketplane/otlpgen", Version: "0.1.0"},
+			LogRecords: []*logspb.LogRecord{lr},
+		}},
+	}
+}
+
+func logRecord(traceID, spanID []byte, tsNs uint64, sevText string, sevNum logspb.SeverityNumber, body string) *logspb.LogRecord {
+	return &logspb.LogRecord{
+		TimeUnixNano:   tsNs,
+		SeverityText:   sevText,
+		SeverityNumber: sevNum,
+		Body:           &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: body}},
+		TraceId:        traceID,
+		SpanId:         spanID,
+		Attributes:     []*commonpb.KeyValue{strKV("log.gen", "otlpgen")},
+	}
 }
 
 func oneSpanResource(service string, s *tracepb.Span) *tracepb.ResourceSpans {
@@ -211,6 +258,16 @@ func countSpans(req *coltracepb.ExportTraceServiceRequest) int {
 	for _, rs := range req.GetResourceSpans() {
 		for _, ss := range rs.GetScopeSpans() {
 			n += len(ss.GetSpans())
+		}
+	}
+	return n
+}
+
+func countLogs(req *collogspb.ExportLogsServiceRequest) int {
+	n := 0
+	for _, rl := range req.GetResourceLogs() {
+		for _, sl := range rl.GetScopeLogs() {
+			n += len(sl.GetLogRecords())
 		}
 	}
 	return n

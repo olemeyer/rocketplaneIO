@@ -34,6 +34,25 @@ type Row struct {
 	StatusMessage      string            `json:"StatusMessage"`
 }
 
+// LogRow ist eine otel_logs-Zeile.
+type LogRow struct {
+	Timestamp          string            `json:"Timestamp"`
+	TraceId            string            `json:"TraceId"`
+	SpanId             string            `json:"SpanId"`
+	TraceFlags         uint8             `json:"TraceFlags"`
+	SeverityText       string            `json:"SeverityText"`
+	SeverityNumber     uint8             `json:"SeverityNumber"`
+	ServiceName        string            `json:"ServiceName"`
+	Body               string            `json:"Body"`
+	ResourceSchemaUrl  string            `json:"ResourceSchemaUrl"`
+	ResourceAttributes map[string]string `json:"ResourceAttributes"`
+	ScopeSchemaUrl     string            `json:"ScopeSchemaUrl"`
+	ScopeName          string            `json:"ScopeName"`
+	ScopeVersion       string            `json:"ScopeVersion"`
+	ScopeAttributes    map[string]string `json:"ScopeAttributes"`
+	LogAttributes      map[string]string `json:"LogAttributes"`
+}
+
 // Config beschreibt die ClickHouse-Verbindung.
 type Config struct {
 	URL      string
@@ -77,22 +96,43 @@ func (s *Sink) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Insert schreibt die Zeilen als JSONEachRow in otel_traces.
+// Insert schreibt Trace-Spans als JSONEachRow in otel_traces.
 func (s *Sink) Insert(ctx context.Context, rows []Row) error {
-	if len(rows) == 0 {
+	return s.insertRows(ctx, "otel_traces", len(rows), func(enc *json.Encoder) error {
+		for i := range rows {
+			if err := enc.Encode(rows[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// InsertLogs schreibt Log-Records als JSONEachRow in otel_logs.
+func (s *Sink) InsertLogs(ctx context.Context, rows []LogRow) error {
+	return s.insertRows(ctx, "otel_logs", len(rows), func(enc *json.Encoder) error {
+		for i := range rows {
+			if err := enc.Encode(rows[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// insertRows POSTet den JSONEachRow-Body an INSERT INTO <table>.
+func (s *Sink) insertRows(ctx context.Context, table string, n int, encode func(*json.Encoder) error) error {
+	if n == 0 {
 		return nil
 	}
 	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	for i := range rows {
-		if err := enc.Encode(rows[i]); err != nil {
-			return err
-		}
+	if err := encode(json.NewEncoder(&buf)); err != nil {
+		return err
 	}
 
 	v := url.Values{}
 	v.Set("database", s.cfg.Database)
-	v.Set("query", "INSERT INTO otel_traces FORMAT JSONEachRow")
+	v.Set("query", "INSERT INTO "+table+" FORMAT JSONEachRow")
 	endpoint := strings.TrimRight(s.cfg.URL, "/") + "/?" + v.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &buf)
@@ -110,7 +150,7 @@ func (s *Sink) Insert(ctx context.Context, rows []Row) error {
 	if resp.StatusCode != http.StatusOK {
 		var b bytes.Buffer
 		_, _ = b.ReadFrom(resp.Body)
-		return fmt.Errorf("clickhouse insert status %d: %s", resp.StatusCode, strings.TrimSpace(b.String()))
+		return fmt.Errorf("clickhouse insert %s status %d: %s", table, resp.StatusCode, strings.TrimSpace(b.String()))
 	}
 	return nil
 }

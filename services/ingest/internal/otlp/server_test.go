@@ -13,8 +13,10 @@ import (
 
 	"github.com/rocketplaneio/rocketplane/services/ingest/internal/chsink"
 
+	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -24,11 +26,16 @@ import (
 // fakeSink erfasst eingespeiste Zeilen.
 type fakeSink struct {
 	rows    []chsink.Row
+	logRows []chsink.LogRow
 	pingErr error
 }
 
 func (f *fakeSink) Insert(_ context.Context, rows []chsink.Row) error {
 	f.rows = append(f.rows, rows...)
+	return nil
+}
+func (f *fakeSink) InsertLogs(_ context.Context, rows []chsink.LogRow) error {
+	f.logRows = append(f.logRows, rows...)
 	return nil
 }
 func (f *fakeSink) Ping(context.Context) error { return f.pingErr }
@@ -147,14 +154,41 @@ func TestIngestMalformed(t *testing.T) {
 	}
 }
 
-func TestMetricsLogsNotImplemented(t *testing.T) {
-	h := newHandler(&fakeSink{})
-	for _, p := range []string{"/v1/metrics", "/v1/logs"} {
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, p, nil))
-		if rec.Code != http.StatusNotImplemented {
-			t.Errorf("POST %s = %d, want 501", p, rec.Code)
-		}
+func TestMetricsNotImplemented(t *testing.T) {
+	rec := httptest.NewRecorder()
+	newHandler(&fakeSink{}).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/metrics", nil))
+	if rec.Code != http.StatusNotImplemented {
+		t.Errorf("POST /v1/metrics = %d, want 501", rec.Code)
+	}
+}
+
+func TestIngestLogs(t *testing.T) {
+	sink := &fakeSink{}
+	body, _ := proto.Marshal(sampleLogsRequest())
+	req := httptest.NewRequest(http.MethodPost, "/v1/logs", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	rec := httptest.NewRecorder()
+	newHandler(sink).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.logRows) != 2 {
+		t.Fatalf("logRows = %d, want 2", len(sink.logRows))
+	}
+	info := sink.logRows[0]
+	if info.ServiceName != "checkout-api" || info.SeverityText != "INFO" || info.SeverityNumber != 9 {
+		t.Errorf("info log mapping: %+v", info)
+	}
+	if info.Body != "checkout requested" {
+		t.Errorf("body = %q", info.Body)
+	}
+	if info.TraceId != "7f3a9c2b1e8d4a5f9c0b3d2e1a4f6c7d" {
+		t.Errorf("traceId = %q", info.TraceId)
+	}
+	err := sink.logRows[1]
+	if err.SeverityText != "ERROR" || err.SeverityNumber != 17 {
+		t.Errorf("error log mapping: %+v", err)
 	}
 }
 
@@ -182,5 +216,37 @@ func assertSampleRows(t *testing.T, rows []chsink.Row) {
 	child := rows[1]
 	if child.ParentSpanId != "0102030405060708" || child.SpanKind != "Client" {
 		t.Errorf("child mapping: parent=%q kind=%q", child.ParentSpanId, child.SpanKind)
+	}
+}
+
+// sampleLogsRequest baut einen OTLP-Logs-Export mit einem INFO- und einem ERROR-Record.
+func sampleLogsRequest() *collogspb.ExportLogsServiceRequest {
+	str := func(k, v string) *commonpb.KeyValue {
+		return &commonpb.KeyValue{Key: k, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: v}}}
+	}
+	traceID := []byte{0x7f, 0x3a, 0x9c, 0x2b, 0x1e, 0x8d, 0x4a, 0x5f, 0x9c, 0x0b, 0x3d, 0x2e, 0x1a, 0x4f, 0x6c, 0x7d}
+	body := func(s string) *commonpb.AnyValue {
+		return &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: s}}
+	}
+	return &collogspb.ExportLogsServiceRequest{
+		ResourceLogs: []*logspb.ResourceLogs{{
+			Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{str("service.name", "checkout-api")}},
+			ScopeLogs: []*logspb.ScopeLogs{{
+				Scope: &commonpb.InstrumentationScope{Name: "test", Version: "1.0"},
+				LogRecords: []*logspb.LogRecord{
+					{
+						TimeUnixNano: 1_700_000_000_000_000_000, SeverityText: "INFO",
+						SeverityNumber: logspb.SeverityNumber_SEVERITY_NUMBER_INFO,
+						Body:           body("checkout requested"), TraceId: traceID,
+					},
+					{
+						TimeUnixNano: 1_700_000_000_100_000_000, SeverityText: "ERROR",
+						SeverityNumber: logspb.SeverityNumber_SEVERITY_NUMBER_ERROR,
+						Body:           body("checkout failed"), TraceId: traceID,
+						Attributes: []*commonpb.KeyValue{str("exception.type", "DownstreamError")},
+					},
+				},
+			}},
+		}},
 	}
 }
