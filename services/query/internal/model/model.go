@@ -136,6 +136,25 @@ type Point struct {
 	V float64 `json:"v"`
 }
 
+// Alert ist eine ausgewertete Alert-Regel gegen den aktuellen Service-Zustand.
+type Alert struct {
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	Service   string  `json:"service"`
+	Metric    string  `json:"metric"` // "errorRatio" | "p95"
+	Threshold float64 `json:"threshold"`
+	Severity  string  `json:"severity"` // "warning" | "critical"
+	Value     float64 `json:"value"`
+	Firing    bool    `json:"firing"`
+}
+
+// AlertList ist die Antwort von GET /api/v1/alerts.
+type AlertList struct {
+	Alerts []Alert `json:"alerts"`
+	Firing int     `json:"firing"`
+	Total  int     `json:"total"`
+}
+
 // OperationStat ist die RED-Aufschlüsselung einer Operation (SpanName) eines Service.
 type OperationStat struct {
 	Name       string  `json:"name"`

@@ -42,6 +42,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/traces", s.handleTraces)
 	mux.HandleFunc("GET /api/v1/traces/{traceId}", s.handleTrace)
 	mux.HandleFunc("GET /api/v1/logs", s.handleLogs)
+	mux.HandleFunc("GET /api/v1/alerts", s.handleAlerts)
 	mux.HandleFunc("GET /api/v1/query", s.handleQuery)
 	mux.HandleFunc("GET /api/v1/query_range", s.handleQueryRange)
 	return s.recoverMW(s.logMW(s.corsMW(mux)))

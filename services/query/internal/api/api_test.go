@@ -164,6 +164,25 @@ func TestServiceDetailNotFound(t *testing.T) {
 	}
 }
 
+func TestAlertsEvaluated(t *testing.T) {
+	f := &storetest.Fake{ServicesResult: model.ServicesResult{Services: []model.Service{
+		{Name: "checkout-api", ErrorRatio: 0.05, LatencyMs: model.Latency{P95: 900}},
+	}}}
+	rec := do(newTestServer(f), http.MethodGet, "/api/v1/alerts", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var env struct {
+		Data model.AlertList `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Data.Firing < 2 {
+		t.Errorf("expected checkout-api alerts firing, got %d of %d", env.Data.Firing, env.Data.Total)
+	}
+}
+
 func TestLogsBadTraceID(t *testing.T) {
 	rec := do(newTestServer(&storetest.Fake{}), http.MethodGet, "/api/v1/logs?traceId=nothex", "")
 	if rec.Code != http.StatusBadRequest {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/rocketplaneio/rocketplane/services/query/internal/alerts"
 	"github.com/rocketplaneio/rocketplane/services/query/internal/store"
 )
 
@@ -47,6 +48,16 @@ func (s *Server) handleServiceDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeSuccess(w, res)
+}
+
+// GET /api/v1/alerts — Auswertung der Alert-Regeln gegen den aktuellen RED-Zustand.
+func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
+	res, err := s.store.Services(r.Context(), store.ServicesQuery{})
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeSuccess(w, alerts.Evaluate(res.Services, alerts.DefaultRules()))
 }
 
 // GET /api/v1/service-map — Fleet-Topologie (Knoten + Aufruf-Kanten).
