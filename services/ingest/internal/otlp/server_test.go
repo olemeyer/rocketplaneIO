@@ -14,9 +14,11 @@ import (
 	"github.com/rocketplaneio/rocketplane/services/ingest/internal/chsink"
 
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
+	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -25,9 +27,11 @@ import (
 
 // fakeSink erfasst eingespeiste Zeilen.
 type fakeSink struct {
-	rows    []chsink.Row
-	logRows []chsink.LogRow
-	pingErr error
+	rows      []chsink.Row
+	logRows   []chsink.LogRow
+	gaugeRows []chsink.MetricRow
+	sumRows   []chsink.MetricRow
+	pingErr   error
 }
 
 func (f *fakeSink) Insert(_ context.Context, rows []chsink.Row) error {
@@ -36,6 +40,11 @@ func (f *fakeSink) Insert(_ context.Context, rows []chsink.Row) error {
 }
 func (f *fakeSink) InsertLogs(_ context.Context, rows []chsink.LogRow) error {
 	f.logRows = append(f.logRows, rows...)
+	return nil
+}
+func (f *fakeSink) InsertMetrics(_ context.Context, gauges, sums []chsink.MetricRow) error {
+	f.gaugeRows = append(f.gaugeRows, gauges...)
+	f.sumRows = append(f.sumRows, sums...)
 	return nil
 }
 func (f *fakeSink) Ping(context.Context) error { return f.pingErr }
@@ -154,11 +163,27 @@ func TestIngestMalformed(t *testing.T) {
 	}
 }
 
-func TestMetricsNotImplemented(t *testing.T) {
+func TestIngestMetrics(t *testing.T) {
+	sink := &fakeSink{}
+	body, _ := proto.Marshal(sampleMetricsRequest())
+	req := httptest.NewRequest(http.MethodPost, "/v1/metrics", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-protobuf")
 	rec := httptest.NewRecorder()
-	newHandler(&fakeSink{}).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/metrics", nil))
-	if rec.Code != http.StatusNotImplemented {
-		t.Errorf("POST /v1/metrics = %d, want 501", rec.Code)
+	newHandler(sink).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.gaugeRows) != 1 || len(sink.sumRows) != 1 {
+		t.Fatalf("gauges=%d sums=%d, want 1/1", len(sink.gaugeRows), len(sink.sumRows))
+	}
+	g := sink.gaugeRows[0]
+	if g.ServiceName != "checkout-api" || g.MetricName != "system.cpu.utilization" || g.Value != 0.42 {
+		t.Errorf("gauge mapping: %+v", g)
+	}
+	s := sink.sumRows[0]
+	if s.MetricName != "http.server.request.count" || s.Value != 1234 || !s.IsMonotonic {
+		t.Errorf("sum mapping: %+v", s)
 	}
 }
 
@@ -246,6 +271,38 @@ func sampleLogsRequest() *collogspb.ExportLogsServiceRequest {
 						Attributes: []*commonpb.KeyValue{str("exception.type", "DownstreamError")},
 					},
 				},
+			}},
+		}},
+	}
+}
+
+// sampleMetricsRequest baut einen OTLP-Metrics-Export mit einem Gauge + einem Sum.
+func sampleMetricsRequest() *colmetricspb.ExportMetricsServiceRequest {
+	str := func(k, v string) *commonpb.KeyValue {
+		return &commonpb.KeyValue{Key: k, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: v}}}
+	}
+	gauge := &metricspb.Metric{
+		Name: "system.cpu.utilization", Unit: "1",
+		Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{DataPoints: []*metricspb.NumberDataPoint{
+			{TimeUnixNano: 1_700_000_000_000_000_000, Value: &metricspb.NumberDataPoint_AsDouble{AsDouble: 0.42}},
+		}}},
+	}
+	sum := &metricspb.Metric{
+		Name: "http.server.request.count", Unit: "{requests}",
+		Data: &metricspb.Metric_Sum{Sum: &metricspb.Sum{
+			IsMonotonic:            true,
+			AggregationTemporality: metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_CUMULATIVE,
+			DataPoints: []*metricspb.NumberDataPoint{
+				{TimeUnixNano: 1_700_000_000_000_000_000, Value: &metricspb.NumberDataPoint_AsInt{AsInt: 1234}},
+			},
+		}},
+	}
+	return &colmetricspb.ExportMetricsServiceRequest{
+		ResourceMetrics: []*metricspb.ResourceMetrics{{
+			Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{str("service.name", "checkout-api")}},
+			ScopeMetrics: []*metricspb.ScopeMetrics{{
+				Scope:   &commonpb.InstrumentationScope{Name: "test", Version: "1.0"},
+				Metrics: []*metricspb.Metric{gauge, sum},
 			}},
 		}},
 	}

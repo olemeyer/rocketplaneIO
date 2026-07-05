@@ -16,6 +16,7 @@ import (
 	"github.com/rocketplaneio/rocketplane/services/ingest/internal/chsink"
 
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
+	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -27,6 +28,7 @@ const maxBody = 16 << 20 // 16 MiB
 type Sink interface {
 	Insert(ctx context.Context, rows []chsink.Row) error
 	InsertLogs(ctx context.Context, rows []chsink.LogRow) error
+	InsertMetrics(ctx context.Context, gauges, sums []chsink.MetricRow) error
 	Ping(ctx context.Context) error
 }
 
@@ -48,7 +50,7 @@ func (h *Handler) Mux() http.Handler {
 	mux.HandleFunc("GET /readyz", h.ready)
 	mux.HandleFunc("POST /v1/traces", h.traces)
 	mux.HandleFunc("POST /v1/logs", h.logs)
-	mux.HandleFunc("POST /v1/metrics", h.notImplemented("metrics"))
+	mux.HandleFunc("POST /v1/metrics", h.metrics)
 	return h.withLogging(mux)
 }
 
@@ -138,6 +140,49 @@ func (h *Handler) logs(w http.ResponseWriter, r *http.Request) {
 	h.log.Debug("ingested logs", "records", len(rows))
 
 	resp := &collogspb.ExportLogsServiceResponse{}
+	if isJSON {
+		out, _ := protojson.Marshal(resp)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(out)
+		return
+	}
+	out, _ := proto.Marshal(resp)
+	w.Header().Set("Content-Type", "application/x-protobuf")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(out)
+}
+
+// metrics verarbeitet OTLP/HTTP-Metrik-Exporte (gauge + sum).
+func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
+	body, err := readBody(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	req := &colmetricspb.ExportMetricsServiceRequest{}
+	isJSON := isJSONContentType(r.Header.Get("Content-Type"))
+	if isJSON {
+		err = protojson.Unmarshal(body, req)
+	} else {
+		err = proto.Unmarshal(body, req)
+	}
+	if err != nil {
+		h.log.Warn("otlp metrics decode", "err", err, "json", isJSON)
+		http.Error(w, "malformed OTLP payload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	gauges, sums := metricsToRows(req.GetResourceMetrics())
+	if err := h.sink.InsertMetrics(r.Context(), gauges, sums); err != nil {
+		h.log.Error("clickhouse insert metrics", "err", err, "gauges", len(gauges), "sums", len(sums))
+		http.Error(w, "storage error", http.StatusServiceUnavailable)
+		return
+	}
+	h.log.Debug("ingested metrics", "gauges", len(gauges), "sums", len(sums))
+
+	resp := &colmetricspb.ExportMetricsServiceResponse{}
 	if isJSON {
 		out, _ := protojson.Marshal(resp)
 		w.Header().Set("Content-Type", "application/json")

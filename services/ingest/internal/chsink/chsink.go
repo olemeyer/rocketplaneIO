@@ -53,6 +53,26 @@ type LogRow struct {
 	LogAttributes      map[string]string `json:"LogAttributes"`
 }
 
+// MetricRow ist eine otel_metrics_gauge/-_sum-Zeile. Die Sum-spezifischen Felder
+// werden per JSON weggelassen, wenn nicht gesetzt (gauge nutzt sie nicht).
+type MetricRow struct {
+	ResourceAttributes map[string]string `json:"ResourceAttributes"`
+	ScopeName          string            `json:"ScopeName"`
+	ScopeVersion       string            `json:"ScopeVersion"`
+	ServiceName        string            `json:"ServiceName"`
+	MetricName         string            `json:"MetricName"`
+	MetricDescription  string            `json:"MetricDescription"`
+	MetricUnit         string            `json:"MetricUnit"`
+	Attributes         map[string]string `json:"Attributes"`
+	StartTimeUnix      string            `json:"StartTimeUnix"`
+	TimeUnix           string            `json:"TimeUnix"`
+	Value              float64           `json:"Value"`
+	Flags              uint32            `json:"Flags"`
+	// nur Sum:
+	AggregationTemporality int32 `json:"AggregationTemporality,omitempty"`
+	IsMonotonic            bool  `json:"IsMonotonic,omitempty"`
+}
+
 // Config beschreibt die ClickHouse-Verbindung.
 type Config struct {
 	URL      string
@@ -113,6 +133,28 @@ func (s *Sink) InsertLogs(ctx context.Context, rows []LogRow) error {
 	return s.insertRows(ctx, "otel_logs", len(rows), func(enc *json.Encoder) error {
 		for i := range rows {
 			if err := enc.Encode(rows[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// InsertMetrics schreibt Gauge- und Sum-Rows in ihre jeweiligen Tabellen.
+func (s *Sink) InsertMetrics(ctx context.Context, gauges, sums []MetricRow) error {
+	if err := s.insertRows(ctx, "otel_metrics_gauge", len(gauges), func(enc *json.Encoder) error {
+		for i := range gauges {
+			if err := enc.Encode(gauges[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return s.insertRows(ctx, "otel_metrics_sum", len(sums), func(enc *json.Encoder) error {
+		for i := range sums {
+			if err := enc.Encode(sums[i]); err != nil {
 				return err
 			}
 		}

@@ -25,9 +25,11 @@ import (
 	"time"
 
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
+	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/proto"
@@ -82,6 +84,7 @@ func main() {
 	base := strings.TrimRight(endpoint, "/")
 	tracesURL := base + "/v1/traces"
 	logsURL := base + "/v1/logs"
+	metricsURL := base + "/v1/metrics"
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -108,9 +111,77 @@ func main() {
 				log.Error("send logs", "err", err)
 				continue
 			}
-			log.Info("sent", "spans", countSpans(traceReq), "logs", countLogs(logReq))
+			metricReq := buildMetrics(rng)
+			mbody, _ := proto.Marshal(metricReq)
+			if err := send(ctx, client, metricsURL, mbody); err != nil {
+				log.Error("send metrics", "err", err)
+				continue
+			}
+			log.Info("sent", "spans", countSpans(traceReq), "logs", countLogs(logReq), "metrics", countMetrics(metricReq))
 		}
 	}
+}
+
+// metricSpecs beschreibt die von otlpgen emittierten Metriken je Service.
+var metricSpecs = []struct {
+	name, unit, typ string
+	base, amp       float64
+}{
+	{"system.cpu.utilization", "1", "gauge", 0.35, 0.25},
+	{"system.memory.usage", "By", "gauge", 536870912, 134217728},
+	{"http.server.active_requests", "{requests}", "gauge", 24, 18},
+	{"http.server.request.count", "{requests}", "sum", 900, 400},
+}
+
+// buildMetrics erzeugt gauge- und sum-DataPoints je Service (ein ResourceMetrics
+// pro Service, damit service.name im Resource korrekt gesetzt ist).
+func buildMetrics(rng *mrand.Rand) *colmetricspb.ExportMetricsServiceRequest {
+	nowNs := uint64(time.Now().UnixNano())
+	var rms []*metricspb.ResourceMetrics
+	for _, sp := range specs {
+		var metrics []*metricspb.Metric
+		for _, ms := range metricSpecs {
+			v := ms.base + ms.amp*(rng.Float64()-0.5)*2
+			if v < 0 {
+				v = 0
+			}
+			dp := &metricspb.NumberDataPoint{
+				TimeUnixNano: nowNs, StartTimeUnixNano: nowNs,
+				Value: &metricspb.NumberDataPoint_AsDouble{AsDouble: v},
+			}
+			m := &metricspb.Metric{Name: ms.name, Unit: ms.unit}
+			if ms.typ == "sum" {
+				m.Data = &metricspb.Metric_Sum{Sum: &metricspb.Sum{
+					IsMonotonic:            true,
+					AggregationTemporality: metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_CUMULATIVE,
+					DataPoints:             []*metricspb.NumberDataPoint{dp},
+				}}
+			} else {
+				m.Data = &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{DataPoints: []*metricspb.NumberDataPoint{dp}}}
+			}
+			metrics = append(metrics, m)
+		}
+		rms = append(rms, &metricspb.ResourceMetrics{
+			Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+				strKV("service.name", sp.name), strKV("deployment.environment", "production"),
+			}},
+			ScopeMetrics: []*metricspb.ScopeMetrics{{
+				Scope:   &commonpb.InstrumentationScope{Name: "rocketplane/otlpgen", Version: "0.1.0"},
+				Metrics: metrics,
+			}},
+		})
+	}
+	return &colmetricspb.ExportMetricsServiceRequest{ResourceMetrics: rms}
+}
+
+func countMetrics(req *colmetricspb.ExportMetricsServiceRequest) int {
+	n := 0
+	for _, rm := range req.GetResourceMetrics() {
+		for _, sm := range rm.GetScopeMetrics() {
+			n += len(sm.GetMetrics())
+		}
+	}
+	return n
 }
 
 // buildRequests erzeugt korrelierte Traces + Logs (gleiche TraceId je Trace).
