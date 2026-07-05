@@ -80,6 +80,49 @@ func TestServicesStatusAndSort(t *testing.T) {
 	}
 }
 
+func TestServiceDetail(t *testing.T) {
+	s := newSeed()
+	ctx := context.Background()
+
+	d, err := s.Service(ctx, store.ServiceQuery{Name: "checkout-api"})
+	if err != nil {
+		t.Fatalf("Service: %v", err)
+	}
+	if d.Name != "checkout-api" || d.Status != model.HealthCritical {
+		t.Errorf("summary: name=%s status=%s", d.Name, d.Status)
+	}
+	if len(d.P95Series) == 0 || len(d.RateSeries) == 0 {
+		t.Error("expected non-empty timeseries")
+	}
+	if len(d.Operations) == 0 {
+		t.Fatal("expected operations")
+	}
+	// Die Root-Operation POST /checkout muss vorkommen.
+	foundRoot := false
+	for _, op := range d.Operations {
+		if op.Name == "POST /checkout" {
+			foundRoot = true
+		}
+	}
+	if !foundRoot {
+		t.Errorf("root op missing in %+v", d.Operations)
+	}
+	// Dependencies: checkout-api ruft u.a. payment-gateway.
+	foundDep := false
+	for _, dep := range d.Dependencies {
+		if dep.Service == "payment-gateway" {
+			foundDep = true
+		}
+	}
+	if !foundDep {
+		t.Errorf("expected payment-gateway dependency, got %+v", d.Dependencies)
+	}
+
+	if _, err := s.Service(ctx, store.ServiceQuery{Name: "does-not-exist"}); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("unknown service err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestLogsCorrelateWithTraces(t *testing.T) {
 	s := newSeed()
 	ctx := context.Background()

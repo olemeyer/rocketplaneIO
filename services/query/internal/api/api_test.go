@@ -111,6 +111,38 @@ func TestLogsEnvelopeAndFilters(t *testing.T) {
 	}
 }
 
+func TestServiceDetailEnvelope(t *testing.T) {
+	f := &storetest.Fake{ServiceDetail: model.ServiceDetail{
+		Name: "checkout-api", Status: model.HealthCritical,
+		Operations: []model.OperationStat{{Name: "POST /checkout", SpanCount: 5}},
+	}}
+	rec := do(newTestServer(f), http.MethodGet, "/api/v1/services/checkout-api", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var env struct {
+		Status string              `json:"status"`
+		Data   model.ServiceDetail `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Data.Name != "checkout-api" || len(env.Data.Operations) != 1 {
+		t.Fatalf("unexpected: %+v", env)
+	}
+	if f.LastServiceQuery.Name != "checkout-api" {
+		t.Errorf("name not forwarded: %q", f.LastServiceQuery.Name)
+	}
+}
+
+func TestServiceDetailNotFound(t *testing.T) {
+	f := &storetest.Fake{ServiceErr: store.ErrNotFound}
+	rec := do(newTestServer(f), http.MethodGet, "/api/v1/services/ghost", "")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("unknown service = %d, want 404", rec.Code)
+	}
+}
+
 func TestLogsBadTraceID(t *testing.T) {
 	rec := do(newTestServer(&storetest.Fake{}), http.MethodGet, "/api/v1/logs?traceId=nothex", "")
 	if rec.Code != http.StatusBadRequest {

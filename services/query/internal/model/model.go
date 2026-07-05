@@ -130,6 +130,46 @@ type LogList struct {
 	NextCursor string      `json:"nextCursor,omitempty"`
 }
 
+// Point ist ein Zeitreihen-Datenpunkt (t = unix-Sekunden).
+type Point struct {
+	T int64   `json:"t"`
+	V float64 `json:"v"`
+}
+
+// OperationStat ist die RED-Aufschlüsselung einer Operation (SpanName) eines Service.
+type OperationStat struct {
+	Name       string  `json:"name"`
+	SpanCount  int64   `json:"spanCount"`
+	ErrorCount int64   `json:"errorCount"`
+	ErrorRatio float64 `json:"errorRatio"`
+	P95Ms      float64 `json:"p95Ms"`
+}
+
+// Dependency ist ein nachgelagerter Service, den dieser Service aufruft.
+type Dependency struct {
+	Service    string  `json:"service"`
+	CallCount  int64   `json:"callCount"`
+	ErrorRatio float64 `json:"errorRatio"`
+	P95Ms      float64 `json:"p95Ms"`
+}
+
+// ServiceDetail ist die Antwort von GET /api/v1/services/{name}.
+type ServiceDetail struct {
+	Name         string          `json:"name"`
+	Status       HealthStatus    `json:"status"`
+	Rate         float64         `json:"rate"`
+	ErrorRatio   float64         `json:"errorRatio"`
+	LatencyMs    Latency         `json:"latencyMs"`
+	SpanCount    int64           `json:"spanCount"`
+	ErrorCount   int64           `json:"errorCount"`
+	Window       Window          `json:"window"`
+	P95Series    []Point         `json:"p95Series"`
+	RateSeries   []Point         `json:"rateSeries"`
+	ErrorSeries  []Point         `json:"errorSeries"`
+	Operations   []OperationStat `json:"operations"`
+	Dependencies []Dependency    `json:"dependencies"`
+}
+
 // DeriveHealth leitet den Health-Status aus Error-Ratio und p95 gegen ein
 // p95-SLO ab. Bewusst zentral, damit Seed und ClickHouse identisch klassifizieren.
 func DeriveHealth(errorRatio, p95, sloP95 float64) HealthStatus {

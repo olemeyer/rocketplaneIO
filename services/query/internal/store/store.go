@@ -49,10 +49,20 @@ type LogsQuery struct {
 	Cursor     string // opak
 }
 
+// ServiceQuery bündelt Fenster für den Service-Detail.
+type ServiceQuery struct {
+	Name       string
+	Start, End time.Time
+	Step       time.Duration // 0 => window/24
+}
+
 // Store ist der einzige Read-Port der Explore-Domäne.
 type Store interface {
 	// Services liefert die RED-Health je Service über das Fenster.
 	Services(ctx context.Context, q ServicesQuery) (model.ServicesResult, error)
+	// Service liefert RED-Zeitreihen, Operationen und Abhängigkeiten eines Service;
+	// unbekannt -> ErrNotFound.
+	Service(ctx context.Context, q ServiceQuery) (model.ServiceDetail, error)
 	// Traces liefert kompakte Trace-Summaries, cursor-paginiert.
 	Traces(ctx context.Context, q TracesQuery) (model.TraceList, error)
 	// Trace liefert alle Spans eines Trace depth-first; unbekannt -> ErrNotFound.

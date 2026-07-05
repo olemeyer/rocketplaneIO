@@ -119,6 +119,161 @@ func (s *Store) Services(_ context.Context, q store.ServicesQuery) (model.Servic
 	}, nil
 }
 
+func (s *Store) Service(_ context.Context, q store.ServiceQuery) (model.ServiceDetail, error) {
+	var spec *svcSpec
+	for i := range serviceSpecs {
+		if serviceSpecs[i].name == q.Name {
+			spec = &serviceSpecs[i]
+			break
+		}
+	}
+	if spec == nil {
+		return model.ServiceDetail{}, store.ErrNotFound
+	}
+
+	end := q.End
+	if end.IsZero() {
+		end = s.now()
+	}
+	start := q.Start
+	if start.IsZero() {
+		start = end.Add(-15 * time.Minute)
+	}
+	step := q.Step
+	if step <= 0 {
+		step = end.Sub(start) / 24
+	}
+	if step <= 0 {
+		step = time.Minute
+	}
+	windowSec := end.Sub(start).Seconds()
+	if windowSec <= 0 {
+		windowSec = 1
+	}
+	spanCount := int64(spec.rate * windowSec)
+	errorCount := int64(float64(spanCount) * spec.errorRatio)
+
+	// Zeitreihen: deterministisch aus Fingerprint + Bucket-Index moduliert.
+	buckets := int(end.Sub(start) / step)
+	if buckets < 1 {
+		buckets = 1
+	}
+	if buckets > 200 {
+		buckets = 200
+	}
+	p95, rate, errs := make([]model.Point, 0, buckets), make([]model.Point, 0, buckets), make([]model.Point, 0, buckets)
+	for i := 0; i < buckets; i++ {
+		t := start.Add(time.Duration(i) * step).Unix()
+		h := hash64(spec.name + strconv.Itoa(i))
+		wobble := 0.85 + float64(h%30)/100.0 // 0.85..1.15
+		p95 = append(p95, model.Point{T: t, V: round1(spec.p95 * wobble)})
+		rate = append(rate, model.Point{T: t, V: round1(spec.rate * wobble)})
+		errs = append(errs, model.Point{T: t, V: round4(spec.errorRatio * wobble)})
+	}
+
+	// Operationen + Dependencies aus den Seed-Traces dieses Service.
+	ops, deps := s.opsAndDeps(spec.name)
+
+	return model.ServiceDetail{
+		Name:         spec.name,
+		Status:       model.DeriveHealth(spec.errorRatio, spec.p95, spec.sloP95),
+		Rate:         spec.rate,
+		ErrorRatio:   spec.errorRatio,
+		LatencyMs:    model.Latency{P50: spec.p50, P95: spec.p95, P99: spec.p99},
+		SpanCount:    spanCount,
+		ErrorCount:   errorCount,
+		Window:       model.Window{Start: start.Unix(), End: end.Unix(), Step: int64(step.Seconds())},
+		P95Series:    p95,
+		RateSeries:   rate,
+		ErrorSeries:  errs,
+		Operations:   ops,
+		Dependencies: deps,
+	}, nil
+}
+
+// opsAndDeps aggregiert Operationen (SpanName des Service) und nachgelagerte
+// Services (Child-Spans mit anderem Service) aus den Traces, die bei name wurzeln.
+func (s *Store) opsAndDeps(name string) ([]model.OperationStat, []model.Dependency) {
+	type acc struct {
+		count, errCount int64
+		durSum          float64
+	}
+	opMap := map[string]*acc{}
+	depMap := map[string]*acc{}
+
+	for _, d := range s.details {
+		if len(d.Spans) == 0 || d.Spans[0].Service != name {
+			continue
+		}
+		byID := map[string]model.Span{}
+		for _, sp := range d.Spans {
+			byID[sp.SpanID] = sp
+		}
+		for _, sp := range d.Spans {
+			if sp.Service == name {
+				a := opMap[sp.Name]
+				if a == nil {
+					a = &acc{}
+					opMap[sp.Name] = a
+				}
+				a.count++
+				a.durSum += sp.DurationMs
+				if sp.Status == model.TraceError {
+					a.errCount++
+				}
+			}
+			// Dependency-Kante: Parent gehört zu name, Child zu anderem Service.
+			if sp.Service != name && sp.ParentSpanID != "" {
+				if parent, ok := byID[sp.ParentSpanID]; ok && parent.Service == name {
+					a := depMap[sp.Service]
+					if a == nil {
+						a = &acc{}
+						depMap[sp.Service] = a
+					}
+					a.count++
+					a.durSum += sp.DurationMs
+					if sp.Status == model.TraceError {
+						a.errCount++
+					}
+				}
+			}
+		}
+	}
+
+	ops := make([]model.OperationStat, 0, len(opMap))
+	for n, a := range opMap {
+		ops = append(ops, model.OperationStat{
+			Name: n, SpanCount: a.count, ErrorCount: a.errCount,
+			ErrorRatio: ratio(a.errCount, a.count), P95Ms: round1(avg(a.durSum, a.count) * 1.4),
+		})
+	}
+	sort.SliceStable(ops, func(i, j int) bool { return ops[i].SpanCount > ops[j].SpanCount })
+
+	deps := make([]model.Dependency, 0, len(depMap))
+	for n, a := range depMap {
+		deps = append(deps, model.Dependency{
+			Service: n, CallCount: a.count, ErrorRatio: ratio(a.errCount, a.count),
+			P95Ms: round1(avg(a.durSum, a.count) * 1.4),
+		})
+	}
+	sort.SliceStable(deps, func(i, j int) bool { return deps[i].CallCount > deps[j].CallCount })
+	return ops, deps
+}
+
+func ratio(a, b int64) float64 {
+	if b == 0 {
+		return 0
+	}
+	return float64(a) / float64(b)
+}
+func avg(sum float64, n int64) float64 {
+	if n == 0 {
+		return 0
+	}
+	return sum / float64(n)
+}
+func round4(f float64) float64 { return float64(int64(f*10000+0.5)) / 10000 }
+
 func sortServices(s []model.Service, by string) {
 	sort.SliceStable(s, func(i, j int) bool {
 		switch by {

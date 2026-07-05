@@ -210,6 +210,158 @@ func sortServices(s []model.Service, by string) {
 	})
 }
 
+// --- Service-Detail ---------------------------------------------------------
+
+func (s *Store) Service(ctx context.Context, q store.ServiceQuery) (model.ServiceDetail, error) {
+	end := q.End
+	if end.IsZero() {
+		end = time.Now()
+	}
+	start := q.Start
+	if start.IsZero() {
+		start = end.Add(-15 * time.Minute)
+	}
+	step := q.Step
+	if step <= 0 {
+		step = end.Sub(start) / 24
+	}
+	if step <= 0 {
+		step = time.Minute
+	}
+	windowSec := end.Sub(start).Seconds()
+	if windowSec <= 0 {
+		windowSec = 1
+	}
+	stepSec := int64(step.Seconds())
+	if stepSec < 1 {
+		stepSec = 1
+	}
+	p := map[string]string{
+		"start": chTime(start), "end": chTime(end), "svc": q.Name,
+		"winSec": fmt.Sprintf("%f", windowSec), "stepSec": fmt.Sprintf("%d", stepSec),
+	}
+
+	// RED-Summary (Entry-Spans).
+	var reds []struct {
+		SpanCount  int64   `json:"spanCount"`
+		ErrorCount int64   `json:"errorCount"`
+		ErrorRatio float64 `json:"errorRatio"`
+		Rate       float64 `json:"rate"`
+		P50        float64 `json:"p50"`
+		P95        float64 `json:"p95"`
+		P99        float64 `json:"p99"`
+	}
+	const redSQL = `
+SELECT count() AS spanCount, countIf(StatusCode='Error') AS errorCount,
+       countIf(StatusCode='Error')/count() AS errorRatio, count()/{winSec:Float64} AS rate,
+       quantile(0.50)(Duration)/1e6 AS p50, quantile(0.95)(Duration)/1e6 AS p95, quantile(0.99)(Duration)/1e6 AS p99
+FROM otel_traces
+WHERE Timestamp >= {start:DateTime64(9)} AND Timestamp < {end:DateTime64(9)}
+  AND ServiceName={svc:String} AND SpanKind IN ('Server','Consumer')`
+	if err := s.query(ctx, redSQL, p, &reds); err != nil {
+		return model.ServiceDetail{}, err
+	}
+	if len(reds) == 0 || reds[0].SpanCount == 0 {
+		return model.ServiceDetail{}, store.ErrNotFound
+	}
+	r := reds[0]
+
+	// Zeitreihen (p95/rate/error je Bucket).
+	var buckets []struct {
+		Bucket int64   `json:"bucket"`
+		Rate   float64 `json:"rate"`
+		P95    float64 `json:"p95"`
+		Err    float64 `json:"err"`
+	}
+	const seriesSQL = `
+SELECT toUnixTimestamp(toStartOfInterval(Timestamp, INTERVAL {stepSec:UInt32} SECOND)) AS bucket,
+       count()/{stepSec:UInt32} AS rate, quantile(0.95)(Duration)/1e6 AS p95,
+       countIf(StatusCode='Error')/count() AS err
+FROM otel_traces
+WHERE Timestamp >= {start:DateTime64(9)} AND Timestamp < {end:DateTime64(9)}
+  AND ServiceName={svc:String} AND SpanKind IN ('Server','Consumer')
+GROUP BY bucket ORDER BY bucket ASC`
+	if err := s.query(ctx, seriesSQL, p, &buckets); err != nil {
+		return model.ServiceDetail{}, err
+	}
+	p95s, rates, errs := make([]model.Point, 0, len(buckets)), make([]model.Point, 0, len(buckets)), make([]model.Point, 0, len(buckets))
+	for _, b := range buckets {
+		p95s = append(p95s, model.Point{T: b.Bucket, V: round1(b.P95)})
+		rates = append(rates, model.Point{T: b.Bucket, V: round1(b.Rate)})
+		errs = append(errs, model.Point{T: b.Bucket, V: round4(b.Err)})
+	}
+
+	// Operationen (SpanName dieses Service).
+	var opRows []struct {
+		Name       string  `json:"name"`
+		SpanCount  int64   `json:"spanCount"`
+		ErrorCount int64   `json:"errorCount"`
+		ErrorRatio float64 `json:"errorRatio"`
+		P95        float64 `json:"p95"`
+	}
+	const opsSQL = `
+SELECT SpanName AS name, count() AS spanCount, countIf(StatusCode='Error') AS errorCount,
+       countIf(StatusCode='Error')/count() AS errorRatio, quantile(0.95)(Duration)/1e6 AS p95
+FROM otel_traces
+WHERE Timestamp >= {start:DateTime64(9)} AND Timestamp < {end:DateTime64(9)} AND ServiceName={svc:String}
+GROUP BY SpanName ORDER BY spanCount DESC LIMIT 20`
+	if err := s.query(ctx, opsSQL, p, &opRows); err != nil {
+		return model.ServiceDetail{}, err
+	}
+	ops := make([]model.OperationStat, 0, len(opRows))
+	for _, o := range opRows {
+		ops = append(ops, model.OperationStat{
+			Name: o.Name, SpanCount: o.SpanCount, ErrorCount: o.ErrorCount,
+			ErrorRatio: o.ErrorRatio, P95Ms: round1(o.P95),
+		})
+	}
+
+	// Dependencies (Child-Spans, deren Parent zu diesem Service gehört).
+	var depRows []struct {
+		Service    string  `json:"service"`
+		CallCount  int64   `json:"callCount"`
+		ErrorRatio float64 `json:"errorRatio"`
+		P95        float64 `json:"p95"`
+	}
+	const depsSQL = `
+SELECT child.ServiceName AS service, count() AS callCount,
+       countIf(child.StatusCode='Error')/count() AS errorRatio, quantile(0.95)(child.Duration)/1e6 AS p95
+FROM otel_traces AS child
+INNER JOIN otel_traces AS parent
+  ON child.TraceId = parent.TraceId AND child.ParentSpanId = parent.SpanId
+WHERE child.Timestamp >= {start:DateTime64(9)} AND child.Timestamp < {end:DateTime64(9)}
+  AND parent.ServiceName={svc:String} AND child.ServiceName != {svc:String}
+GROUP BY child.ServiceName ORDER BY callCount DESC LIMIT 20`
+	if err := s.query(ctx, depsSQL, p, &depRows); err != nil {
+		return model.ServiceDetail{}, err
+	}
+	deps := make([]model.Dependency, 0, len(depRows))
+	for _, d := range depRows {
+		deps = append(deps, model.Dependency{
+			Service: d.Service, CallCount: d.CallCount, ErrorRatio: d.ErrorRatio, P95Ms: round1(d.P95),
+		})
+	}
+
+	slo := map[string]float64{"checkout-api": 400, "payment-gateway": 300, "cart-service": 150, "inventory": 100}[q.Name]
+	if slo == 0 {
+		slo = 300
+	}
+	return model.ServiceDetail{
+		Name:       q.Name,
+		Status:     model.DeriveHealth(r.ErrorRatio, r.P95, slo),
+		Rate:       round1(r.Rate),
+		ErrorRatio: r.ErrorRatio,
+		LatencyMs:  model.Latency{P50: round1(r.P50), P95: round1(r.P95), P99: round1(r.P99)},
+		SpanCount:  r.SpanCount,
+		ErrorCount: r.ErrorCount,
+		Window:     model.Window{Start: start.Unix(), End: end.Unix(), Step: stepSec},
+		P95Series:  p95s, RateSeries: rates, ErrorSeries: errs,
+		Operations: ops, Dependencies: deps,
+	}, nil
+}
+
+func round4(f float64) float64 { return float64(int64(f*10000+0.5)) / 10000 }
+
 // --- Logs -------------------------------------------------------------------
 
 func (s *Store) Logs(ctx context.Context, q store.LogsQuery) (model.LogList, error) {

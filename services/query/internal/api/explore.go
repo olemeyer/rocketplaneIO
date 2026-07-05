@@ -26,6 +26,29 @@ func (s *Server) handleServices(w http.ResponseWriter, r *http.Request) {
 	writeSuccess(w, res)
 }
 
+// GET /api/v1/services/{name} — RED-Zeitreihen, Operationen & Abhängigkeiten.
+func (s *Server) handleServiceDetail(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "bad_data", "service name required")
+		return
+	}
+	q := r.URL.Query()
+	start, _ := parseTime(q.Get("start"))
+	end, _ := parseTime(q.Get("end"))
+	res, err := s.store.Service(r.Context(), store.ServiceQuery{
+		Name:  name,
+		Start: start,
+		End:   end,
+		Step:  parseDurationSeconds(q.Get("step")),
+	})
+	if err != nil {
+		s.storeError(w, err)
+		return
+	}
+	writeSuccess(w, res)
+}
+
 // GET /api/v1/logs — gefilterte Log-Liste (cursor-paginiert, neueste zuerst).
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
