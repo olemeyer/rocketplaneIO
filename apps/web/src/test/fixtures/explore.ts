@@ -1,6 +1,8 @@
 import type {
   AlertListResponse,
   LogListResponse,
+  MetricData,
+  MetricListResponse,
   ServiceDetail,
   ServiceHealth,
   ServiceMapResponse,
@@ -111,6 +113,25 @@ export const serviceDetail: ServiceDetail = {
   dependencies: [
     { service: 'payment-gateway', callCount: 4800, errorRatio: 0.02, p95Ms: 310 },
     { service: 'inventory', callCount: 4700, errorRatio: 0.0002, p95Ms: 54 },
+  ],
+};
+
+export const metricList: MetricListResponse = {
+  metrics: [
+    { name: 'http.server.active_requests', type: 'gauge', unit: '{requests}' },
+    { name: 'http.server.request.count', type: 'sum', unit: '{requests}' },
+    { name: 'system.cpu.utilization', type: 'gauge', unit: '1' },
+  ],
+};
+
+export const metricData: MetricData = {
+  name: 'system.cpu.utilization',
+  type: 'gauge',
+  unit: '1',
+  window: { start: 1, end: 901, step: 60 },
+  series: [
+    { label: 'checkout-api', points: [{ t: 1, v: 0.41 }, { t: 61, v: 0.45 }, { t: 121, v: 0.39 }] },
+    { label: 'cart-service', points: [{ t: 1, v: 0.25 }, { t: 61, v: 0.28 }, { t: 121, v: 0.22 }] },
   ],
 };
 

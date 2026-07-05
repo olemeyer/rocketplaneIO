@@ -5,6 +5,8 @@ import type {
   HealthState,
   HealthStatus,
   LogListResponse,
+  MetricData,
+  MetricListResponse,
   Service,
   ServiceDetail,
   ServiceHealth,
@@ -80,6 +82,23 @@ export async function getServiceMap(sig?: AbortSignal): Promise<ServiceMapRespon
 // getAlerts liefert die ausgewerteten Alert-Regeln (feuernde zuerst).
 export async function getAlerts(sig?: AbortSignal): Promise<AlertListResponse> {
   return rpFetch<AlertListResponse>('/v1/alerts', { signal: sig });
+}
+
+// getMetrics listet die verfügbaren Metriken.
+export async function getMetrics(sig?: AbortSignal): Promise<MetricListResponse> {
+  return rpFetch<MetricListResponse>('/v1/metrics', { signal: sig });
+}
+
+// getMetric liefert die Zeitreihe(n) einer Metrik (optional je Service gruppiert).
+export async function getMetric(
+  name: string,
+  opts: { groupByService?: boolean } = {},
+  sig?: AbortSignal,
+): Promise<MetricData> {
+  const p = new URLSearchParams();
+  if (opts.groupByService) p.set('groupBy', 'service');
+  const qs = p.toString();
+  return rpFetch<MetricData>(`/v1/metrics/${encodeURIComponent(name)}${qs ? `?${qs}` : ''}`, { signal: sig });
 }
 
 // formatMetricValue formatiert einen Alert-Wert je Metrik.

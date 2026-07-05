@@ -19,7 +19,7 @@ const NAV: NavItem[] = [
   { label: 'Services', href: '/services', icon: Cube, ready: true },
   { label: 'Traces', href: '/traces', icon: Waterfall, ready: true },
   { label: 'Logs', href: '/logs', icon: Logs, ready: true },
-  { label: 'Metrics', href: '#', icon: Metrics },
+  { label: 'Metrics', href: '/metrics', icon: Metrics, ready: true },
   { label: 'Dashboards', href: '#', icon: Dashboards },
   { label: 'Alerts', href: '/alerts', icon: Bell, ready: true },
 ];

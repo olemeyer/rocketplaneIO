@@ -65,6 +65,27 @@ export interface TraceDetail {
   spans: Span[];
 }
 
+// ---- GET /api/v1/metrics ----
+export interface MetricMeta {
+  name: string;
+  type: 'gauge' | 'sum';
+  unit?: string;
+}
+export interface MetricListResponse {
+  metrics: MetricMeta[];
+}
+export interface MetricSeries {
+  label: string;
+  points: Point[];
+}
+export interface MetricData {
+  name: string;
+  type: 'gauge' | 'sum';
+  unit?: string;
+  window: { start: number; end: number; step: number };
+  series: MetricSeries[];
+}
+
 // ---- GET /api/v1/alerts ----
 export interface Alert {
   id: string;

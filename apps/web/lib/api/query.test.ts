@@ -4,6 +4,8 @@ import {
   formatMetricValue,
   getAlerts,
   getLogs,
+  getMetric,
+  getMetrics,
   getServiceDetail,
   getServiceHealth,
   getServiceMap,
@@ -14,6 +16,8 @@ import {
 import {
   alertList,
   logList,
+  metricData,
+  metricList,
   serviceDetail,
   serviceMap,
   servicesResponse,
@@ -113,6 +117,23 @@ describe('getServiceMap', () => {
     expect(res.nodes.length).toBeGreaterThan(0);
     expect(res.edges.length).toBeGreaterThan(0);
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/rp/v1/service-map');
+  });
+});
+
+describe('getMetrics & getMetric', () => {
+  it('listet Metriken', async () => {
+    const fetchMock = stubFetch(metricList);
+    const res = await getMetrics();
+    expect(res.metrics).toHaveLength(3);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/rp/v1/metrics');
+  });
+  it('lädt eine Metrik-Zeitreihe mit groupBy', async () => {
+    const fetchMock = stubFetch(metricData);
+    const res = await getMetric('system.cpu.utilization', { groupByService: true });
+    expect(res.series).toHaveLength(2);
+    const url = String(fetchMock.mock.calls[0]?.[0]);
+    expect(url).toContain('/api/rp/v1/metrics/system.cpu.utilization');
+    expect(url).toContain('groupBy=service');
   });
 });
 
