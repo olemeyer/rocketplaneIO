@@ -24,6 +24,10 @@ import (
 	agentsync "github.com/rocketplaneio/rocketplane/agent/internal/sync"
 )
 
+// version wird im Release-Build via -ldflags "-X main.version=vX.Y.Z" gesetzt;
+// RP_AGENT_VERSION (Helm) hat Vorrang, damit Chart-appVersion die Wahrheit bleibt.
+var version = "dev"
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	log.SetPrefix("[agent] ")
@@ -31,7 +35,7 @@ func main() {
 	controlplaneURL := os.Getenv("RP_CONTROLPLANE_URL")
 	enrollToken := os.Getenv("RP_ENROLL_TOKEN")
 	clusterName := envOr("RP_CLUSTER_NAME", hostname())
-	agentVersion := envOr("RP_AGENT_VERSION", "dev")
+	agentVersion := envOr("RP_AGENT_VERSION", version)
 
 	if controlplaneURL == "" {
 		log.Fatalf("RP_CONTROLPLANE_URL is required")
