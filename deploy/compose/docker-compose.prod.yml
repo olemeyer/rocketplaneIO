@@ -1,0 +1,96 @@
+# Self-hosted rocketplaneIO — the whole platform from published images:
+#
+#   docker compose -f deploy/compose/docker-compose.prod.yml up -d
+#   → UI on :4173, control plane on :8090 (agents connect here)
+#
+# REQUIRED before real use (see .env.example):
+#   RP_SESSION_SECRET   long random string (session HMAC key)
+#   RP_PUBLIC_URL       URL your BROWSER reaches the control plane on
+#   RP_AGENT_CONTROLPLANE_URL
+#                       URL your CLUSTERS reach the control plane on
+#                       (must be routable from inside Kubernetes!)
+#
+# The web image proxies /api/* to http://controlplane:8090 — the service name
+# below must stay `controlplane` (baked in at image build time).
+name: rocketplane-prod
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.12
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-rocketplane}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-rocketplane}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-otel}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rocketplane}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rocketplane}
+      POSTGRES_DB: ${POSTGRES_DB:-rocketplane}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rocketplane}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.116.1
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-rocketplane}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-rocketplane}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-otel}
+    ports:
+      - "4317:4317" # OTLP gRPC (Beyla/agents ship telemetry here)
+      - "4318:4318" # OTLP HTTP
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
+  controlplane:
+    image: ghcr.io/olemeyer/rocketplaneio/controlplane:${RP_VERSION:-latest}
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-rocketplane}:${POSTGRES_PASSWORD:-rocketplane}@postgres:5432/${POSTGRES_DB:-rocketplane}?sslmode=disable
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-rocketplane}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-rocketplane}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-otel}
+      RP_LISTEN: :8090
+      RP_PUBLIC_URL: ${RP_PUBLIC_URL:-http://localhost:8090}
+      RP_AGENT_CONTROLPLANE_URL: ${RP_AGENT_CONTROLPLANE_URL:-}
+      RP_SESSION_SECRET: ${RP_SESSION_SECRET:?set a long random RP_SESSION_SECRET}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+    ports:
+      - "8090:8090" # UI proxy target + agent enrollment/sync
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+
+  web:
+    image: ghcr.io/olemeyer/rocketplaneio/web:${RP_VERSION:-latest}
+    ports:
+      - "4173:4173"
+    depends_on:
+      - controlplane
+
+volumes:
+  clickhouse-data:
+  postgres-data:
