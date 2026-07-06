@@ -130,7 +130,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: agent
-          image: ghcr.io/rocketplaneio/agent:latest
+          image: ghcr.io/olemeyer/rocketplaneio/agent:latest
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

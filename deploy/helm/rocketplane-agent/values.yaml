@@ -18,7 +18,7 @@ enrollToken: ""
 clusterName: ""
 
 image:
-  repository: ghcr.io/rocketplaneio/agent
+  repository: ghcr.io/olemeyer/rocketplaneio/agent
   tag: latest
   pullPolicy: IfNotPresent
 

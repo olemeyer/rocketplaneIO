@@ -23,7 +23,7 @@ Kubernetes cluster to the rocketplane control-plane.
 
    ```sh
    helm install rocketplane-agent \
-     oci://ghcr.io/rocketplaneio/charts/rocketplane-agent \
+     oci://ghcr.io/olemeyer/rocketplaneio/charts/rocketplane-agent \
      --namespace rocketplane --create-namespace \
      --set controlplane.url=<CP_URL> \
      --set enrollToken=<TOKEN> \
@@ -52,7 +52,7 @@ kubectl apply -f install.yaml
 | `controlplane.url` | `""` | Control-plane base URL. **Required.** → `RP_CONTROLPLANE_URL` |
 | `enrollToken` | `""` | One-time enroll token (`rpe_...`). **Required.** Stored in a Secret → `RP_ENROLL_TOKEN` |
 | `clusterName` | `""` | Display name in the UI → `RP_CLUSTER_NAME` |
-| `image.repository` | `ghcr.io/rocketplaneio/agent` | Agent image |
+| `image.repository` | `ghcr.io/olemeyer/rocketplaneio/agent` | Agent image |
 | `image.tag` | `latest` | Image tag (defaults to chart `appVersion` if unset) |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy |
 | `resources` | `50m` / `64Mi` req | Slim resource requests/limits |
