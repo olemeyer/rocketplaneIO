@@ -1,0 +1,326 @@
+// Package model defines the domain types shared across the Control-Plane.
+// The JSON tags are part of the public API contract (see docs/architecture.md §5)
+// and use camelCase.
+package model
+
+import (
+	"encoding/json"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// User is an authenticated principal (Google SSO or dev-login).
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	Email     string    `json:"email"`
+	Name      string    `json:"name"`
+	AvatarURL string    `json:"avatarUrl"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// Org is the tenant boundary. Role is only populated when the org is loaded in
+// the context of a specific member (e.g. /api/me).
+type Org struct {
+	ID         uuid.UUID `json:"id"`
+	Name       string    `json:"name"`
+	Slug       string    `json:"slug"`
+	IsPersonal bool      `json:"isPersonal"`
+	Role       string    `json:"role,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+// Membership links a User to an Org with a role.
+type Membership struct {
+	ID     uuid.UUID `json:"id"`
+	OrgID  uuid.UUID `json:"orgId"`
+	UserID uuid.UUID `json:"userId"`
+	Role   string    `json:"role"`
+}
+
+// Cluster belongs to an Org. Its identity is the UID of the kube-system
+// namespace, set once the agent enrolls.
+type Cluster struct {
+	ID           uuid.UUID  `json:"id"`
+	OrgID        uuid.UUID  `json:"orgId"`
+	Name         string     `json:"name"`
+	K8sUID       string     `json:"k8sUid"`
+	Status       string     `json:"status"`
+	AgentVersion string     `json:"agentVersion"`
+	LastSeenAt   *time.Time `json:"lastSeenAt"`
+	CreatedAt    time.Time  `json:"createdAt"`
+}
+
+// Namespace belongs to a Cluster and is synced by the agent.
+type Namespace struct {
+	ID          uuid.UUID         `json:"id"`
+	Name        string            `json:"name"`
+	K8sUID      string            `json:"k8sUid"`
+	Phase       string            `json:"phase"`
+	Labels      map[string]string `json:"labels"`
+	FirstSeenAt time.Time         `json:"firstSeenAt"`
+	LastSeenAt  time.Time         `json:"lastSeenAt"`
+}
+
+// ── Topologie (Service-Map) ────────────────────────────────────────────────
+// Diese Typen sind der Agent→Control-Plane-Sync-Contract für die Service-Map.
+
+// Pod ist eine vom Agent gesyncte Pod-Momentaufnahme (inkl. Owner-Ableitung).
+type Pod struct {
+	Namespace    string `json:"namespace"`
+	Name         string `json:"name"`
+	IP           string `json:"ip"`
+	Image        string `json:"image"`
+	NodeName     string `json:"nodeName"`
+	Phase        string `json:"phase"`
+	Ready        bool   `json:"ready"`
+	Restarts     int    `json:"restarts"`
+	WorkloadKind string `json:"workloadKind"`
+	WorkloadName string `json:"workloadName"`
+}
+
+// K8sService ist ein gesyncter Kubernetes-Service.
+type K8sService struct {
+	Namespace string            `json:"namespace"`
+	Name      string            `json:"name"`
+	Type      string            `json:"type"`
+	ClusterIP string            `json:"clusterIp"`
+	Selector  map[string]string `json:"selector"`
+}
+
+// FlowEdge ist eine vom Agent (conntrack) beobachtete, auf Workload-Ebene
+// aggregierte Verbindung from → to.
+type FlowEdge struct {
+	FromNamespace string `json:"fromNamespace"`
+	FromKind      string `json:"fromKind"`
+	FromName      string `json:"fromName"`
+	ToNamespace   string `json:"toNamespace"`
+	ToKind        string `json:"toKind"`
+	ToName        string `json:"toName"`
+	ToPort        int    `json:"toPort"`
+	ConnCount     int64  `json:"connCount"`
+}
+
+// WorkloadSync ist ein direkt vom Workload-Objekt gelesener Knoten —
+// die Wahrheit für desired/ready, auch bei scaled-to-zero (keine Pods).
+type WorkloadSync struct {
+	Namespace       string `json:"namespace"`
+	Name            string `json:"name"`
+	Kind            string `json:"kind"`
+	ReplicasDesired int    `json:"replicasDesired"`
+	ReplicasReady   int    `json:"replicasReady"`
+}
+
+// TopologySync ist der Agent-Payload für POST /api/agent/topology.
+type TopologySync struct {
+	Pods      []Pod          `json:"pods"`
+	Services  []K8sService   `json:"services"`
+	Edges     []FlowEdge     `json:"edges"`
+	Workloads []WorkloadSync `json:"workloads"`
+	Nodes     []NodeSync     `json:"nodes"`
+	PVCs      []PVCSync      `json:"pvcs"`
+}
+
+// MapNode ist ein Knoten der Service-Map (ein Workload).
+type MapNode struct {
+	ID        string `json:"id"` // namespace/kind/name
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	Health    string `json:"health"` // healthy|degraded|critical|unknown
+	PodsReady int    `json:"podsReady"`
+	PodsTotal int    `json:"podsTotal"`
+	Restarts  int    `json:"restarts"`
+	// Image = Container-Image (Auto-Tech-Erkennung); Icon = manueller Override.
+	Image string `json:"image"`
+	Icon  string `json:"icon"`
+}
+
+// MapEdge ist eine gerichtete, aggregierte Flow-Kante zwischen zwei Workloads.
+type MapEdge struct {
+	From      string `json:"from"` // MapNode.ID
+	To        string `json:"to"`
+	ConnCount int64  `json:"connCount"`
+}
+
+// ServiceMap ist die Antwort von GET …/clusters/{id}/service-map.
+type ServiceMap struct {
+	Namespaces []string  `json:"namespaces"`
+	Nodes      []MapNode `json:"nodes"`
+	Edges      []MapEdge `json:"edges"`
+}
+
+// ── Safe-Actions ───────────────────────────────────────────────────────────
+// Vom User angeforderte Kubernetes-Aktionen; der Agent pollt und führt aus
+// (outbound-only — die Control-Plane hat nie Cluster-Zugriff).
+
+// Action ist eine Kubernetes-Aktion auf einem Workload/Pod.
+type Action struct {
+	ID              uuid.UUID       `json:"id"`
+	ClusterID       uuid.UUID       `json:"clusterId"`
+	RequestedBy     string          `json:"requestedBy"` // Anzeigename/E-Mail (aufgelöst)
+	Kind            string          `json:"kind"`        // rollout_restart | scale | delete_pod
+	TargetNamespace string          `json:"targetNamespace"`
+	TargetKind      string          `json:"targetKind"` // Deployment | StatefulSet | DaemonSet | Pod
+	TargetName      string          `json:"targetName"`
+	Params          json.RawMessage `json:"params"`
+	Status          string          `json:"status"` // pending|running|succeeded|failed
+	Result          string          `json:"result"`
+	// Progress ist die Live-Zeile des laufenden Schritts („rollout: 1/3 available"),
+	// Steps der Zustand des gesamten Ablaufs ([{name,status,detail}]).
+	Progress        string          `json:"progress"`
+	Steps           json.RawMessage `json:"steps"`
+	CancelRequested bool            `json:"cancelRequested"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	UpdatedAt       time.Time       `json:"updatedAt"`
+}
+
+// WorkloadPod ist eine Pod-Zeile für das Workload-Panel (inkl. Node).
+// Phase kennt zusätzlich "Terminating" (Pod fährt raus); FirstSeenAt lässt
+// die UI frische Pods („new") markieren.
+type WorkloadPod struct {
+	Namespace   string    `json:"namespace"`
+	Name        string    `json:"name"`
+	NodeName    string    `json:"nodeName"`
+	Phase       string    `json:"phase"`
+	Ready       bool      `json:"ready"`
+	Restarts    int       `json:"restarts"`
+	IP          string    `json:"ip"`
+	FirstSeenAt time.Time `json:"firstSeenAt"`
+}
+
+// ActionDefinition ist ein org-weiter, wiederverwendbarer Starlark-Workflow.
+type ActionDefinition struct {
+	ID             uuid.UUID       `json:"id"`
+	OrgID          uuid.UUID       `json:"orgId"`
+	Name           string          `json:"name"`
+	Description    string          `json:"description"`
+	Params         json.RawMessage `json:"params"` // [{name,label,type,default,min,max,options,...}]
+	Source         string          `json:"source"`
+	TimeoutSeconds int             `json:"timeoutSeconds"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
+}
+
+// Dashboard ist ein org-weites „dashboard as code": die Perses-YAML-Spec (offener
+// CNCF-Standard) wird roh gespeichert → 1:1 portabel im Perses-Ökosystem.
+type Dashboard struct {
+	ID          uuid.UUID `json:"id"`
+	OrgID       uuid.UUID `json:"orgId"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Spec        string    `json:"spec"` // Perses-YAML
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+// ── Infrastruktur (Nodes + PVCs) ───────────────────────────────────────────
+
+// NodeSync ist ein vom Agent gesyncter Cluster-Node inkl. kubelet-Stats.
+type NodeSync struct {
+	Name            string `json:"name"`
+	Role            string `json:"role"`
+	KubeletVersion  string `json:"kubeletVersion"`
+	OSImage         string `json:"osImage"`
+	Arch            string `json:"arch"`
+	InternalIP      string `json:"internalIp"`
+	Ready           bool   `json:"ready"`
+	Unschedulable   bool   `json:"unschedulable"`
+	Pressure        string `json:"pressure"`
+	CPUCapacityM    int64  `json:"cpuCapacityM"`
+	CPUAllocatableM int64  `json:"cpuAllocatableM"`
+	MemCapacity     int64  `json:"memCapacity"`
+	MemAllocatable  int64  `json:"memAllocatable"`
+	PodCapacity     int64  `json:"podCapacity"`
+	CPUUsageM       int64  `json:"cpuUsageM"`
+	MemUsage        int64  `json:"memUsage"`
+	FsUsed          int64  `json:"fsUsed"`
+	FsCapacity      int64  `json:"fsCapacity"`
+	ImageFsUsed     int64  `json:"imageFsUsed"`
+	// PodCount wird CP-seitig aus der pods-Tabelle gejoint (nicht vom Agent).
+	PodCount int `json:"podCount"`
+}
+
+// PVCSync ist ein gesyncter PersistentVolumeClaim inkl. Belegung.
+type PVCSync struct {
+	Namespace      string   `json:"namespace"`
+	Name           string   `json:"name"`
+	Phase          string   `json:"phase"`
+	StorageClass   string   `json:"storageClass"`
+	AccessModes    []string `json:"accessModes"`
+	VolumeName     string   `json:"volumeName"`
+	RequestedBytes int64    `json:"requestedBytes"`
+	CapacityBytes  int64    `json:"capacityBytes"`
+	UsedBytes      int64    `json:"usedBytes"`
+	MountedBy      []string `json:"mountedBy"`
+}
+
+// ── Alerts ─────────────────────────────────────────────────────────────────
+
+// AlertProvider ist ein Versandkanal (org-weit): webhook | slack | email.
+type AlertProvider struct {
+	ID        uuid.UUID       `json:"id"`
+	OrgID     uuid.UUID       `json:"orgId"`
+	Name      string          `json:"name"`
+	Type      string          `json:"type"`
+	Config    json.RawMessage `json:"config"`
+	CreatedAt time.Time       `json:"createdAt"`
+}
+
+// AlertRule ist ein typed Check (Dash0-Muster: Bedingung + Threshold + for).
+type AlertRule struct {
+	ID            uuid.UUID       `json:"id"`
+	ClusterID     uuid.UUID       `json:"clusterId"`
+	Name          string          `json:"name"`
+	Kind          string          `json:"kind"`
+	Params        json.RawMessage `json:"params"`
+	Op            string          `json:"op"`
+	Threshold     float64         `json:"threshold"`
+	WindowSeconds int             `json:"windowSeconds"`
+	ForSeconds    int             `json:"forSeconds"`
+	Severity      string          `json:"severity"`
+	ProviderIDs   []uuid.UUID     `json:"providerIds"`
+	Enabled       bool            `json:"enabled"`
+	// Query: PromQL-Bedingung (kind='promql'); Snooze + Auto-Remediation.
+	Query              string          `json:"query"`
+	MutedUntil         *time.Time      `json:"mutedUntil"`
+	ActionDefinitionID *uuid.UUID      `json:"actionDefinitionId"`
+	ActionArgs         json.RawMessage `json:"actionArgs"`
+	State         string          `json:"state"`
+	StateSince    time.Time       `json:"stateSince"`
+	LastValue     float64         `json:"lastValue"`
+	LastEvalAt    *time.Time      `json:"lastEvalAt"`
+	LastError     string          `json:"lastError"`
+	CreatedAt     time.Time       `json:"createdAt"`
+}
+
+// AlertEvent ist ein State-Übergang (ok→pending→firing→ok) im Feed.
+type AlertEvent struct {
+	ID        uuid.UUID `json:"id"`
+	RuleID    uuid.UUID `json:"ruleId"`
+	RuleName  string    `json:"ruleName"`
+	At        time.Time `json:"at"`
+	FromState string    `json:"fromState"`
+	ToState   string    `json:"toState"`
+	Value     float64   `json:"value"`
+	Message   string    `json:"message"`
+}
+
+// MetricDefinition ist eine Derived Metric: Logs/Spans → benannte Zeitreihe.
+type MetricDefinition struct {
+	ID          uuid.UUID `json:"id"`
+	ClusterID   uuid.UUID `json:"clusterId"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Source      string    `json:"source"`
+	Namespace   string    `json:"namespace"`
+	Workload    string    `json:"workload"`
+	Search      string    `json:"search"`
+	ValueMode   string    `json:"valueMode"`
+	Pattern     string    `json:"pattern"`
+	Agg         string    `json:"agg"`
+	Unit        string    `json:"unit"`
+	// Query: PromQL-Ausdruck (source='promql') — Recording-Rule-Muster.
+	Query     string    `json:"query"`
+	CreatedAt time.Time `json:"createdAt"`
+}
