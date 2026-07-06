@@ -1,0 +1,25 @@
+# inventory — der Go-Zero-Instrumentation-Beweis (siehe main.go):
+# Beyla injiziert die W3C-Propagation bei Go selbst (uprobes auf net/http).
+# Build: CGO_ENABLED=0 GOOS=linux go build -o /tmp/inventory-go ./main.go
+#        docker build -t rocketplane/inventory-go:<tag> + minikube image load
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: inventory, namespace: shop}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: inventory}}
+  template:
+    metadata: {labels: {app: inventory}}
+    spec:
+      containers:
+        - name: app
+          image: rocketplane/inventory-go:dev-1783338360
+          env: [{name: REDIS_HOST, value: redis}]
+          ports: [{containerPort: 8080}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: inventory, namespace: shop}
+spec:
+  selector: {app: inventory}
+  ports: [{port: 80, targetPort: 8080}]

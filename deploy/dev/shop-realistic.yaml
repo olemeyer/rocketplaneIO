@@ -1,0 +1,290 @@
+# shop — realistische Demo-Anwendung: echte Python-HTTP-Services mit Latenz-
+# Jitter, Fehlerraten (5xx), Client-Fehlern (4xx), strukturierten INFO/WARN/
+# ERROR-Logs und einer echten Datenbank-Kante (Redis). Kette:
+#   loadgen → frontdoor(nginx) → checkout → {catalog, orders → payments} → redis
+# Alles stdlib-Python (kein Image-Build); Port 8080 → von Beyla instrumentiert
+# (Traces inkl. Redis-Client-Spans), conntrack zeigt die DB-Kanten auf der Map.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shop-app
+  namespace: shop
+data:
+  app.py: |
+    import os, time, random, socket, urllib.request, urllib.error
+    from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+
+    ROLE = os.environ.get("ROLE", "catalog")
+    REDIS = os.environ.get("REDIS_HOST", "redis")
+
+    def log(lvl, msg):
+        print(f'{time.strftime("%Y-%m-%dT%H:%M:%S")} {lvl} {ROLE} {msg}', flush=True)
+
+    def redis_cmd(*args):
+        """Minimaler RESP-Client (stdlib) — echte DB-Kante ohne Treiber."""
+        payload = f"*{len(args)}\r\n".encode()
+        for a in args:
+            a = str(a)
+            payload += f"${len(a)}\r\n{a}\r\n".encode()
+        with socket.create_connection((REDIS, 6379), timeout=1.5) as s:
+            s.sendall(payload)
+            return s.recv(4096)
+
+    def call(url, traceparent=None):
+        try:
+            req = urllib.request.Request(url)
+            if traceparent:
+                req.add_header("traceparent", traceparent)
+            with urllib.request.urlopen(req, timeout=4) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+        except Exception as e:
+            log("ERROR", f"downstream unreachable url={url} err={e}")
+            return 599
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            start = time.time()
+            status, r = 200, random.random()
+            # W3C-Trace-Kontext weiterreichen (Multi-Service-Traces)
+            tp = self.headers.get("traceparent")
+            try:
+                time.sleep(random.uniform(0.008, 0.05))  # Basis-Latenz + Jitter
+                if ROLE == "catalog":
+                    redis_cmd("GET", f"product:{random.randint(1, 50)}")
+                    if r < 0.015:
+                        raise RuntimeError("catalog db read timeout")
+                    if r < 0.05:
+                        time.sleep(random.uniform(0.25, 0.8))
+                        log("WARN", "slow product lookup exceeded 250ms budget")
+                elif ROLE == "payments":
+                    redis_cmd("INCR", "payments:count")
+                    if r < 0.05:
+                        status = 502
+                        log("ERROR", "card processor upstream timeout after 3 retries")
+                    elif r < 0.09:
+                        status = 402
+                        log("WARN", f"card declined customer=c{random.randint(100,999)} reason=insufficient_funds")
+                elif ROLE == "orders":
+                    redis_cmd("LPUSH", "orders:queue", f"o{random.randint(10000, 99999)}")
+                    up = call("http://payments/charge", tp)
+                    if up >= 500:
+                        status = 500
+                        log("ERROR", f"order failed: payment upstream status={up}")
+                    elif up == 402:
+                        status = 402
+                        log("WARN", "order rejected: payment declined")
+                    if r < 0.03:
+                        log("WARN", f"orders queue depth high depth={random.randint(80,300)}")
+                elif ROLE == "checkout":
+                    c = call("http://catalog/products", tp)
+                    # inventory ist GO + Beyla: ab hier läuft die Trace-
+                    # Propagation OHNE App-Code weiter (Header-Injection per uprobe)
+                    call("http://inventory/stock", tp)
+                    o = call("http://orders/order", tp)
+                    if o >= 500 or c >= 500:
+                        status = 500
+                        log("ERROR", f"checkout aborted catalog={c} orders={o}")
+                    elif o == 402:
+                        status = 402
+                    if r < 0.02:
+                        time.sleep(random.uniform(0.4, 1.1))
+                        log("WARN", "checkout latency degraded (cart recompute)")
+            except Exception as e:
+                status = 500
+                log("ERROR", f"unhandled exception: {e}")
+            dur = (time.time() - start) * 1000
+            lvl = "ERROR" if status >= 500 else ("WARN" if status >= 400 else "INFO")
+            log(lvl, f'"GET {self.path}" {status} {dur:.0f}ms')
+            body = b'{"ok":true}' if status < 400 else b'{"ok":false}'
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    log("INFO", f"starting {ROLE} on :8080 (redis={REDIS})")
+    ThreadingHTTPServer(("0.0.0.0", 8080), H).serve_forever()
+  loadgen.py: |
+    import random, time, secrets, urllib.request, urllib.error
+
+    ROUTES = [("/checkout", 4), ("/catalog", 3), ("/orders", 2), ("/payments", 1)]
+    POOL = [r for r, w in ROUTES for _ in range(w)]
+
+    def hit(path):
+        try:
+            # frische W3C-Trace-ID je Request-Kette (nginx reicht Header durch)
+            tp = f"00-{secrets.token_hex(16)}-{secrets.token_hex(8)}-01"
+            req = urllib.request.Request(f"http://frontdoor:8080{path}", headers={"traceparent": tp})
+            urllib.request.urlopen(req, timeout=5).read()
+        except Exception:
+            pass
+
+    print("loadgen: generating traffic against frontdoor", flush=True)
+    n = 0
+    while True:
+        hit(random.choice(POOL))
+        n += 1
+        if n % 120 == 0:  # gelegentlicher Burst (Lastspitze)
+            for _ in range(25):
+                hit(random.choice(POOL))
+                time.sleep(0.05)
+        time.sleep(random.uniform(0.15, 0.9))
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: redis, namespace: shop}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: redis}}
+  template:
+    metadata: {labels: {app: redis}}
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports: [{containerPort: 6379}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: redis, namespace: shop}
+spec:
+  selector: {app: redis}
+  ports: [{port: 6379, targetPort: 6379}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: catalog, namespace: shop}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: catalog}}
+  template:
+    metadata: {labels: {app: catalog}}
+    spec:
+      containers:
+        - name: app
+          image: python:3.12-alpine
+          command: ["python", "/app/app.py"]
+          env: [{name: ROLE, value: catalog}]
+          ports: [{containerPort: 8080}]
+          volumeMounts: [{name: app, mountPath: /app}]
+      volumes: [{name: app, configMap: {name: shop-app}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: catalog, namespace: shop}
+spec:
+  selector: {app: catalog}
+  ports: [{port: 80, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: payments, namespace: shop}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: payments}}
+  template:
+    metadata: {labels: {app: payments}}
+    spec:
+      containers:
+        - name: app
+          image: python:3.12-alpine
+          command: ["python", "/app/app.py"]
+          env: [{name: ROLE, value: payments}]
+          ports: [{containerPort: 8080}]
+          volumeMounts: [{name: app, mountPath: /app}]
+      volumes: [{name: app, configMap: {name: shop-app}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: payments, namespace: shop}
+spec:
+  selector: {app: payments}
+  ports: [{port: 80, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: orders, namespace: shop}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: orders}}
+  template:
+    metadata: {labels: {app: orders}}
+    spec:
+      containers:
+        - name: app
+          image: python:3.12-alpine
+          command: ["python", "/app/app.py"]
+          env: [{name: ROLE, value: orders}]
+          ports: [{containerPort: 8080}]
+          volumeMounts: [{name: app, mountPath: /app}]
+      volumes: [{name: app, configMap: {name: shop-app}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: orders, namespace: shop}
+spec:
+  selector: {app: orders}
+  ports: [{port: 80, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: checkout, namespace: shop}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: checkout}}
+  template:
+    metadata: {labels: {app: checkout}}
+    spec:
+      containers:
+        - name: app
+          image: python:3.12-alpine
+          command: ["python", "/app/app.py"]
+          env: [{name: ROLE, value: checkout}]
+          ports: [{containerPort: 8080}]
+          volumeMounts: [{name: app, mountPath: /app}]
+      volumes: [{name: app, configMap: {name: shop-app}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: checkout, namespace: shop}
+spec:
+  selector: {app: checkout}
+  ports: [{port: 80, targetPort: 8080}]
+---
+# frontdoor-Routen inkl. /checkout (überschreibt die alte ConfigMap)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontdoor-conf
+  namespace: shop
+data:
+  default.conf: |
+    server {
+      listen 8080;
+      location /catalog  { proxy_pass http://catalog/products; }
+      location /orders   { proxy_pass http://orders/order; }
+      location /payments { proxy_pass http://payments/charge; }
+      location /checkout { proxy_pass http://checkout/checkout; }
+      location / { return 200 "frontdoor ok\n"; }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: loadgen, namespace: shop}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: loadgen}}
+  template:
+    metadata: {labels: {app: loadgen}}
+    spec:
+      containers:
+        - name: client
+          image: python:3.12-alpine
+          command: ["python", "/app/loadgen.py"]
+          volumeMounts: [{name: app, mountPath: /app}]
+      volumes: [{name: app, configMap: {name: shop-app}}]

@@ -1,0 +1,86 @@
+# Default values for rocketplane-agent.
+# The three connection values below are normally injected by the install command
+# that the rocketplane UI generates for you ("Connect cluster").
+
+# -- Base URL of the rocketplane control-plane (e.g. https://app.rocketplane.io).
+# The agent only ever talks OUTBOUND to this URL. Required. Maps to
+# RP_CONTROLPLANE_URL.
+controlplane:
+  url: ""
+
+# -- One-time enroll token (format: rpe_<64 hex chars>) issued by the control-plane
+# when you connect a cluster. Stored in a Secret and exchanged once for a long-lived
+# agent token. Required. Maps to RP_ENROLL_TOKEN (via secretKeyRef).
+enrollToken: ""
+
+# -- Human-friendly cluster name shown in the rocketplane UI. Maps to
+# RP_CLUSTER_NAME.
+clusterName: ""
+
+image:
+  repository: ghcr.io/rocketplaneio/agent
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# -- Optional image pull secrets for private registries.
+imagePullSecrets: []
+
+# Slim defaults — the agent is a lightweight watcher, not a workload.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+serviceAccount:
+  # -- Create the ServiceAccount. Disable to reuse an existing one.
+  create: true
+  # -- Name of the ServiceAccount used by the agent pod.
+  name: rocketplane-agent
+  # -- Extra annotations for the ServiceAccount (e.g. IRSA / Workload Identity).
+  annotations: {}
+
+rbac:
+  # -- Create the enumerated ClusterRole + binding. Disable if RBAC is managed
+  # out-of-band.
+  create: true
+  # -- Grant the ACT verbs safe actions need (patch on workload controllers,
+  # pod delete, node patch, evictions). Set false for observe-only.
+  actions: true
+
+# -- Number of agent replicas. Keep at 1: the agent performs full-sync and a single
+# writer avoids redundant control-plane traffic.
+replicaCount: 1
+
+# -- Pod-level annotations.
+podAnnotations: {}
+
+# -- Pod-level labels.
+podLabels: {}
+
+# Harden the runtime — the agent needs no privileges and no writable root fs.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# -- Node selector for the agent pod.
+nodeSelector: {}
+
+# -- Tolerations for the agent pod.
+tolerations: []
+
+# -- Affinity rules for the agent pod.
+affinity: {}

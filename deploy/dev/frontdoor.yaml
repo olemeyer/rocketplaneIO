@@ -1,0 +1,69 @@
+# frontdoor — nginx-Gateway im shop-Namespace. Öffnet Port 8080 (→ von Beyla
+# instrumentiert) und proxied auf catalog/orders/payments. Mit Beylas
+# BPF_CONTEXT_PROPAGATION=all injiziert Beyla traceparent in die proxied
+# Requests → SERVICE-ÜBERGREIFENDE Traces (frontdoor → payments …) ohne SDK.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontdoor-conf
+  namespace: shop
+data:
+  default.conf: |
+    server {
+      listen 8080;
+      location /catalog  { proxy_pass http://catalog/; }
+      location /orders   { proxy_pass http://orders/; }
+      location /payments { proxy_pass http://payments/; }
+      location / { return 200 "frontdoor ok\n"; }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontdoor
+  namespace: shop
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: frontdoor}
+  template:
+    metadata:
+      labels: {app: frontdoor}
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports: [{containerPort: 8080}]
+          volumeMounts:
+            - {name: conf, mountPath: /etc/nginx/conf.d}
+      volumes:
+        - name: conf
+          configMap: {name: frontdoor-conf}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontdoor
+  namespace: shop
+spec:
+  selector: {app: frontdoor}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+# loadgen ruft den frontdoor auf → erzeugt die durchgehende Kette.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loadgen
+  namespace: shop
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: loadgen}
+  template:
+    metadata:
+      labels: {app: loadgen}
+    spec:
+      containers:
+        - name: client
+          image: busybox
+          command: ["/bin/sh", "-c", "while true; do wget -q -O- http://frontdoor:8080/catalog >/dev/null 2>&1; wget -q -O- http://frontdoor:8080/orders >/dev/null 2>&1; wget -q -O- http://frontdoor:8080/payments >/dev/null 2>&1; sleep 2; done"]

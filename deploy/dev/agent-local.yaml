@@ -1,0 +1,163 @@
+# rocketplane-agent — LOKALE Dev-Variante MIT Flow-Discovery (minikube / kind).
+# ---------------------------------------------------------------------------
+# Anders als deploy/install.yaml (gehärtetes Deployment, nur Topologie) ist das
+# hier ein DaemonSet mit hostNetwork + CAP_NET_ADMIN — nötig, damit der Agent die
+# Kernel-conntrack-Tabelle per Netlink lesen und Pod-zu-Pod-Flows (die Kanten der
+# Service-Map) erkennen kann. NUR für lokale Test-Cluster gedacht.
+#
+# Wird nicht direkt appliziert, sondern via deploy/dev/connect-local-cluster.sh
+# (envsubst rendert die ${...}-Platzhalter). Manuell:
+#   RP_CONTROLPLANE_URL=... RP_ENROLL_TOKEN=... RP_CLUSTER_NAME=... RP_AGENT_IMAGE=... \
+#     envsubst < deploy/dev/agent-local.yaml | kubectl apply -f -
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rocketplane
+  labels:
+    app.kubernetes.io/part-of: rocketplane
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rocketplane-agent
+  namespace: rocketplane
+---
+# get/list/watch für die Service-Map + eng begrenzte Safe-Action-Verben:
+# patch auf Workloads (rollout restart / scale), delete auf Pods (recreate).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rocketplane-agent
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "pods", "services", "nodes", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  # debug_bundle / pod_events: Events lesen (Triage-Signale)
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+  # kubelet stats/summary via API-Server-Proxy (Hardware-/Volume-Auslastung)
+  - apiGroups: [""]
+    resources: ["nodes/proxy"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch", "patch"]
+  # Node-Wartung: cordon/drain (patch) + PDB-respektierende Evictions
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["patch"]
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+  # rollout undo: vorherige Revision aus den ReplicaSets lesen
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+  # hpa_set: HPA-Grenzen (min/max) anpassen
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "patch"]
+  # cronjob_trigger/suspend/resume + manuelle Job-Läufe
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rocketplane-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: rocketplane-agent
+subjects:
+  - kind: ServiceAccount
+    name: rocketplane-agent
+    namespace: rocketplane
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rocketplane-agent-enroll
+  namespace: rocketplane
+type: Opaque
+stringData:
+  enroll-token: "${RP_ENROLL_TOKEN}"
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: rocketplane-agent
+  namespace: rocketplane
+  labels:
+    app.kubernetes.io/name: rocketplane-agent
+    app.kubernetes.io/part-of: rocketplane
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketplane-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketplane-agent
+        app.kubernetes.io/part-of: rocketplane
+    spec:
+      serviceAccountName: rocketplane-agent
+      # hostNetwork: Zugriff auf die conntrack-Tabelle des Node-Netzwerk-Namespace.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      # Auf ALLEN Nodes laufen (auch Control-Plane-Node lokaler Cluster).
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: agent
+          image: "${RP_AGENT_IMAGE}"
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            # conntrack-Netlink-Dump braucht CAP_NET_ADMIN; sonst keine Rechte.
+            capabilities:
+              add: ["NET_ADMIN"]
+              drop: ["ALL"]
+          env:
+            - name: RP_CONTROLPLANE_URL
+              value: "${RP_CONTROLPLANE_URL}"
+            - name: RP_ENROLL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rocketplane-agent-enroll
+                  key: enroll-token
+            - name: RP_CLUSTER_NAME
+              value: "${RP_CLUSTER_NAME}"
+            - name: RP_AGENT_VERSION
+              value: "0.3.0-flows"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          # Zero-config Log-Collection: Node-Pod-Logs read-only mitlesen.
+          # /var/lib/docker/containers deckt die Docker-Runtime-Symlinks ab (minikube).
+          volumeMounts:
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+      volumes:
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers

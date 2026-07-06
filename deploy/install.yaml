@@ -1,0 +1,162 @@
+# rocketplane-agent — plain kubectl install (Helm-free variant)
+# ---------------------------------------------------------------------------
+# Prefer the Helm install command shown in the rocketplane UI. Use this file
+# when Helm is not available.
+#
+# Two placeholders must be replaced before applying:
+#   REPLACE_ME_CONTROLPLANE_URL  -> your control-plane URL, e.g. https://app.rocketplane.io
+#   REPLACE_ME_ENROLL_TOKEN      -> the one-time enroll token (rpe_...) from the UI
+#
+# Then:
+#   kubectl apply -f install.yaml
+#
+# The agent connects OUTBOUND only. Its RBAC is split into two blocks below:
+# OBSERVE (read-only sync) and ACT (the enumerated write verbs safe actions
+# need). Delete the ACT block to run a strictly observe-only agent.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rocketplane
+  labels:
+    app.kubernetes.io/part-of: rocketplane
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rocketplane-agent
+  namespace: rocketplane
+  labels:
+    app.kubernetes.io/name: rocketplane-agent
+    app.kubernetes.io/part-of: rocketplane
+automountServiceAccountToken: true
+---
+# Enumerated ClusterRole — every verb the agent holds, nothing more.
+# No cluster-admin, no wildcard, no access to Secrets or ConfigMap contents.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rocketplane-agent
+  labels:
+    app.kubernetes.io/name: rocketplane-agent
+    app.kubernetes.io/part-of: rocketplane
+rules:
+  # ── OBSERVE (read-only): topology sync, triage events, kubelet stats ──
+  - apiGroups: [""]
+    resources: ["namespaces", "pods", "services", "nodes", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+  # kubelet stats/summary via API-server proxy (node/volume utilization)
+  - apiGroups: [""]
+    resources: ["nodes/proxy"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  # ── ACT (safe actions): delete this block for an observe-only agent ──
+  # restart/scale/set-image/rollout-undo = patch on workload controllers
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["patch"]
+  # delete_pod / cleanup
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+  # cordon/uncordon = patch node; drain = PDB-respecting evictions
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["patch"]
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rocketplane-agent
+  labels:
+    app.kubernetes.io/name: rocketplane-agent
+    app.kubernetes.io/part-of: rocketplane
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: rocketplane-agent
+subjects:
+  - kind: ServiceAccount
+    name: rocketplane-agent
+    namespace: rocketplane
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rocketplane-agent-enroll
+  namespace: rocketplane
+  labels:
+    app.kubernetes.io/name: rocketplane-agent
+    app.kubernetes.io/part-of: rocketplane
+type: Opaque
+stringData:
+  # >>> REPLACE_ME_ENROLL_TOKEN <<< one-time enroll token (rpe_...) from the UI.
+  enroll-token: "REPLACE_ME_ENROLL_TOKEN"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rocketplane-agent
+  namespace: rocketplane
+  labels:
+    app.kubernetes.io/name: rocketplane-agent
+    app.kubernetes.io/part-of: rocketplane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketplane-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketplane-agent
+        app.kubernetes.io/part-of: rocketplane
+    spec:
+      serviceAccountName: rocketplane-agent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: ghcr.io/rocketplaneio/agent:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            # >>> REPLACE_ME_CONTROLPLANE_URL <<< e.g. https://app.rocketplane.io
+            - name: RP_CONTROLPLANE_URL
+              value: "REPLACE_ME_CONTROLPLANE_URL"
+            - name: RP_ENROLL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rocketplane-agent-enroll
+                  key: enroll-token
+            - name: RP_CLUSTER_NAME
+              value: ""
+            - name: RP_AGENT_VERSION
+              value: "0.1.0"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          # No probes: the agent exposes no HTTP server and runs on a distroless
+          # image. On enroll/sync failure it exits non-zero and is restarted.

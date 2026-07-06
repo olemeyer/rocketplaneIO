@@ -1,0 +1,90 @@
+# Grafana Beyla — zero-config eBPF-Auto-Instrumentierung (L7: HTTP/gRPC) für den
+# lokalen Dev-Cluster. Instrumentiert alle Prozesse mit offenen Ports aus
+# BEYLA_OPEN_PORT und exportiert Traces + RED-Metriken via OTLP an den
+# rocketplane-Collector auf dem Host. Braucht privileged + hostPID (Kernel-eBPF).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: beyla
+  namespace: rocketplane
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: beyla
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: beyla
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: beyla
+subjects:
+  - kind: ServiceAccount
+    name: beyla
+    namespace: rocketplane
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: beyla
+  namespace: rocketplane
+  labels:
+    app.kubernetes.io/name: beyla
+    app.kubernetes.io/part-of: rocketplane
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: beyla
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: beyla
+        app.kubernetes.io/part-of: rocketplane
+    spec:
+      serviceAccountName: beyla
+      hostPID: true
+      # hostNetwork: host.minikube.internal steht nur in der Node-hosts-Datei —
+      # im Pod-Netz löst CoreDNS den Namen nicht auf.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: beyla
+          image: grafana/beyla:2.2
+          securityContext:
+            privileged: true
+          env:
+            # http-echo (5678) + gängige App-Ports des Dev-Clusters
+            - name: BEYLA_OPEN_PORT
+              value: "80,5678,8080,8443"
+            - name: BEYLA_KUBE_METADATA_ENABLE
+              value: "true"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://host.minikube.internal:4318"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "http/protobuf"
+            - name: BEYLA_METRICS_INTERVAL
+              value: "15s"
+            # eBPF-Context-Propagation: injiziert W3C traceparent in ausgehende
+            # Requests instrumentierter Prozesse → service-übergreifende Traces
+            # ganz ohne SDK (der Kern-Wedge).
+            - name: BEYLA_BPF_CONTEXT_PROPAGATION
+              value: "all"
+            # eingehende traceparent-Header lesen (sonst startet jeder Server-Span
+            # einen NEUEN Trace, obwohl der Client den Kontext mitschickt)
+            - name: BEYLA_BPF_TRACK_REQUEST_HEADERS
+              value: "true"
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}

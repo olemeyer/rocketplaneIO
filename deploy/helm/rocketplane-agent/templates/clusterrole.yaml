@@ -1,0 +1,48 @@
+{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "rocketplane-agent.fullname" . }}
+  labels:
+    {{- include "rocketplane-agent.labels" . | nindent 4 }}
+# Enumerated ClusterRole — every verb the agent holds, nothing more.
+# No cluster-admin, no wildcard, no access to Secrets or ConfigMap contents.
+#
+# OBSERVE rules (read-only) are always granted — they power topology sync,
+# the service map, triage events and kubelet stats.
+# ACT rules (the write verbs safe actions need) are gated behind
+# `rbac.actions` — set it to false for a strictly observe-only agent.
+rules:
+  # ── OBSERVE (read-only) ──
+  - apiGroups: [""]
+    resources: ["namespaces", "pods", "services", "nodes", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+  # kubelet stats/summary via API-server proxy (node/volume utilization)
+  - apiGroups: [""]
+    resources: ["nodes/proxy"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  {{- if .Values.rbac.actions }}
+  # ── ACT (safe actions) ──
+  # restart/scale/set-image/rollout-undo = patch on workload controllers
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["patch"]
+  # delete_pod / cleanup
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+  # cordon/uncordon = patch node; drain = PDB-respecting evictions
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["patch"]
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+  {{- end }}
+{{- end }}

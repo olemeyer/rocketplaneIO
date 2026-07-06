@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rocketplane-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rocketplane-agent.labels" . | nindent 4 }}
+spec:
+  # Single writer: the agent full-syncs namespaces; more than one replica would
+  # just duplicate control-plane traffic.
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "rocketplane-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rocketplane-agent.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "rocketplane-agent.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: RP_CONTROLPLANE_URL
+              value: {{ .Values.controlplane.url | quote }}
+            - name: RP_ENROLL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "rocketplane-agent.secretName" . }}
+                  key: enroll-token
+            - name: RP_CLUSTER_NAME
+              value: {{ .Values.clusterName | quote }}
+            - name: RP_AGENT_VERSION
+              value: {{ .Chart.AppVersion | quote }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # NOTE: no liveness/readiness probes are configured. The agent is a
+          # headless outbound client — it exposes no HTTP server, so HTTP/TCP
+          # probes have nothing to hit, and the container image is distroless
+          # (no shell) so exec probes are not reliable either. If the enroll or
+          # sync loop fails the process exits non-zero and Kubernetes restarts
+          # the pod via restartPolicy. Add probes here once the binary exposes a
+          # local /healthz.
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

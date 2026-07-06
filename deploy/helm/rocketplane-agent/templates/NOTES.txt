@@ -1,0 +1,36 @@
+rocketplane-agent has been installed.
+
+  Release:    {{ .Release.Name }}
+  Namespace:  {{ .Release.Namespace }}
+  Cluster:    {{ .Values.clusterName | default "(clusterName not set)" }}
+  Version:    {{ .Chart.AppVersion }}
+
+The agent is now connecting OUTBOUND to the control-plane at:
+
+  {{ .Values.controlplane.url | default "(controlplane.url not set!)" }}
+
+It reads the kube-system namespace UID (your cluster identity), enrolls with the
+one-time token, then continuously syncs namespaces. The control-plane never
+connects back into this cluster — the connection is one-way, outbound-only.
+
+Within a few seconds the cluster should flip to "connected" in the rocketplane
+UI and its namespaces will appear.
+
+Watch the agent come up:
+
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "rocketplane-agent.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/name={{ include "rocketplane-agent.name" . }} -f
+
+{{- if not .Values.enrollToken }}
+
+WARNING: enrollToken is empty. The agent cannot enroll without it. Re-run with
+  --set enrollToken=<TOKEN>  (copy the exact command from the rocketplane UI).
+{{- end }}
+{{- if not .Values.controlplane.url }}
+
+WARNING: controlplane.url is empty. Set it with --set controlplane.url=<CP_URL>.
+{{- end }}
+
+To disconnect this cluster:
+
+  helm uninstall {{ .Release.Name }} --namespace {{ .Release.Namespace }}
