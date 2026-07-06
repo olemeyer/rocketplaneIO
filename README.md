@@ -185,7 +185,7 @@ images and a platform Helm chart are next, see [roadmap](#status--roadmap)). Wit
 Node 22+/pnpm and Docker installed, expect **about ten minutes to your first trace**:
 
 ```bash
-git clone https://github.com/olemeyer/rocketplaneio && cd rocketplaneio
+git clone https://github.com/olemeyer/rocketplaneIO && cd rocketplaneIO
 
 # 1 — data stores + OTLP collector (Postgres, ClickHouse — defaults just work)
 docker compose -f deploy/compose/docker-compose.yml up -d
@@ -309,7 +309,7 @@ production cluster yet.
 ## Contributing & community
 
 Issues and feedback are very welcome — especially reports from real clusters:
-[open an issue](https://github.com/olemeyer/rocketplaneio/issues). For anything else, see
+[open an issue](https://github.com/olemeyer/rocketplaneIO/issues). For anything else, see
 [CONTRIBUTING.md](CONTRIBUTING.md). If you got this far and it resonates, a star helps others
 find it.
 

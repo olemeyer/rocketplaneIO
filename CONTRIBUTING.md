@@ -4,7 +4,7 @@ Thanks for your interest! rocketplaneIO is in **alpha** and moving fast — the 
 contributions right now are:
 
 - **Bug reports from real clusters** — kernel version, K8s distribution, what broke, and the
-  agent/Beyla logs if you have them. [Open an issue](https://github.com/olemeyer/rocketplaneio/issues).
+  agent/Beyla logs if you have them. [Open an issue](https://github.com/olemeyer/rocketplaneIO/issues).
 - **Feedback on the loop** — where the investigation flow (logs → trace → alert → action)
   loses you in practice.
 
