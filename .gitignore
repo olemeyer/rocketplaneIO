@@ -54,10 +54,14 @@ coverage/
 *.log
 
 # ── Playwright (E2E) ────────────────────────────────────────
+# Die E2E-/Screenshot-Skripte leben bewusst AUSSERHALB des Repos
+# in ../devtools (lokale Dev-Werkzeuge, kein Produktcode).
 playwright-report/
 test-results/
-e2e/.output/
-e2e/screenshots/
+
+# ── Lokale Agent-/Editor-Konfiguration ──────────────────────
+.claude/
+CLAUDE.md
 
 # NOTE: Die interne Recherche-/Produkt-Doku liegt bewusst im
 # Eltern-Ordner (../docs) AUSSERHALB dieses Repos und kann daher

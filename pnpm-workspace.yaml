@@ -1,7 +1,3 @@
 packages:
-  - "apps/*"
-  - "packages/*"
-
-# Go-Services (services/*) sind KEIN pnpm-Workspace; sie werden ueber
-# go.work verwaltet. Deploy-Artefakte (deploy/*) sind ebenfalls ausserhalb
-# des pnpm-Workspace.
+  - apps/*
+  - packages/*
