@@ -1,0 +1,107 @@
+# agent.yml — builds the in-cluster agent and publishes everything a cluster
+# needs to install it:
+#
+#   image  ghcr.io/olemeyer/rocketplaneio/agent   (multi-arch amd64+arm64)
+#            pushes on main → :edge + :sha-<short>
+#            tags v*        → :latest + :<semver>
+#   chart  oci://ghcr.io/olemeyer/rocketplaneio/charts/rocketplane-agent
+#            published on v* tags, chart+app version = tag
+#   yaml   install.yaml (Helm-free) attached to the GitHub release,
+#            image pinned to the released version
+#
+# Pull requests that touch the agent build the image (no push) as a gate.
+name: agent
+
+on:
+  push:
+    branches: [main]
+    paths: ['agent/**', 'deploy/helm/**', 'deploy/install.yaml', '.github/workflows/agent.yml']
+    tags: ['v*']
+  pull_request:
+    paths: ['agent/**', '.github/workflows/agent.yml']
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/rocketplaneio/agent
+
+permissions:
+  contents: write   # release assets
+  packages: write   # ghcr push
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=edge,branch=main
+            type=sha,prefix=sha-
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: agent/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('edge-{0}', github.sha) }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Release artifacts — only on version tags, after the image exists.
+  install-artifacts:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Render install.yaml for the released image
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed "s|image: .*rocketplaneio/agent.*|image: ${IMAGE}:${VERSION}|" \
+            deploy/install.yaml > install.yaml
+          grep -n "image: " install.yaml
+
+      - name: Package & push Helm chart
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          helm package deploy/helm/rocketplane-agent \
+            --version "$VERSION" --app-version "$VERSION" -d /tmp/chart
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
+            -u "${{ github.actor }}" --password-stdin
+          helm push /tmp/chart/rocketplane-agent-"$VERSION".tgz \
+            oci://ghcr.io/${{ github.repository_owner }}/rocketplaneio/charts
+
+      - name: Create GitHub release with install assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cp /tmp/chart/rocketplane-agent-"$VERSION".tgz .
+          gh release create "$GITHUB_REF_NAME" \
+            --title "rocketplaneIO $GITHUB_REF_NAME" \
+            --generate-notes \
+            install.yaml rocketplane-agent-"$VERSION".tgz
