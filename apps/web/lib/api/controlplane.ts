@@ -1,0 +1,401 @@
+// Typisierte Contract-Funktionen (docs/architecture.md §5). Dünne Hülle um apiFetch.
+import { apiFetch } from './client';
+import type {
+  Cluster,
+  ClusterDetail,
+  ConnectClusterResponse,
+  LogsParams,
+  LogsResponse,
+  Me,
+  OrgSummary,
+  ReconnectResponse,
+  ServiceMap,
+  SpanStats,
+  TraceDetail,
+  TracesResponse,
+} from './types';
+
+const enc = encodeURIComponent;
+
+/* ── Auth / Session ─────────────────────────────────────────────────────── */
+
+export function getMe(): Promise<Me> {
+  return apiFetch<Me>('/api/me');
+}
+
+export function devLogin(email: string): Promise<unknown> {
+  return apiFetch('/auth/dev/login', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
+export function logout(): Promise<unknown> {
+  return apiFetch('/auth/logout', { method: 'POST' });
+}
+
+/* ── Orgs ───────────────────────────────────────────────────────────────── */
+
+export function createOrg(name: string): Promise<OrgSummary> {
+  return apiFetch<OrgSummary>('/api/orgs', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function switchOrg(orgId: string): Promise<unknown> {
+  return apiFetch('/api/session/org', {
+    method: 'POST',
+    body: JSON.stringify({ orgId }),
+  });
+}
+
+/* ── Clusters ───────────────────────────────────────────────────────────── */
+
+/** Liste toleriert sowohl `[...]` als auch `{ clusters:[...] }`. */
+export async function listClusters(orgId: string): Promise<Cluster[]> {
+  const data = await apiFetch<Cluster[] | { clusters: Cluster[] }>(
+    `/api/orgs/${enc(orgId)}/clusters`,
+  );
+  return Array.isArray(data) ? data : (data.clusters ?? []);
+}
+
+export function getCluster(orgId: string, clusterId: string): Promise<ClusterDetail> {
+  return apiFetch<ClusterDetail>(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}`);
+}
+
+export function connectCluster(orgId: string, name: string): Promise<ConnectClusterResponse> {
+  return apiFetch<ConnectClusterResponse>(`/api/orgs/${enc(orgId)}/clusters`, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function reconnectCluster(orgId: string, clusterId: string): Promise<ReconnectResponse> {
+  return apiFetch<ReconnectResponse>(
+    `/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/reconnect`,
+    { method: 'POST' },
+  );
+}
+
+/* ── Service-Map ────────────────────────────────────────────────────────────── */
+
+export function getServiceMap(orgId: string, clusterId: string): Promise<ServiceMap> {
+  return apiFetch<ServiceMap>(
+    `/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/service-map`,
+  );
+}
+
+/* ── Logs ───────────────────────────────────────────────────────────────────── */
+
+export function getTraces(
+  orgId: string,
+  clusterId: string,
+  params: { since?: string; until?: string; namespace?: string; service?: string; onlyError?: boolean } = {},
+): Promise<TracesResponse> {
+  const q = new URLSearchParams();
+  if (params.since) q.set('since', params.since);
+  if (params.until) q.set('until', params.until);
+  if (params.namespace) q.set('namespace', params.namespace);
+  if (params.service) q.set('service', params.service);
+  if (params.onlyError) q.set('onlyError', 'true');
+  const qs = q.toString();
+  return apiFetch<TracesResponse>(
+    `/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/traces${qs ? `?${qs}` : ''}`,
+  );
+}
+
+export function getTraceDetail(
+  orgId: string,
+  clusterId: string,
+  traceId: string,
+): Promise<TraceDetail> {
+  return apiFetch<TraceDetail>(
+    `/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/traces/${enc(traceId)}`,
+  );
+}
+
+export function getSpanStats(
+  orgId: string,
+  clusterId: string,
+  service: string,
+  span: string,
+  since = '1h',
+): Promise<SpanStats> {
+  const q = new URLSearchParams({ service, span, since });
+  return apiFetch<SpanStats>(
+    `/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/span-stats?${q}`,
+  );
+}
+
+export function getLogs(
+  orgId: string,
+  clusterId: string,
+  params: LogsParams = {},
+): Promise<LogsResponse> {
+  const q = new URLSearchParams();
+  if (params.since) q.set('since', params.since);
+  if (params.until) q.set('until', params.until);
+  if (params.namespace) q.set('namespace', params.namespace);
+  if (params.workload) q.set('workload', params.workload);
+  if (params.workloads?.length) q.set('workloads', params.workloads.join(','));
+  if (params.pod) q.set('pod', params.pod);
+  if (params.minSeverity) q.set('minSeverity', String(params.minSeverity));
+  if (params.search) q.set('search', params.search);
+  if (params.limit) q.set('limit', String(params.limit));
+  const qs = q.toString();
+  return apiFetch<LogsResponse>(
+    `/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/logs${qs ? `?${qs}` : ''}`,
+  );
+}
+
+/* ── Safe-Actions ─────────────────────────────────────────────────────────── */
+
+export function getWorkloadPods(
+  orgId: string,
+  clusterId: string,
+  namespace: string,
+  kind: string,
+  name: string,
+): Promise<{ pods: import('./types').WorkloadPod[] }> {
+  const q = new URLSearchParams({ namespace, kind, name });
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/workload-pods?${q}`);
+}
+
+export function getActions(
+  orgId: string,
+  clusterId: string,
+  namespace = '',
+  target = '',
+  limit = 20,
+): Promise<{ actions: import('./types').ClusterAction[] }> {
+  const q = new URLSearchParams({ namespace, target, limit: String(limit) });
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/actions?${q}`);
+}
+
+export function createAction(
+  orgId: string,
+  clusterId: string,
+  body: {
+    kind: import('./types').ActionKind;
+    targetNamespace: string;
+    targetKind: string;
+    targetName: string;
+    params?: Record<string, unknown>;
+  },
+): Promise<import('./types').ClusterAction> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/actions`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+/* ── Action-Definitionen ──────────────────────────────────────────────────── */
+
+export function getActionDefinitions(
+  orgId: string,
+): Promise<{ definitions: import('./types').ActionDefinition[] }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/action-definitions`);
+}
+
+export function createActionDefinition(
+  orgId: string,
+  body: { name: string; description: string; params: import('./types').ActionDefParam[]; source: string; timeoutSeconds?: number },
+): Promise<import('./types').ActionDefinition> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/action-definitions`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateActionDefinition(
+  orgId: string,
+  defId: string,
+  body: { name: string; description: string; params: import('./types').ActionDefParam[]; source: string; timeoutSeconds?: number },
+): Promise<import('./types').ActionDefinition> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/action-definitions/${enc(defId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteActionDefinition(orgId: string, defId: string): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/action-definitions/${enc(defId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export function runScriptAction(
+  orgId: string,
+  clusterId: string,
+  definitionId: string,
+  args: Record<string, string>,
+): Promise<import('./types').ClusterAction> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/actions`, {
+    method: 'POST',
+    body: JSON.stringify({ kind: 'script', definitionId, args }),
+  });
+}
+
+export function cancelAction(
+  orgId: string,
+  clusterId: string,
+  actionId: string,
+): Promise<{ status: string }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/actions/${enc(actionId)}/cancel`, {
+    method: 'POST',
+    body: '{}',
+  });
+}
+
+export function getInfra(
+  orgId: string,
+  clusterId: string,
+): Promise<import('./types').InfraResponse> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/infra`);
+}
+
+export function setWorkloadIcon(
+  orgId: string,
+  clusterId: string,
+  body: { namespace: string; kind: string; name: string; icon: string },
+): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/workload-icon`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+/* ── Metriken + Alerts ────────────────────────────────────────────────────── */
+
+export function getMetricSeries(
+  orgId: string,
+  clusterId: string,
+  params: Record<string, string>,
+): Promise<{ series: import('./types').MetricSeries[] }> {
+  const q = new URLSearchParams(params);
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/metrics/series?${q}`);
+}
+
+export function getAlertProviders(orgId: string): Promise<{ providers: import('./types').AlertProvider[] }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/alert-providers`);
+}
+export function createAlertProvider(
+  orgId: string,
+  body: { name: string; type: import('./types').ProviderType; config: Record<string, string> },
+): Promise<import('./types').AlertProvider> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/alert-providers`, { method: 'POST', body: JSON.stringify(body) });
+}
+export function deleteAlertProvider(orgId: string, id: string): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/alert-providers/${enc(id)}`, { method: 'DELETE' });
+}
+export function testAlertProvider(orgId: string, id: string): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/alert-providers/${enc(id)}/test`, { method: 'POST', body: '{}' });
+}
+
+export function getAlertRules(orgId: string, clusterId: string): Promise<{ rules: import('./types').AlertRule[] }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/alert-rules`);
+}
+export function createAlertRule(
+  orgId: string,
+  clusterId: string,
+  body: Partial<import('./types').AlertRule>,
+): Promise<import('./types').AlertRule> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/alert-rules`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+export function updateAlertRule(
+  orgId: string,
+  clusterId: string,
+  ruleId: string,
+  body: Partial<import('./types').AlertRule>,
+): Promise<import('./types').AlertRule> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/alert-rules/${enc(ruleId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+export function deleteAlertRule(orgId: string, clusterId: string, ruleId: string): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/alert-rules/${enc(ruleId)}`, {
+    method: 'DELETE',
+  });
+}
+/** Snooze: minutes > 0 = stumm für n Minuten, 0 = unmute. */
+export function muteAlertRule(orgId: string, clusterId: string, ruleId: string, minutes: number): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/alert-rules/${enc(ruleId)}/mute`, {
+    method: 'POST',
+    body: JSON.stringify({ minutes }),
+  });
+}
+/** Wert-Historie des Evaluators (Sparkline auf der Rule-Karte). */
+export function getAlertRuleSeries(
+  orgId: string,
+  clusterId: string,
+  ruleId: string,
+): Promise<{ series: import('./types').MetricSeries[] }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/alert-rules/${enc(ruleId)}/series`);
+}
+export function getAlertEvents(
+  orgId: string,
+  clusterId: string,
+  limit = 50,
+): Promise<{ events: import('./types').AlertEvent[] }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/alert-events?limit=${limit}`);
+}
+
+/* ── Derived Metrics ──────────────────────────────────────────────────────── */
+
+export function getMetricDefinitions(
+  orgId: string,
+  clusterId: string,
+): Promise<{ definitions: import('./types').MetricDefinition[] }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/metrics/definitions`);
+}
+export function createMetricDefinition(
+  orgId: string,
+  clusterId: string,
+  body: Partial<import('./types').MetricDefinition>,
+): Promise<import('./types').MetricDefinition> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/metrics/definitions`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+export function updateMetricDefinition(
+  orgId: string,
+  clusterId: string,
+  defId: string,
+  body: Partial<import('./types').MetricDefinition>,
+): Promise<import('./types').MetricDefinition> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/metrics/definitions/${enc(defId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+export function deleteMetricDefinition(orgId: string, clusterId: string, defId: string): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/metrics/definitions/${enc(defId)}`, {
+    method: 'DELETE',
+  });
+}
+export function previewMetricDefinition(
+  orgId: string,
+  clusterId: string,
+  body: Partial<import('./types').MetricDefinition>,
+): Promise<{ series: import('./types').MetricSeries[]; samples: { body: string; value: string }[] | null }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/metrics/preview`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+export function getDerivedSeries(
+  orgId: string,
+  clusterId: string,
+  defId: string,
+  since?: string,
+): Promise<{ series: import('./types').MetricSeries[] }> {
+  const q = new URLSearchParams({ id: defId });
+  if (since) q.set('since', since);
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/metrics/derived?${q}`);
+}

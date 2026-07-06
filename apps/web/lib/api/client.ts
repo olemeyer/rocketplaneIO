@@ -1,77 +1,61 @@
-import type { ApiResponse, RpApiError, RpErrorCode } from './types';
+// Schlanker fetch-Wrapper für die Control-Plane. Immer same-origin (Next-Rewrites
+// proxien /api/* + /auth/* weiter), credentials:'include' damit rp_session mitgeht.
+// Fehler-Shape des Backends: { "error": "..." } mit passendem HTTP-Status.
 
-const BASE = '/api/rp';
-const TIMEOUT_MS = 8000;
-
-export function isRpApiError(e: unknown): e is RpApiError {
-  return typeof e === 'object' && e !== null && 'code' in e && 'status' in e;
-}
-
-function rpError(status: number, code: RpErrorCode, message: string): RpApiError {
-  return { status, code, message };
-}
-
-function codeForStatus(status: number): RpErrorCode {
-  switch (status) {
-    case 400:
-      return 'bad_data';
-    case 404:
-      return 'not_found';
-    case 501:
-      return 'not_implemented';
-    default:
-      return 'internal';
+export class ApiError extends Error {
+  readonly status: number;
+  readonly body: unknown;
+  constructor(message: string, status: number, body?: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body;
   }
 }
 
-/**
- * rpFetch ruft den query-Service same-origin über den Next-Rewrite-Proxy auf
- * (/api/rp{path} -> :7080). Non-2xx bzw. {status:'error'} -> typisierter RpApiError.
- * 8s-Timeout via AbortController; ein extern übergebenes signal wird gemergt und
- * bricht die Anfrage ebenfalls ab (Cancellation propagiert als AbortError).
- */
-export async function rpFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const controller = new AbortController();
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, TIMEOUT_MS);
-
-  const external = init?.signal;
-  if (external) {
-    if (external.aborted) controller.abort();
-    else external.addEventListener('abort', () => controller.abort(), { once: true });
-  }
-
-  let res: Response;
+function parseBody(text: string): unknown {
+  if (!text) return null;
   try {
-    res = await fetch(`${BASE}${path}`, {
-      ...init,
-      signal: controller.signal,
-      headers: { Accept: 'application/json', ...init?.headers },
-    });
-  } catch (err) {
-    if (timedOut) throw rpError(0, 'timeout', 'request timed out');
-    if (external?.aborted) throw err; // externe Cancellation -> weiterreichen
-    throw rpError(0, 'network', err instanceof Error ? err.message : 'network error');
-  } finally {
-    clearTimeout(timer);
-  }
-
-  let body: ApiResponse<T> | undefined;
-  try {
-    body = (await res.json()) as ApiResponse<T>;
+    return JSON.parse(text);
   } catch {
-    body = undefined;
+    return text;
+  }
+}
+
+export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const hasBody = init.body != null;
+  const res = await fetch(path, {
+    credentials: 'include',
+    cache: 'no-store',
+    ...init,
+    headers: {
+      Accept: 'application/json',
+      ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+      ...(init.headers as Record<string, string> | undefined),
+    },
+  });
+
+  const data = parseBody(await res.text());
+
+  if (!res.ok) {
+    // Session ungültig/abgelaufen mitten in der Sitzung → sauber zurück zum Login.
+    // Die Control-Plane hat das Stale-Cookie mit diesem 401 bereits gelöscht, daher
+    // bounct die Middleware /login nicht mehr auf / (kein Flackern/Redirect-Loop).
+    // `replace` statt `href`, damit die kaputte Route nicht in der History landet.
+    if (
+      res.status === 401 &&
+      typeof window !== 'undefined' &&
+      !window.location.pathname.startsWith('/login') &&
+      !window.location.pathname.startsWith('/setup')
+    ) {
+      window.location.replace('/login');
+    }
+    const message =
+      data && typeof data === 'object' && 'error' in (data as Record<string, unknown>)
+        ? String((data as Record<string, unknown>).error)
+        : `Request failed with status ${res.status}`;
+    throw new ApiError(message, res.status, data);
   }
 
-  if (!res.ok || body?.status === 'error') {
-    const message = body?.status === 'error' ? body.error : res.statusText || 'request failed';
-    throw rpError(res.status, codeForStatus(res.status), message);
-  }
-  if (!body || body.status !== 'success') {
-    throw rpError(res.status, 'internal', 'malformed response');
-  }
-  return body.data;
+  return data as T;
 }

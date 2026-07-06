@@ -1,31 +1,60 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { SESSION_COOKIE } from '@/lib/auth/config';
-import { verifySession } from '@/lib/auth/session';
 
-// Schützt die App-Routen und den Query-Proxy. Ohne gültige Session:
-//  - HTML-Route -> Redirect auf /login?next=<pfad>
-//  - API-Proxy  -> 401 JSON
-export async function middleware(req: NextRequest) {
-  const token = req.cookies.get(SESSION_COOKIE)?.value;
-  const session = token ? await verifySession(token) : null;
-  if (session) return NextResponse.next();
+// Auth-Gate (Edge). NUR Presence-Check des Session-Cookies — die echte Validierung
+// (HMAC-Signatur, Ablauf, Org-Kontext) macht die Control-Plane bei jedem /api-Call.
+// Ziel: unangemeldete Navigation früh auf /login umlenken, ohne Roundtrip.
+const SESSION_COOKIE = 'rp_session';
 
-  const { pathname, search } = req.nextUrl;
+export function middleware(req: NextRequest) {
+  const { pathname } = req.nextUrl;
 
-  if (pathname.startsWith('/api/rp')) {
-    return NextResponse.json(
-      { status: 'error', errorType: 'unauthorized', error: 'authentication required' },
-      { status: 401 },
-    );
+  // Öffentliche / proxied Pfade nie gaten:
+  //  - /auth/*  → OIDC-Redirects & Dev-Login (Control-Plane)
+  //  - /api/*   → same-origin Proxy zur Control-Plane (macht eigene Auth)
+  //  - /_next, favicon, statische Assets
+  const isPublic =
+    pathname.startsWith('/auth') ||
+    pathname.startsWith('/api') ||
+    pathname.startsWith('/_next') ||
+    pathname === '/favicon.ico' ||
+    pathname === '/robots.txt';
+
+  if (isPublic) return NextResponse.next();
+
+  const hasSession = req.cookies.has(SESSION_COOKIE);
+
+  // /setup (First-User-Onboarding) ist öffentlich; die Seite prüft selbst per
+  // /api/setup/status, ob überhaupt noch ein Setup nötig ist.
+  if (pathname === '/setup') {
+    if (hasSession) {
+      const url = req.nextUrl.clone();
+      url.pathname = '/';
+      return NextResponse.redirect(url);
+    }
+    return NextResponse.next();
   }
 
-  const url = req.nextUrl.clone();
-  url.pathname = '/login';
-  url.search = '';
-  url.searchParams.set('next', pathname + search);
-  return NextResponse.redirect(url);
+  if (pathname === '/login') {
+    // Bereits angemeldet? Dann weg von der Login-Seite.
+    if (hasSession) {
+      const url = req.nextUrl.clone();
+      url.pathname = '/';
+      return NextResponse.redirect(url);
+    }
+    return NextResponse.next();
+  }
+
+  if (!hasSession) {
+    const url = req.nextUrl.clone();
+    url.pathname = '/login';
+    url.search = '';
+    return NextResponse.redirect(url);
+  }
+
+  return NextResponse.next();
 }
 
 export const config = {
-  matcher: ['/explore', '/explore/:path*', '/api/rp/:path*'],
+  // Alles ausser statischen Next-Assets durchläuft die Middleware.
+  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
 };

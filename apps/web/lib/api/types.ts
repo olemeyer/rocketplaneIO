@@ -1,212 +1,434 @@
-// Single source of truth der Explore-API-Typen (spiegelt den query-Service 1:1).
-import type { Status } from '@rocketplane/ui';
+// Contract-Typen (docs/architecture.md §5). JSON der Control-Plane ist camelCase
+// (siehe /api/me: { user, orgs:[{id,name,slug,role,isPersonal}], currentOrgId }).
 
-// ---- Envelope (Prometheus-kompatibel) ----
-export type ApiResponse<T> =
-  | { status: 'success'; data: T }
-  | { status: 'error'; errorType: string; error: string };
+export type OrgRole = 'owner' | 'admin' | 'member';
 
-export type HealthStatus = 'healthy' | 'degraded' | 'critical';
-export type TraceStatus = 'ok' | 'error';
-export type SpanKind = 'server' | 'client' | 'internal' | 'producer' | 'consumer';
-
-// ---- GET /api/v1/services ----
-export interface Service {
+export interface User {
+  id: string;
+  email: string;
   name: string;
-  status: HealthStatus;
-  rate: number; // req/s über das Fenster
-  errorRatio: number; // 0..1
-  latencyMs: { p50: number; p95: number; p99: number };
-  spanCount: number;
-  errorCount: number;
-  sparkline: { metric: 'rate' | 'errorRatio' | 'p95'; values: number[] };
-}
-export interface ServicesResponse {
-  window: { start: number; end: number; step: number }; // unix-seconds
-  services: Service[];
+  avatarUrl?: string;
 }
 
-// ---- GET /api/v1/traces ----
-export interface TraceSummary {
-  traceId: string;
-  rootName: string;
-  rootService: string;
-  startTimeUnixMs: number;
-  durationMs: number;
-  spanCount: number;
-  errorCount: number;
-  status: TraceStatus;
-}
-export interface TraceListResponse {
-  traces: TraceSummary[];
-  nextCursor?: string;
-}
-
-// ---- GET /api/v1/traces/{traceId} ----
-export interface Span {
-  spanId: string;
-  parentSpanId: string; // "" => Root
-  name: string;
-  service: string;
-  kind: SpanKind;
-  startOffsetMs: number;
-  durationMs: number;
-  depth: number;
-  status: TraceStatus;
-  statusMessage?: string;
-}
-export interface TraceDetail {
-  traceId: string;
-  startTimeUnixMs: number;
-  durationMs: number;
-  spanCount: number;
-  errorCount: number;
-  services: string[];
-  spans: Span[];
-}
-
-// ---- GET /api/v1/metrics ----
-export interface MetricMeta {
-  name: string;
-  type: 'gauge' | 'sum';
-  unit?: string;
-}
-export interface MetricListResponse {
-  metrics: MetricMeta[];
-}
-export interface MetricSeries {
-  label: string;
-  points: Point[];
-}
-export interface MetricData {
-  name: string;
-  type: 'gauge' | 'sum';
-  unit?: string;
-  window: { start: number; end: number; step: number };
-  series: MetricSeries[];
-}
-
-// ---- GET /api/v1/alerts ----
-export interface Alert {
+/** Org wie sie in /api/me zurückkommt (inkl. Rolle des aktuellen Users). */
+export interface OrgSummary {
   id: string;
   name: string;
-  service: string;
-  metric: 'errorRatio' | 'p95';
-  threshold: number;
-  severity: 'warning' | 'critical';
-  value: number;
-  firing: boolean;
-}
-export interface AlertListResponse {
-  alerts: Alert[];
-  firing: number;
-  total: number;
+  slug: string;
+  role: OrgRole;
+  isPersonal: boolean;
 }
 
-// ---- GET /api/v1/service-map ----
-export interface MapNode {
+export interface Me {
+  user: User;
+  orgs: OrgSummary[];
+  currentOrgId: string;
+}
+
+export type ClusterStatus = 'pending' | 'connected' | 'stale';
+
+export interface Cluster {
+  id: string;
+  orgId?: string;
   name: string;
-  status: HealthStatus;
-  rate: number;
-  errorRatio: number;
-  p95Ms: number;
-  spanCount: number;
+  /** UID des kube-system-Namespace = Cluster-Identität. NULL solange pending. */
+  k8sUid?: string | null;
+  status: ClusterStatus;
+  agentVersion?: string;
+  lastSeenAt?: string | null;
+  /** Anzahl gesyncter Namespaces (falls die Liste sie mitliefert). */
+  namespaceCount?: number;
+  createdAt?: string;
 }
+
+export interface Namespace {
+  id: string;
+  name: string;
+  k8sUid?: string;
+  phase: string;
+  labels?: Record<string, string>;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
+}
+
+/** Antwort von GET /api/orgs/{org}/clusters/{cluster}. */
+export interface ClusterDetail {
+  cluster: Cluster;
+  namespaces: Namespace[];
+}
+
+/** Antwort von POST /api/orgs/{org}/clusters — Klartext-Token genau einmal. */
+export interface ConnectClusterResponse {
+  cluster: Cluster;
+  enrollToken: string;
+  installCommand: string;
+}
+
+/** Antwort von POST …/{cluster}/reconnect — neuer Enroll-Token + Command. */
+export interface ReconnectResponse {
+  cluster?: Cluster;
+  enrollToken: string;
+  installCommand: string;
+}
+
+/* ── Service-Map ───────────────────────────────────────────────────────────── */
+
+export type WorkloadHealth = 'healthy' | 'degraded' | 'critical' | 'unknown';
+
+/** Ein Knoten der Service-Map (ein Workload). */
+export interface MapNode {
+  id: string; // namespace/kind/name
+  namespace: string;
+  name: string;
+  kind: string;
+  health: WorkloadHealth;
+  podsReady: number;
+  podsTotal: number;
+  restarts: number;
+  /** Container-Image (Quelle der Tech-Auto-Erkennung) */
+  image: string;
+  /** manueller Icon-Override (simple-icons slug), '' = auto */
+  icon: string;
+}
+
+/** Eine gerichtete, aggregierte Flow-Kante zwischen zwei Workloads. */
 export interface MapEdge {
-  from: string;
+  from: string; // MapNode.id
   to: string;
-  callCount: number;
-  errorRatio: number;
+  connCount: number;
 }
-export interface ServiceMapResponse {
-  window: { start: number; end: number };
+
+/** Antwort von GET …/clusters/{id}/service-map. */
+export interface ServiceMap {
+  namespaces: string[];
   nodes: MapNode[];
   edges: MapEdge[];
 }
 
-// ---- GET /api/v1/services/{name} ----
-export interface Point {
-  t: number; // unix seconds
+/* ── Logs ──────────────────────────────────────────────────────────────────── */
+
+export interface LogLine {
+  ts: string;
+  namespace: string;
+  workloadName: string;
+  podName: string;
+  containerName: string;
+  stream: string;
+  severityText: string;
+  severityNumber: number;
+  body: string;
+}
+
+export interface LogBucket {
+  ts: string;
+  count: number;
+  errors: number;
+  warns: number;
+}
+
+export interface LogsResponse {
+  lines: LogLine[];
+  histogram: LogBucket[];
+}
+
+export interface LogsParams {
+  since?: string; // Go-Duration ("15m") oder RFC3339
+  until?: string; // RFC3339 (Brush-Fenster)
+  namespace?: string;
+  workload?: string;
+  workloads?: string[];
+  pod?: string;
+  minSeverity?: number;
+  search?: string;
+  limit?: number;
+}
+
+/* ── Traces & RED-Metriken ─────────────────────────────────────────────────── */
+
+export interface TraceRow {
+  ts: string;
+  traceId: string;
+  serviceName: string;
+  spanName: string;
+  durationMs: number;
+  statusCode: string;
+  httpStatus: string;
+  namespace: string;
+  spanCount: number;
+  errorCount: number;
+}
+
+export interface TraceSpan {
+  spanId: string;
+  parentSpanId: string;
+  serviceName: string;
+  spanName: string;
+  kind: string;
+  startUnixNs: number;
+  durationMs: number;
+  statusCode: string;
+  httpStatus: string;
+  namespace: string;
+  attributes: Record<string, string>;
+  resource: Record<string, string>;
+}
+
+export interface SpanStats {
+  count: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  p95: number;
+  p99: number;
+  histogram: number[][]; // [lo, hi, height] in ms
+}
+
+export interface TraceDetail {
+  traceId: string;
+  spans: TraceSpan[];
+}
+
+export interface REDRow {
+  serviceName: string;
+  namespace: string;
+  requests: number;
+  ratePerMin: number;
+  errorRatio: number;
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+}
+
+export interface TracesResponse {
+  traces: TraceRow[];
+  red: REDRow[];
+  histogram: LogBucket[];
+}
+
+/* ── Safe-Actions ─────────────────────────────────────────────────────────── */
+
+export type ActionKind =
+  | 'rollout_restart'
+  | 'rollout_undo'
+  | 'scale'
+  | 'delete_pod'
+  | 'set_image'
+  | 'rollout_pause'
+  | 'rollout_resume'
+  | 'hpa_set'
+  | 'cronjob_trigger'
+  | 'cronjob_suspend'
+  | 'cronjob_resume'
+  | 'cleanup_pods'
+  | 'pod_events'
+  | 'debug_bundle'
+  | 'cordon'
+  | 'uncordon'
+  | 'drain'
+  | 'node_taint'
+  | 'node_untaint'
+  | 'script';
+export type ActionStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+
+export interface ClusterAction {
+  id: string;
+  clusterId: string;
+  requestedBy: string;
+  kind: ActionKind;
+  targetNamespace: string;
+  targetKind: string;
+  targetName: string;
+  params: Record<string, unknown>;
+  status: ActionStatus;
+  result: string;
+  /** Live-Zeile des laufenden Schritts, z.B. "rollout: 1/3 available". */
+  progress: string;
+  /** Ablauf-Schritte (trigger → observe → verify), live vom Agenten. */
+  steps: ActionStep[];
+  /** User hat Abbruch angefordert; Engine rollt zurück → cancelled. */
+  cancelRequested: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ActionStep {
+  name: string;
+  status: 'pending' | 'running' | 'ok' | 'failed';
+  detail: string;
+}
+
+export interface WorkloadPod {
+  namespace: string;
+  name: string;
+  nodeName: string;
+  /** inkl. "Terminating" — der Pod fährt gerade raus. */
+  phase: string;
+  ready: boolean;
+  restarts: number;
+  ip: string;
+  firstSeenAt: string;
+}
+
+/* ── Action-Definitionen (Custom-Workflows, Starlark) ─────────────────────── */
+
+export interface ActionDefParam {
+  name: string;
+  label?: string;
+  description?: string;
+  type?: 'string' | 'int' | 'bool' | 'enum' | 'namespace' | 'workload' | 'node';
+  default?: string;
+  required?: boolean;
+  min?: number;
+  max?: number;
+  options?: string[];
+}
+
+export interface ActionDefinition {
+  id: string;
+  orgId: string;
+  name: string;
+  description: string;
+  params: ActionDefParam[];
+  source: string;
+  timeoutSeconds: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/* ── Infrastruktur (Nodes + PVCs) ─────────────────────────────────────────── */
+
+export interface InfraNode {
+  name: string;
+  role: string;
+  kubeletVersion: string;
+  osImage: string;
+  arch: string;
+  internalIp: string;
+  ready: boolean;
+  /** cordoned — Node nimmt keine neuen Pods an */
+  unschedulable: boolean;
+  /** "", "memory", "disk", "pid" (kommasepariert) */
+  pressure: string;
+  cpuCapacityM: number;
+  cpuAllocatableM: number;
+  memCapacity: number;
+  memAllocatable: number;
+  podCapacity: number;
+  /** -1 = unbekannt (kubelet-Stats nicht erreichbar) */
+  cpuUsageM: number;
+  memUsage: number;
+  fsUsed: number;
+  fsCapacity: number;
+  imageFsUsed: number;
+  podCount: number;
+}
+
+export interface InfraPVC {
+  namespace: string;
+  name: string;
+  phase: string;
+  storageClass: string;
+  accessModes: string[];
+  volumeName: string;
+  requestedBytes: number;
+  capacityBytes: number;
+  /** -1 = unbekannt (nicht gemountet / keine Stats) */
+  usedBytes: number;
+  mountedBy: string[];
+}
+
+export interface InfraResponse {
+  nodes: InfraNode[];
+  pvcs: InfraPVC[];
+}
+
+/* ── Metriken + Alerts ────────────────────────────────────────────────────── */
+
+export interface SeriesPoint {
+  t: number; // Unix ms
   v: number;
 }
-export interface OperationStat {
+export interface MetricSeries {
   name: string;
-  spanCount: number;
-  errorCount: number;
-  errorRatio: number;
-  p95Ms: number;
+  points: SeriesPoint[];
 }
-export interface Dependency {
-  service: string;
-  callCount: number;
-  errorRatio: number;
-  p95Ms: number;
-}
-export interface ServiceDetail {
+
+export type ProviderType = 'webhook' | 'slack' | 'email';
+export interface AlertProvider {
+  id: string;
+  orgId: string;
   name: string;
-  status: HealthStatus;
-  rate: number;
-  errorRatio: number;
-  latencyMs: { p50: number; p95: number; p99: number };
-  spanCount: number;
-  errorCount: number;
-  window: { start: number; end: number; step: number };
-  p95Series: Point[];
-  rateSeries: Point[];
-  errorSeries: Point[];
-  operations: OperationStat[];
-  dependencies: Dependency[];
+  type: ProviderType;
+  config: Record<string, string>;
+  createdAt: string;
 }
 
-// ---- GET /api/v1/logs ----
-export interface LogRecord {
-  timestamp: number; // epoch ms
-  serviceName: string;
-  severity: string; // INFO | WARN | ERROR | DEBUG | ...
-  severityNumber: number; // OTLP 1..24
-  body: string;
-  traceId?: string;
-  spanId?: string;
-  attributes?: Record<string, string>;
-}
-export interface LogListResponse {
-  logs: LogRecord[];
-  nextCursor?: string;
-}
+export type RuleKind =
+  | 'log_errors'
+  | 'trace_error_ratio'
+  | 'trace_p95_ms'
+  | 'node_cpu_pct'
+  | 'node_mem_pct'
+  | 'node_disk_pct'
+  | 'workload_unready'
+  | 'derived'
+  | 'promql';
+export type RuleState = 'ok' | 'pending' | 'firing';
 
-// ---- UI-Domäne (Adapter-Output, an @rocketplane/ui-Tokens gebunden) ----
-export type HealthState = Status; // 'resolved'|'degraded'|'critical'|'unknown'
-
-export interface ServiceHealth {
+export interface AlertRule {
+  id: string;
+  clusterId: string;
   name: string;
-  state: HealthState;
-  p95Ms: number;
-  errorRate: number; // 0..1
-  throughput: number; // req/s
-  spark: number[];
-}
-export interface TraceSpan {
-  name: string;
-  service: string;
-  depth: number;
-  offsetPct: number; // startOffsetMs / trace.durationMs * 100
-  widthPct: number; // durationMs / trace.durationMs * 100
-  durationMs: number;
-  color: string;
-  isError: boolean;
+  kind: RuleKind;
+  params: Record<string, string>;
+  op: 'gt' | 'lt';
+  threshold: number;
+  windowSeconds: number;
+  forSeconds: number;
+  severity: 'warning' | 'critical';
+  providerIds: string[];
+  enabled: boolean;
+  /** PromQL-Bedingung (kind='promql') */
+  query: string;
+  /** Snooze: Benachrichtigungen stumm bis zu diesem Zeitpunkt */
+  mutedUntil: string | null;
+  /** Auto-Remediation: Workflow, der bei firing dispatcht wird */
+  actionDefinitionId: string | null;
+  actionArgs: Record<string, string>;
+  state: RuleState;
+  stateSince: string;
+  lastValue: number;
+  lastEvalAt: string | null;
+  lastError: string;
+  createdAt: string;
 }
 
-// ---- Fehler ----
-export type RpErrorCode =
-  | 'bad_data'
-  | 'not_found'
-  | 'timeout'
-  | 'internal'
-  | 'not_implemented'
-  | 'network';
-
-export interface RpApiError {
-  status: number; // HTTP-Status (0 = kein Response)
-  code: RpErrorCode;
+export interface AlertEvent {
+  id: string;
+  ruleId: string;
+  ruleName: string;
+  at: string;
+  fromState: string;
+  toState: string;
+  value: number;
   message: string;
+}
+
+/** Derived Metric: Logs/Spans → benannte Zeitreihe (Better-Stack-Muster). */
+export interface MetricDefinition {
+  id: string;
+  clusterId: string;
+  name: string;
+  description: string;
+  source: 'logs' | 'spans' | 'promql';
+  namespace: string;
+  workload: string;
+  search: string;
+  valueMode: 'count' | 'regex' | 'duration';
+  pattern: string;
+  agg: 'rate' | 'avg' | 'sum' | 'max' | 'p50' | 'p95' | 'p99';
+  unit: string;
+  /** PromQL-Ausdruck (source='promql') */
+  query: string;
+  createdAt: string;
 }

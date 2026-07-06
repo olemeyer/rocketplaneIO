@@ -14,10 +14,23 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.6",
+    "@dagrejs/dagre": "^3.0.0",
+    "@lezer/highlight": "^1.2.3",
+    "@prometheus-io/codemirror-promql": "^0.313.0",
     "@rocketplane/ui": "workspace:*",
+    "@xyflow/react": "^12.11.1",
+    "codemirror": "^6.0.2",
     "next": "^15.1.6",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "simple-icons": "^16.25.0",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@rocketplane/tsconfig": "workspace:*",
