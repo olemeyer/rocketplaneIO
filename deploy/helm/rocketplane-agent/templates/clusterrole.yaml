@@ -6,7 +6,10 @@ metadata:
   labels:
     {{- include "rocketplane-agent.labels" . | nindent 4 }}
 # Enumerated ClusterRole — every verb the agent holds, nothing more.
-# No cluster-admin, no wildcard, no access to Secrets or ConfigMap contents.
+# No cluster-admin, no wildcard. Secrets: the inventory sync reads METADATA
+# only (type + key count — enforced in agent code, agent/internal/sync/inventory.go);
+# delete the secrets entry below for a zero-secrets-RBAC install — the agent
+# degrades gracefully (that kind is simply skipped).
 #
 # OBSERVE rules (read-only) are always granted — they power topology sync,
 # the service map, triage events and kubelet stats.
@@ -16,6 +19,16 @@ rules:
   # ── OBSERVE (read-only) ──
   - apiGroups: [""]
     resources: ["namespaces", "pods", "services", "nodes", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  # Inventory (Resources page + copilot list_resources). Optional — safe to remove.
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "serviceaccounts", "resourcequotas", "limitranges", "persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["events"]

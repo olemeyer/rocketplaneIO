@@ -33,6 +33,17 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces", "pods", "services", "nodes", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch"]
+  # Inventar (Resources-Seite + list_resources): kompakte Zusammenfassungen —
+  # Secrets werden NUR als Metadaten (Typ/Key-Anzahl) gelesen, nie Daten gepusht.
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "serviceaccounts", "resourcequotas", "limitranges", "persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch"]
   # debug_bundle / pod_events: Events lesen (Triage-Signale)
   - apiGroups: [""]
     resources: ["events"]

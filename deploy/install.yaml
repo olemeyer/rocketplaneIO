@@ -45,6 +45,17 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces", "pods", "services", "nodes", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch"]
+  # Inventory (Resources page + copilot list_resources). Secrets = metadata only
+  # (enforced in agent code); remove any line here and the agent degrades gracefully.
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "serviceaccounts", "resourcequotas", "limitranges", "persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list"]

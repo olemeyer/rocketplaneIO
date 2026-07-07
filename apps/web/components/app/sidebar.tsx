@@ -114,6 +114,25 @@ function ActionsIcon() {
   );
 }
 
+function ResourcesIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3" />
+      <rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3" />
+      <rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3" />
+      <rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  );
+}
+
+function RunsIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path d="M2.5 12.5V9M6 12.5V5.5M9.5 12.5V7.5M13 12.5V3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 // Ein Nav-Eintrag (geteilt zwischen Desktop-Sidebar und Mobile-Drawer). Mobil
 // etwas höher (Touch-Target), Desktop kompakt.
 function NavLink({
@@ -186,9 +205,16 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
       items: [
         { label: 'Nodes', href: `${base}/infrastructure/nodes`, icon: <NodesIcon /> },
         { label: 'Storage', href: `${base}/infrastructure/storage`, icon: <StorageIcon /> },
+        { label: 'Resources', href: `${base}/infrastructure/resources`, icon: <ResourcesIcon /> },
       ],
     },
-    { label: 'Act', items: [{ label: 'Actions', href: `${base}/actions`, icon: <ActionsIcon /> }] },
+    {
+      label: 'Act',
+      items: [
+        { label: 'Actions', href: `${base}/actions`, icon: <ActionsIcon /> },
+        { label: 'Runs', href: `${base}/runs`, icon: <RunsIcon /> },
+      ],
+    },
   ];
   return (
     <>

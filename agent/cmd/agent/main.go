@@ -96,6 +96,13 @@ func main() {
 			log.Printf("logs: %v", err)
 		}
 	}()
+	// K8s-Inventar (Services/Ingress/Config/Batch/… als kompakte Zusammenfassung)
+	// für die Resources-Seite + das list_resources-Tool des Copilots.
+	go func() {
+		if err := syncer.RunInventory(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("inventory: %v", err)
+		}
+	}()
 	// Safe-Actions: dispatch/cancel kommen live über den outbound SSE-Stream
 	// (Fallback: seltener Poll), ausgeführt wird im Cluster — outbound-only.
 	// Nach jeder Aktion Topologie-Burst — die UI sieht den Rollout live.

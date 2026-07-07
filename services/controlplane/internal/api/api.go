@@ -109,10 +109,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/traces/{traceId}", sess(http.HandlerFunc(s.handleTraceDetail)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/span-stats", sess(http.HandlerFunc(s.handleSpanStats)))
 	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/reconnect", sess(http.HandlerFunc(s.handleReconnect)))
+	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/copilot/chat", sess(http.HandlerFunc(s.handleCopilotChat)))
+	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/copilot/action", sess(http.HandlerFunc(s.handleCopilotActionDecision)))
+	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/copilot/chats", sess(http.HandlerFunc(s.handleListCopilotChats)))
+	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/copilot/chats/{chat}", sess(http.HandlerFunc(s.handleGetCopilotChat)))
+	mux.Handle("PUT /api/orgs/{org}/clusters/{cluster}/copilot/chats/{chat}", sess(http.HandlerFunc(s.handleUpsertCopilotChat)))
+	mux.Handle("DELETE /api/orgs/{org}/clusters/{cluster}/copilot/chats/{chat}", sess(http.HandlerFunc(s.handleDeleteCopilotChat)))
 	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/actions", sess(http.HandlerFunc(s.handleCreateAction)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/actions", sess(http.HandlerFunc(s.handleListActions)))
 	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/actions/{action}/cancel", sess(http.HandlerFunc(s.handleCancelAction)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/workload-pods", sess(http.HandlerFunc(s.handleWorkloadPods)))
+	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/inventory", sess(http.HandlerFunc(s.handleListInventory)))
 	mux.Handle("GET /api/orgs/{org}/action-definitions", sess(http.HandlerFunc(s.handleListActionDefs)))
 	mux.Handle("POST /api/orgs/{org}/action-definitions", sess(http.HandlerFunc(s.handleCreateActionDef)))
 	mux.Handle("PUT /api/orgs/{org}/action-definitions/{def}", sess(http.HandlerFunc(s.handleUpdateActionDef)))
@@ -132,6 +139,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/agent/events", agent(http.HandlerFunc(s.handleAgentEvents)))
 	mux.Handle("GET /api/agent/actions", agent(http.HandlerFunc(s.handleAgentActions)))
 	mux.Handle("POST /api/agent/actions/{action}/result", agent(http.HandlerFunc(s.handleAgentActionResult)))
+	mux.Handle("POST /api/agent/inventory", agent(http.HandlerFunc(s.handleAgentInventory)))
 
 	return logRequests(mux)
 }
@@ -184,4 +192,23 @@ func (s *Server) StartBackground(ctx context.Context) {
 		log.Printf("infra metrics schema: %v", err)
 	}
 	go alerts.New(s.store, s.tele, s.broker, s.promql).Run(ctx)
+
+	// Action-Reaper: garantiert, dass Cancel/Runs nie ewig hängen (auch wenn der
+	// Agent tot ist). Läuft leichtgewichtig alle 30s.
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if n, err := s.store.ReapActions(ctx); err != nil {
+					log.Printf("action reaper: %v", err)
+				} else if n > 0 {
+					log.Printf("action reaper: finalized %d stuck action(s)", n)
+				}
+			}
+		}
+	}()
 }
