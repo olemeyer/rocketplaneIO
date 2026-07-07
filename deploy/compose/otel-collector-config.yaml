@@ -42,7 +42,7 @@ service:
       receivers: [otlp]
       processors: [batch]
       exporters: [clickhouse, debug]
-    logs:
-      receivers: [otlp]
-      processors: [batch]
-      exporters: [clickhouse, debug]
+    # KEINE logs-Pipeline: die Control-Plane besitzt otel_logs (eigenes Schema mit
+    # ClusterId + Workload-Spalten) und füllt sie mit den Agent-Container-Logs.
+    # Würde der Collector otel_logs anlegen, gewänne sein Standard-OTel-Schema den
+    # Race und die CP-Log-Query bräche an der fehlenden ClusterId-Spalte.

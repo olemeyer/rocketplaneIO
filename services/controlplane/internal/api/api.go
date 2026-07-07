@@ -191,6 +191,11 @@ func (s *Server) StartBackground(ctx context.Context) {
 	if err := s.tele.EnsureInfraSchema(ctx); err != nil {
 		log.Printf("infra metrics schema: %v", err)
 	}
+	// Container-Logs: die CP besitzt otel_logs (eigenes Schema mit ClusterId +
+	// Workload-Spalten). Der OTel-Collector darf otel_logs NICHT anlegen.
+	if err := s.tele.EnsureLogsSchema(ctx); err != nil {
+		log.Printf("logs schema: %v", err)
+	}
 	go alerts.New(s.store, s.tele, s.broker, s.promql).Run(ctx)
 
 	// Action-Reaper: garantiert, dass Cancel/Runs nie ewig hängen (auch wenn der

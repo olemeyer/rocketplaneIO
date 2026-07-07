@@ -76,6 +76,35 @@ func nanoToCH(ns int64) string {
 	return time.Unix(0, ns).UTC().Format("2006-01-02 15:04:05.000000000")
 }
 
+// EnsureLogsSchema legt otel_logs idempotent mit dem CP-EIGENEN Schema an
+// (ClusterId + Workload-Spalten für Tenancy/Filter). Wichtig: Die CP BESITZT
+// diese Tabelle — der OTel-Collector darf otel_logs NICHT anlegen (kein
+// logs-Pipeline im Collector), sonst gewinnt sein Standard-OTel-Schema den Race
+// und dieser CREATE IF NOT EXISTS ist ein No-Op gegen eine Tabelle ohne ClusterId
+// → Query bricht. Container-Logs kommen vom Agent (role=logs) über /api/agent/logs,
+// nicht über OTLP.
+func (s *Store) EnsureLogsSchema(ctx context.Context) error {
+	ddl := fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s.otel_logs (
+			Timestamp      DateTime64(9) CODEC(Delta, ZSTD(1)),
+			ClusterId      String        CODEC(ZSTD(1)),
+			Namespace      LowCardinality(String),
+			WorkloadKind   LowCardinality(String),
+			WorkloadName   String        CODEC(ZSTD(1)),
+			ServiceName    String        CODEC(ZSTD(1)),
+			PodName        String        CODEC(ZSTD(1)),
+			ContainerName  LowCardinality(String),
+			Stream         LowCardinality(String),
+			SeverityText   LowCardinality(String),
+			SeverityNumber UInt8,
+			Body           String        CODEC(ZSTD(1)),
+			LogAttributes  Map(LowCardinality(String), String)
+		) ENGINE = MergeTree
+		ORDER BY (ClusterId, Namespace, WorkloadName, Timestamp)
+		TTL toDateTime(Timestamp) + INTERVAL 3 DAY`, s.db)
+	return s.exec(ctx, url.Values{"query": {ddl}}, nil)
+}
+
 // InsertLogs schreibt einen Batch als JSONEachRow. ClusterId kommt aus der
 // Agent-Auth — nie vom Client.
 func (s *Store) InsertLogs(ctx context.Context, clusterID uuid.UUID, recs []LogRecord) error {
