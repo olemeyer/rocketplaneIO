@@ -126,10 +126,11 @@ func validateActionParams(w http.ResponseWriter, kind string, raw json.RawMessag
 	case "annotate", "set_label":
 		var p struct {
 			Key    string `json:"key"`
+			Value  string `json:"value"`
 			Remove bool   `json:"remove"`
 		}
-		if err := json.Unmarshal(raw, &p); err != nil || p.Key == "" || len(p.Key) > 253 {
-			writeErr(w, http.StatusBadRequest, kind+" requires params.key (<=253 chars)")
+		if err := json.Unmarshal(raw, &p); err != nil || p.Key == "" || len(p.Key) > 253 || len(p.Value) > 4096 {
+			writeErr(w, http.StatusBadRequest, kind+" requires params.key (<=253 chars, value <=4KiB)")
 			return false
 		}
 	case "patch_configmap":
@@ -143,11 +144,35 @@ func validateActionParams(w http.ResponseWriter, kind string, raw json.RawMessag
 		}
 	case "set_env":
 		var p struct {
-			Name string `json:"name"`
+			Name  string `json:"name"`
+			Value string `json:"value"`
 		}
-		if err := json.Unmarshal(raw, &p); err != nil || p.Name == "" || len(p.Name) > 128 {
-			writeErr(w, http.StatusBadRequest, "set_env requires params.name (<=128 chars)")
+		if err := json.Unmarshal(raw, &p); err != nil || p.Name == "" || len(p.Name) > 128 || len(p.Value) > 8192 {
+			writeErr(w, http.StatusBadRequest, "set_env requires params.name (<=128 chars, value <=8KiB)")
 			return false
+		}
+	case "evict_pod":
+		var p struct {
+			GracePeriodSeconds *int `json:"gracePeriodSeconds"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || (p.GracePeriodSeconds != nil && (*p.GracePeriodSeconds < 0 || *p.GracePeriodSeconds > 3600)) {
+			writeErr(w, http.StatusBadRequest, "evict_pod gracePeriodSeconds must be 0..3600")
+			return false
+		}
+	case "cleanup_jobs":
+		var p struct {
+			States         []string `json:"states"`
+			OlderThanHours *int     `json:"olderThanHours"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || (p.OlderThanHours != nil && *p.OlderThanHours < 0) {
+			writeErr(w, http.StatusBadRequest, "cleanup_jobs olderThanHours must be >= 0")
+			return false
+		}
+		for _, st := range p.States {
+			if st != "Complete" && st != "Failed" {
+				writeErr(w, http.StatusBadRequest, "cleanup_jobs states must be Complete and/or Failed")
+				return false
+			}
 		}
 	case "set_resources":
 		var p struct {
