@@ -69,7 +69,14 @@ func run() error {
 	go func() {
 		mode := "google-oidc"
 		if !cfg.GoogleConfigured() {
-			mode = "dev-login"
+			// Ohne Google: lokales Passwort-Login. Der dev-login-Bypass gilt NUR
+			// unter RP_ENV=dev — sonst würde die Startzeile fälschlich einen
+			// Bypass in Produktion melden.
+			if cfg.IsDev() {
+				mode = "dev-login"
+			} else {
+				mode = "local"
+			}
 		}
 		log.Printf("controlplane listening on %s (env=%s, auth=%s, public=%s)", cfg.Listen, cfg.Env, mode, cfg.PublicURL)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
