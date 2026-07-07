@@ -14,8 +14,9 @@ import {
 } from '@/components/ui';
 import { useMe } from '@/components/app/me-context';
 import { useScope } from '@/components/app/scope-context';
-import { CommandBox } from '@/components/app/copy-box';
+import { InstallPicker } from '@/components/app/copy-box';
 import { installCommandKey } from '@/components/app/connect-cluster';
+import type { InstallCommands } from '@/lib/api/types';
 import { ServiceMapCanvas } from '@/components/servicemap/service-map';
 import { getCluster, reconnectCluster } from '@/lib/api/controlplane';
 import { ApiError } from '@/lib/api/client';
@@ -32,14 +33,21 @@ export default function ClusterPage() {
 
   const [detail, setDetail] = useState<ClusterDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [installCommand, setInstallCommand] = useState<string | null>(null);
+  const [install, setInstall] = useState<{ command: string; commands?: InstallCommands } | null>(null);
   const [regenBusy, setRegenBusy] = useState(false);
   const firstLoad = useRef(true);
 
   useEffect(() => {
     try {
       const stored = sessionStorage.getItem(installCommandKey(clusterId));
-      if (stored) setInstallCommand(stored);
+      if (stored) {
+        try {
+          const p = JSON.parse(stored);
+          setInstall(typeof p === 'string' ? { command: p } : p);
+        } catch {
+          setInstall({ command: stored });
+        }
+      }
     } catch {
       /* ignore */
     }
@@ -77,9 +85,10 @@ export default function ClusterPage() {
     setRegenBusy(true);
     try {
       const res = await reconnectCluster(orgId, clusterId);
-      setInstallCommand(res.installCommand);
+      const next = { command: res.installCommand, commands: res.installCommands };
+      setInstall(next);
       try {
-        sessionStorage.setItem(installCommandKey(clusterId), res.installCommand);
+        sessionStorage.setItem(installCommandKey(clusterId), JSON.stringify(next));
       } catch {
         /* ignore */
       }
@@ -139,7 +148,7 @@ export default function ClusterPage() {
             </div>
           </div>
           <PendingView
-            installCommand={installCommand}
+            install={install}
             onRegenerate={regenerate}
             regenBusy={regenBusy}
           />
@@ -158,11 +167,11 @@ const STEPS = [
 ];
 
 function PendingView({
-  installCommand,
+  install,
   onRegenerate,
   regenBusy,
 }: {
-  installCommand: string | null;
+  install: { command: string; commands?: InstallCommands } | null;
   onRegenerate: () => void;
   regenBusy: boolean;
 }) {
@@ -182,8 +191,8 @@ function PendingView({
             ))}
           </ol>
 
-          {installCommand ? (
-            <CommandBox command={installCommand} />
+          {install ? (
+            <InstallPicker commands={install.commands} fallback={install.command} />
           ) : (
             <div className="rounded-skin border border-line bg-inset px-4 py-6 text-center">
               <p className="font-mono text-[12px] text-muted">

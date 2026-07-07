@@ -123,9 +123,10 @@ func (s *Server) handleCreateCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"cluster":        cluster,
-		"enrollToken":    token,
-		"installCommand": s.installCommand(token, cluster.Name),
+		"cluster":         cluster,
+		"enrollToken":     token,
+		"installCommand":  s.installCommand(token, cluster.Name),
+		"installCommands": s.installCommands(token, cluster.Name),
 	})
 }
 
@@ -180,9 +181,10 @@ func (s *Server) handleReconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"cluster":        cluster,
-		"enrollToken":    token,
-		"installCommand": s.installCommand(token, cluster.Name),
+		"cluster":         cluster,
+		"enrollToken":     token,
+		"installCommand":  s.installCommand(token, cluster.Name),
+		"installCommands": s.installCommands(token, cluster.Name),
 	})
 }
 
@@ -318,22 +320,38 @@ func parseClusterID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	return id, true
 }
 
-// installCommand renders the install command shown in the UI. Both the method
-// (helm vs. kubectl) and every parameter (image, chart, agent-facing URL) come
-// from config, so the SAME UI command works in prod (Helm+ghcr) and locally
-// (kubectl + a manifest this server renders itself + host.minikube.internal).
-func (s *Server) installCommand(token, clusterName string) string {
-	if s.cfg.AgentInstallMethod == "kubectl" {
-		// Ein einziger Befehl: kubectl (auf dem Laptop) holt das fertig gerenderte
-		// Manifest von der Control-Plane (PublicURL, für den Laptop erreichbar) und
-		// wendet es auf den aktuellen kubectl-Context an. Token + Cluster-Name sind
-		// bereits eingesetzt; das Manifest selbst zeigt auf AgentControlPlaneURL.
-		q := url.Values{"token": {token}, "name": {clusterName}}
-		return fmt.Sprintf("kubectl apply -f %q", s.cfg.PublicURL+"/api/agent/manifest?"+q.Encode())
-	}
+// kubectlInstallCommand: ein Befehl — kubectl (auf dem Laptop) holt das fertig
+// gerenderte Manifest von der Control-Plane (PublicURL, für den Laptop
+// erreichbar) und wendet es auf den aktuellen Context an. Token + Cluster-Name
+// sind eingesetzt; das Manifest selbst zeigt auf AgentControlPlaneURL.
+func (s *Server) kubectlInstallCommand(token, clusterName string) string {
+	q := url.Values{"token": {token}, "name": {clusterName}}
+	return fmt.Sprintf("kubectl apply -f %q", s.cfg.PublicURL+"/api/agent/manifest?"+q.Encode())
+}
+
+// helmInstallCommand: der Helm-Weg über das veröffentlichte OCI-Chart.
+func (s *Server) helmInstallCommand(token, clusterName string) string {
 	return fmt.Sprintf(
 		"helm install rocketplane-agent %s "+
 			"--namespace rocketplane --create-namespace "+
 			"--set controlplane.url=%s --set enrollToken=%s --set clusterName=%s",
 		s.cfg.AgentChart, s.cfg.AgentControlPlaneURL, token, clusterName)
+}
+
+// installCommands liefert BEIDE Wege — die UI bietet kubectl (YAML apply) und
+// Helm zur Auswahl an, damit jedes Team seinen bevorzugten Pfad nehmen kann.
+func (s *Server) installCommands(token, clusterName string) map[string]string {
+	return map[string]string{
+		"kubectl": s.kubectlInstallCommand(token, clusterName),
+		"helm":    s.helmInstallCommand(token, clusterName),
+	}
+}
+
+// installCommand ist der konfigurierte Default-Weg (Back-Compat für Clients,
+// die nur einen Befehl erwarten).
+func (s *Server) installCommand(token, clusterName string) string {
+	if s.cfg.AgentInstallMethod == "kubectl" {
+		return s.kubectlInstallCommand(token, clusterName)
+	}
+	return s.helmInstallCommand(token, clusterName)
 }

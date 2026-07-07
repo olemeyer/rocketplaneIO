@@ -8,7 +8,7 @@ import { Button, IconButton, Panel, Spinner } from '@/components/ui';
 import { ApiError } from '@/lib/api/client';
 import { connectCluster } from '@/lib/api/controlplane';
 import type { ConnectClusterResponse } from '@/lib/api/types';
-import { CommandBox } from './copy-box';
+import { InstallPicker } from './copy-box';
 
 // sessionStorage-Key, unter dem der Install-Command für die Detailseite abgelegt
 // wird (Klartext-Token existiert nur einmal → über die Navigation weiterreichen).
@@ -111,7 +111,7 @@ export function ConnectClusterDialog({ orgId, onClose }: { orgId: string; onClos
     try {
       const res = await connectCluster(orgId, value);
       try {
-        sessionStorage.setItem(installCommandKey(res.cluster.id), res.installCommand);
+        sessionStorage.setItem(installCommandKey(res.cluster.id), JSON.stringify({ command: res.installCommand, commands: res.installCommands }));
       } catch {
         /* sessionStorage kann fehlen — Command bleibt im Dialog sichtbar */
       }
@@ -175,7 +175,7 @@ export function ConnectClusterDialog({ orgId, onClose }: { orgId: string; onClos
                 ))}
               </ol>
 
-              <CommandBox command={created.installCommand} />
+              <InstallPicker commands={created.installCommands} fallback={created.installCommand} />
 
               <div className="flex items-center gap-2 rounded-skin border border-line bg-inset px-3 py-2 font-mono text-[11px] text-muted">
                 <Spinner />

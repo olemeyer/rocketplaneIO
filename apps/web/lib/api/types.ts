@@ -57,11 +57,18 @@ export interface ClusterDetail {
   namespaces: Namespace[];
 }
 
+/** Install-Wege für den Agenten — die UI lässt zwischen ihnen wählen. */
+export interface InstallCommands {
+  kubectl: string;
+  helm: string;
+}
+
 /** Antwort von POST /api/orgs/{org}/clusters — Klartext-Token genau einmal. */
 export interface ConnectClusterResponse {
   cluster: Cluster;
   enrollToken: string;
   installCommand: string;
+  installCommands?: InstallCommands;
 }
 
 /** Antwort von POST …/{cluster}/reconnect — neuer Enroll-Token + Command. */
@@ -69,6 +76,7 @@ export interface ReconnectResponse {
   cluster?: Cluster;
   enrollToken: string;
   installCommand: string;
+  installCommands?: InstallCommands;
 }
 
 /* ── Service-Map ───────────────────────────────────────────────────────────── */

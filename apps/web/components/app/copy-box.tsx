@@ -108,3 +108,47 @@ export function CommandBox({
     </div>
   );
 }
+
+// InstallPicker — beide Wege (kubectl/YAML-apply und Helm) mit Tab-Umschalter.
+// Fällt auf `fallback` zurück, wenn ein älteres Backend nur einen Command liefert.
+export function InstallPicker({
+  commands,
+  fallback,
+}: {
+  commands?: { kubectl: string; helm: string };
+  fallback: string;
+}) {
+  const [tab, setTab] = useState<'kubectl' | 'helm'>('kubectl');
+  if (!commands) return <CommandBox command={fallback} />;
+  const active = commands[tab];
+  const TABS: { key: 'kubectl' | 'helm'; label: string; hint: string }[] = [
+    { key: 'kubectl', label: 'kubectl', hint: 'applies a rendered manifest' },
+    { key: 'helm', label: 'Helm', hint: 'installs the published chart' },
+  ];
+  return (
+    <div>
+      <div className="mb-2 flex gap-1">
+        {TABS.map((t) => {
+          const on = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={cn(
+                'rp-focus rounded-skin-sm border px-2.5 py-1 font-mono text-[11px] transition-colors',
+                on ? 'border-line-strong bg-hover text-ink' : 'border-line text-muted hover:text-ink',
+              )}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+        <span className="ml-1 self-center font-mono text-[10px] text-faint">
+          {TABS.find((t) => t.key === tab)!.hint}
+        </span>
+      </div>
+      <CommandBox command={active} caption={tab === 'helm' ? 'Helm install' : 'kubectl apply'} />
+    </div>
+  );
+}
