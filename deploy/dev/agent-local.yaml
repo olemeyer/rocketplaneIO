@@ -30,11 +30,12 @@ kind: ClusterRole
 metadata:
   name: rocketplane-agent
 rules:
+  # ── OBSERVE (read-only) ──
   - apiGroups: [""]
     resources: ["namespaces", "pods", "services", "nodes", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch"]
-  # Inventar (Resources-Seite + list_resources): kompakte Zusammenfassungen —
-  # Secrets werden NUR als Metadaten (Typ/Key-Anzahl) gelesen, nie Daten gepusht.
+  # Inventory (Resources page + copilot list_resources). Secrets = metadata only
+  # (enforced in agent code); remove any line here and the agent degrades gracefully.
   - apiGroups: [""]
     resources: ["configmaps", "secrets", "serviceaccounts", "resourcequotas", "limitranges", "persistentvolumes"]
     verbs: ["get", "list", "watch"]
@@ -44,42 +45,50 @@ rules:
   - apiGroups: ["policy"]
     resources: ["poddisruptionbudgets"]
     verbs: ["get", "list", "watch"]
-  # debug_bundle / pod_events: Events lesen (Triage-Signale)
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs", "jobs"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list"]
-  # kubelet stats/summary via API-Server-Proxy (Hardware-/Volume-Auslastung)
   - apiGroups: [""]
     resources: ["nodes/proxy"]
     verbs: ["get"]
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  # ── ACT (safe actions) ──
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "daemonsets"]
-    verbs: ["get", "list", "watch", "patch"]
-  # Node-Wartung: cordon/drain (patch) + PDB-respektierende Evictions
+    verbs: ["patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete", "patch"]
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["patch"]
   - apiGroups: [""]
     resources: ["pods/eviction"]
     verbs: ["create"]
-  # rollout undo: vorherige Revision aus den ReplicaSets lesen
-  - apiGroups: ["apps"]
-    resources: ["replicasets"]
-    verbs: ["get", "list", "watch"]
-  # hpa_set: HPA-Grenzen (min/max) anpassen
   - apiGroups: ["autoscaling"]
     resources: ["horizontalpodautoscalers"]
-    verbs: ["get", "list", "watch", "patch"]
-  # cronjob_trigger/suspend/resume + manuelle Job-Läufe
+    verbs: ["patch"]
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
-    verbs: ["get", "list", "watch", "patch"]
+    verbs: ["patch"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["create", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps", "namespaces", "services", "persistentvolumeclaims"]
+    verbs: ["patch"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["patch"]
+
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

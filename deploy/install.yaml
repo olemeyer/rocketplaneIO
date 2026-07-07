@@ -41,7 +41,7 @@ metadata:
     app.kubernetes.io/name: rocketplane-agent
     app.kubernetes.io/part-of: rocketplane
 rules:
-  # ── OBSERVE (read-only): topology sync, triage events, kubelet stats ──
+  # ── OBSERVE (read-only) ──
   - apiGroups: [""]
     resources: ["namespaces", "pods", "services", "nodes", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch"]
@@ -56,32 +56,50 @@ rules:
   - apiGroups: ["policy"]
     resources: ["poddisruptionbudgets"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs", "jobs"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list"]
-  # kubelet stats/summary via API-server proxy (node/volume utilization)
   - apiGroups: [""]
     resources: ["nodes/proxy"]
     verbs: ["get"]
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
     verbs: ["get", "list", "watch"]
-  # ── ACT (safe actions): delete this block for an observe-only agent ──
-  # restart/scale/set-image/rollout-undo = patch on workload controllers
+  # ── ACT (safe actions) ──
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "daemonsets"]
     verbs: ["patch"]
-  # delete_pod / cleanup
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["delete"]
-  # cordon/uncordon = patch node; drain = PDB-respecting evictions
+    verbs: ["delete", "patch"]
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["patch"]
   - apiGroups: [""]
     resources: ["pods/eviction"]
     verbs: ["create"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["patch"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["patch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps", "namespaces", "services", "persistentvolumeclaims"]
+    verbs: ["patch"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["patch"]
+
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

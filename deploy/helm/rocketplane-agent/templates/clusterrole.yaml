@@ -11,9 +11,9 @@ metadata:
 # delete the secrets entry below for a zero-secrets-RBAC install — the agent
 # degrades gracefully (that kind is simply skipped).
 #
-# OBSERVE rules (read-only) are always granted — they power topology sync,
-# the service map, triage events and kubelet stats.
-# ACT rules (the write verbs safe actions need) are gated behind
+# OBSERVE rules (read-only) are always granted — topology sync, the service map,
+# the resource inventory, triage events and kubelet stats.
+# ACT rules (the write verbs the safe-action catalog needs) are gated behind
 # `rbac.actions` — set it to false for a strictly observe-only agent.
 rules:
   # ── OBSERVE (read-only) ──
@@ -30,6 +30,13 @@ rules:
   - apiGroups: ["policy"]
     resources: ["poddisruptionbudgets"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs", "jobs"]
+    verbs: ["get", "list", "watch"]
+  # debug_bundle / pod_events: triage events
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list"]
@@ -42,20 +49,38 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- if .Values.rbac.actions }}
   # ── ACT (safe actions) ──
-  # restart/scale/set-image/rollout-undo = patch on workload controllers
+  # scale/restart/set-image/set-env/set-resources/rollout-*/partition = patch controllers
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "daemonsets"]
     verbs: ["patch"]
-  # delete_pod / cleanup
+  # delete_pod / cleanup_pods; annotate a pod = patch
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["delete"]
-  # cordon/uncordon = patch node; drain = PDB-respecting evictions
+    verbs: ["delete", "patch"]
+  # cordon/uncordon/taint/set-label-on-node = patch node; drain = PDB-respecting evictions
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["patch"]
   - apiGroups: [""]
     resources: ["pods/eviction"]
     verbs: ["create"]
+  # hpa_set / hpa_toggle
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["patch"]
+  # cronjob_suspend/resume/trigger + cleanup_jobs
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["patch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "delete"]
+  # patch_configmap; set_label/annotate on namespace; annotate on service/PVC/PDB
+  - apiGroups: [""]
+    resources: ["configmaps", "namespaces", "services", "persistentvolumeclaims"]
+    verbs: ["patch"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["patch"]
   {{- end }}
 {{- end }}
