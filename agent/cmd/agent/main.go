@@ -96,7 +96,8 @@ func main() {
 			log.Printf("logs: %v", err)
 		}
 	}()
-	// Safe-Actions: pending Aktionen pollen und ausführen (outbound-only).
+	// Safe-Actions: dispatch/cancel kommen live über den outbound SSE-Stream
+	// (Fallback: seltener Poll), ausgeführt wird im Cluster — outbound-only.
 	// Nach jeder Aktion Topologie-Burst — die UI sieht den Rollout live.
 	go func() {
 		runner := actions.New(controlplaneURL, resp.AgentToken, clientset, syncer.TriggerTopologySync)

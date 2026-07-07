@@ -60,6 +60,9 @@ func run() error {
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	// SSE-Streams (Browser + Agenten) enden nie von selbst — beim Shutdown
+	// aktiv schließen, sonst wartet Shutdown() vergeblich bis zum Timeout.
+	httpServer.RegisterOnShutdown(server.NotifyShutdown)
 
 	// Serve.
 	errCh := make(chan error, 1)

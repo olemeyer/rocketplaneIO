@@ -6,6 +6,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -28,12 +29,25 @@ type Server struct {
 	tele   *telemetry.Store
 	broker *events.Broker
 	promql *promqlx.Engine
+
+	// shutdownCh beendet alle offenen SSE-Streams (Browser + Agenten) beim
+	// Graceful Shutdown — http.Server.Shutdown wartet auf aktive Requests,
+	// und Streams enden nie von selbst. Ohne dieses Signal hinge jeder
+	// Restart bis zum Shutdown-Timeout (Agenten reconnecten ohnehin).
+	shutdownCh   chan struct{}
+	shutdownOnce sync.Once
 }
 
 // New builds the API server.
 func New(cfg *config.Config, st *store.Store, au *auth.Auth, pool *pgxpool.Pool) *Server {
 	tele := telemetry.NewStore(cfg.ClickHouseURL, cfg.ClickHouseUser, cfg.ClickHousePassword, cfg.ClickHouseDB)
-	return &Server{cfg: cfg, store: st, auth: au, pool: pool, tele: tele, broker: events.NewBroker(), promql: promqlx.New(tele)}
+	return &Server{cfg: cfg, store: st, auth: au, pool: pool, tele: tele, broker: events.NewBroker(), promql: promqlx.New(tele), shutdownCh: make(chan struct{})}
+}
+
+// NotifyShutdown schließt alle offenen SSE-Streams; für
+// http.Server.RegisterOnShutdown (idempotent).
+func (s *Server) NotifyShutdown() {
+	s.shutdownOnce.Do(func() { close(s.shutdownCh) })
 }
 
 // Handler builds the routed http.Handler.
@@ -115,6 +129,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/agent/namespaces", agent(http.HandlerFunc(s.handleNamespaces)))
 	mux.Handle("POST /api/agent/topology", agent(http.HandlerFunc(s.handleTopology)))
 	mux.Handle("POST /api/agent/logs", agent(http.HandlerFunc(s.handleAgentLogs)))
+	mux.Handle("GET /api/agent/events", agent(http.HandlerFunc(s.handleAgentEvents)))
 	mux.Handle("GET /api/agent/actions", agent(http.HandlerFunc(s.handleAgentActions)))
 	mux.Handle("POST /api/agent/actions/{action}/result", agent(http.HandlerFunc(s.handleAgentActionResult)))
 

@@ -1,5 +1,9 @@
-// Package actions pollt Safe-Actions von der Control-Plane und führt sie im
-// Cluster aus (outbound-only: der Agent HOLT Arbeit, niemand ruft hinein).
+// Package actions empfängt Safe-Actions von der Control-Plane und führt sie
+// im Cluster aus (outbound-only: der Agent ÖFFNET alle Verbindungen, niemand
+// ruft hinein). Der Live-Kanal ist ein SSE-Stream (stream.go): dispatch-
+// Signale stoßen den Claim-Fetch an, cancel-Signale brechen laufende Abläufe
+// sofort ab. Ein seltener Fallback-Poll (bzw. der alte 3s-Takt, solange der
+// Stream nicht steht) fängt verlorene Signale ab.
 //
 // Eine Action ist ein ABLAUF, kein Einzelbefehl: eine Step-Kette
 // (trigger → observe → verify), deren Fortschritt der Agent live an die
@@ -16,6 +20,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -25,8 +31,11 @@ import (
 )
 
 const (
-	pollInterval   = 3 * time.Second
-	requestTimeout = 15 * time.Second
+	// pollInterval gilt nur, solange der Event-Stream NICHT steht (Fallback
+	// auf das alte Poll-Verhalten); mit Stream wird selten gegengeprüft.
+	pollInterval       = 3 * time.Second
+	streamFallbackPoll = 60 * time.Second
+	requestTimeout     = 15 * time.Second
 	// monitorTimeout begrenzt den GESAMTEN Ablauf einer Aktion (inkl. Rollout-
 	// Beobachtung) — danach failed mit letztem beobachteten Zustand.
 	monitorTimeout = 3 * time.Minute
@@ -63,16 +72,27 @@ type step struct {
 	run  func(ctx context.Context, report func(detail string)) (string, error)
 }
 
-// Runner pollt und führt aus.
+// Runner empfängt (Stream + Fallback-Poll) und führt aus.
 type Runner struct {
 	baseURL   string
 	token     string
 	clientset kubernetes.Interface
 	http      *http.Client
-	sem       chan struct{}
+	// streamHTTP hat KEIN Client-Timeout — das würde den SSE-Stream nach
+	// requestTimeout kappen; tote Verbindungen erkennt der Watchdog (stream.go).
+	streamHTTP *http.Client
+	sem        chan struct{}
 	// onExecuted feuert nach jedem abgeschlossenen Ablauf UND bei jedem
 	// Zwischenstand (Topologie-Burst — die UI sieht Pods kommen und gehen).
 	onExecuted func()
+
+	// Live-Kanal (stream.go): streamLive streckt den Poll auf den Fallback-
+	// Takt, pollNow stößt sofortige Claim-Fetches an (coalesced), cancels
+	// bricht laufende Abläufe auf ein cancel-Signal hin sofort ab.
+	streamLive atomic.Bool
+	pollNow    chan struct{}
+	cancelMu   sync.Mutex
+	cancels    map[string]func()
 }
 
 func New(baseURL, token string, clientset kubernetes.Interface, onExecuted func()) *Runner {
@@ -81,23 +101,44 @@ func New(baseURL, token string, clientset kubernetes.Interface, onExecuted func(
 		token:      token,
 		clientset:  clientset,
 		http:       &http.Client{Timeout: requestTimeout},
+		streamHTTP: &http.Client{},
 		sem:        make(chan struct{}, maxConcurrent),
 		onExecuted: onExecuted,
+		pollNow:    make(chan struct{}, 1),
+		cancels:    map[string]func(){},
 	}
 }
 
-// Run pollt bis ctx abbricht.
+// Run hält den Event-Stream und claimt bis ctx abbricht: sofort auf jedes
+// dispatch-Signal, dazu ein Sicherheitsnetz-Poll (selten bei stehendem
+// Stream, alter 3s-Takt ohne).
 func (r *Runner) Run(ctx context.Context) error {
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
-	log.Printf("actions: runner started (poll %s, monitor timeout %s)", pollInterval, monitorTimeout)
+	log.Printf("actions: runner started (stream + fallback poll %s/%s, monitor timeout %s)",
+		streamFallbackPoll, pollInterval, monitorTimeout)
+	go r.streamLoop(ctx)
+
+	timer := time.NewTimer(pollInterval)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
-			r.poll(ctx)
+		case <-r.pollNow:
+		case <-timer.C:
 		}
+		r.poll(ctx)
+
+		next := pollInterval
+		if r.streamLive.Load() {
+			next = streamFallbackPoll
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(next)
 	}
 }
 
@@ -146,10 +187,19 @@ func (r *Runner) execute(ctx context.Context, a Action) {
 	ctx, cancelFn := context.WithTimeout(ctx, monitorTimeout)
 	defer cancelFn()
 
-	// Cancel-Signal kommt als Antwort auf Progress-Reports zurück; das
-	// Kompensations-Wissen wird VOR der Mutation gesnapshottet (prevReplicas,
-	// Vorher-Image, HPA-Grenzen …) — prepareUndo kennt je Kind das Gegenteil.
-	cancelled := false
+	// Cancel kommt auf zwei Wegen: SOFORT als SSE-Signal (Cancel-Registry,
+	// andere Goroutine — daher atomic) oder als Antwort auf Progress-Reports
+	// (Fallback ohne Stream). Das Kompensations-Wissen wird VOR der Mutation
+	// gesnapshottet (prevReplicas, Vorher-Image, HPA-Grenzen …) — prepareUndo
+	// kennt je Kind das Gegenteil.
+	var cancelled atomic.Bool
+	requestCancel := func() {
+		if cancelled.CompareAndSwap(false, true) {
+			cancelFn() // laufende Observer brechen ab
+		}
+	}
+	r.registerCancel(a.ID, requestCancel)
+	defer r.unregisterCancel(a.ID)
 	undoDesc, undoFn := r.prepareUndo(ctx, a)
 
 	steps := r.plan(a)
@@ -164,9 +214,8 @@ func (r *Runner) execute(ctx context.Context, a Action) {
 			return
 		}
 		lastSent = time.Now()
-		if r.report(ctx, a.ID, "running", "", progress, states) && !cancelled {
-			cancelled = true
-			cancelFn() // laufende Observer brechen ab
+		if r.report(ctx, a.ID, "running", "", progress, states) {
+			requestCancel()
 		}
 		if r.onExecuted != nil {
 			r.onExecuted() // Topologie-Burst: die UI sieht Pods kommen/gehen
@@ -205,7 +254,7 @@ func (r *Runner) execute(ctx context.Context, a Action) {
 
 	var finalResult string
 	for i, s := range steps {
-		if cancelled {
+		if cancelled.Load() {
 			rollback("cancelled by user")
 			return
 		}
@@ -216,7 +265,7 @@ func (r *Runner) execute(ctx context.Context, a Action) {
 			push(fmt.Sprintf("%s: %s", s.name, d), false)
 		})
 		if err != nil {
-			if cancelled {
+			if cancelled.Load() {
 				states[i].Status = "failed"
 				states[i].Detail = "cancelled"
 				rollback("cancelled by user")
@@ -242,7 +291,7 @@ func (r *Runner) execute(ctx context.Context, a Action) {
 		finalResult = states[i].Detail
 		push(s.name+" ✓", true)
 	}
-	if cancelled {
+	if cancelled.Load() {
 		rollback("cancelled by user")
 		return
 	}

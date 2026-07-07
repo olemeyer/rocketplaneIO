@@ -6,13 +6,20 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/auth"
+	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/events"
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/store"
 )
 
-// events_handlers.go — der SSE-Stream je Cluster: ersetzt das Browser-Polling
-// durch Invalidation-Signale (topology/actions/logs/namespaces). Der Client
-// refetcht auf ein Signal hin gezielt seine Query; ein Heartbeat-Kommentar
-// alle 25s hält Proxies/LBs auf der Leitung.
+// events_handlers.go — die SSE-Streams je Cluster: ersetzen Polling durch
+// Invalidation-Signale. Zwei Consumer, ein Broker:
+//   Browser (Session): topology/actions/logs/namespaces/alerts → Query-Refetch.
+//   Agent   (Bearer):  dispatch (pending claimen) + cancel (laufenden Ablauf
+//                      sofort abbrechen) — der outbound-only-Rückkanal in
+//                      Push-Latenz statt Poll-Intervall.
+// Ein Heartbeat-Kommentar alle 25s hält Proxies/LBs auf der Leitung.
 
 func (s *Server) handleClusterEvents(w http.ResponseWriter, r *http.Request) {
 	orgID, ok := s.resolveOrg(w, r)
@@ -32,6 +39,24 @@ func (s *Server) handleClusterEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.streamEvents(w, r, clusterID, nil)
+}
+
+// handleAgentEvents — GET /api/agent/events (Bearer): der Live-Kanal zum
+// Agenten. Er bekommt NUR agent-relevante Signale (dispatch/cancel) — die
+// UI-Topics würden bei jedem eigenen Push/Report sinnlos zurückschallen.
+func (s *Server) handleAgentEvents(w http.ResponseWriter, r *http.Request) {
+	clusterID, ok := auth.ClusterIDFrom(r.Context())
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "no cluster in context")
+		return
+	}
+	s.streamEvents(w, r, clusterID, map[string]bool{"dispatch": true, "cancel": true})
+}
+
+// streamEvents fährt einen SSE-Stream über den Broker; only != nil filtert
+// auf die genannten Event-Typen.
+func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, clusterID uuid.UUID, only map[string]bool) {
 	flusher, okF := w.(http.Flusher)
 	if !okF {
 		writeErr(w, http.StatusInternalServerError, "streaming unsupported")
@@ -58,12 +83,27 @@ func (s *Server) handleClusterEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-s.shutdownCh:
+			// Graceful Shutdown: Streams sofort beenden, sonst hängt
+			// http.Server.Shutdown bis zum Timeout (Clients reconnecten).
+			return
 		case <-heartbeat.C:
 			fmt.Fprintf(w, ": ping\n\n")
 			flusher.Flush()
 		case ev := <-ch:
-			fmt.Fprintf(w, "event: %s\ndata: {}\n\n", ev.Type)
+			if only != nil && !only[ev.Type] {
+				continue
+			}
+			writeEvent(w, ev)
 			flusher.Flush()
 		}
 	}
+}
+
+func writeEvent(w http.ResponseWriter, ev events.Event) {
+	data := ev.Data
+	if data == "" {
+		data = "{}"
+	}
+	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, data)
 }

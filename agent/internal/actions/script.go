@@ -37,6 +37,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.starlark.net/starlark"
@@ -90,23 +92,37 @@ func (r *Runner) executeScript(ctx context.Context, a Action) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cancelled := false
+	// Cancel kommt auf zwei Wegen: SOFORT als SSE-Signal (Cancel-Registry,
+	// andere Goroutine) oder als Antwort auf Progress-Reports (Fallback).
+	// threadMu schützt den activeThread-Pointer; Thread.Cancel selbst ist
+	// goroutine-sicher.
+	var cancelled atomic.Bool
+	var threadMu sync.Mutex
+	var activeThread *starlark.Thread
+	requestCancel := func() {
+		if cancelled.CompareAndSwap(false, true) {
+			threadMu.Lock()
+			if activeThread != nil {
+				activeThread.Cancel("cancelled by user")
+			}
+			threadMu.Unlock()
+			cancel()
+		}
+	}
+	r.registerCancel(a.ID, requestCancel)
+	defer r.unregisterCancel(a.ID)
+
 	undoStack := []undoEntry{}
 
 	states := []stepState{}
 	lastSent := time.Time{}
-	var activeThread *starlark.Thread
 	push := func(progress string, force bool) {
 		if !force && time.Since(lastSent) < progressMinGap {
 			return
 		}
 		lastSent = time.Now()
-		if r.report(ctx, a.ID, "running", "", progress, states) && !cancelled {
-			cancelled = true
-			if activeThread != nil {
-				activeThread.Cancel("cancelled by user")
-			}
-			cancel()
+		if r.report(ctx, a.ID, "running", "", progress, states) {
+			requestCancel()
 		}
 		if r.onExecuted != nil {
 			r.onExecuted()
@@ -565,14 +581,21 @@ func (r *Runner) executeScript(ctx context.Context, a Action) {
 
 	thread := &starlark.Thread{Name: "action:" + a.TargetName}
 	thread.SetMaxExecutionSteps(maxExecutionSteps)
+	threadMu.Lock()
 	activeThread = thread
+	threadMu.Unlock()
+	// Cancel kam evtl. schon, BEVOR der Thread stand — dann sofort abbrechen,
+	// statt das Script erst loslaufen zu lassen.
+	if cancelled.Load() {
+		thread.Cancel("cancelled by user")
+	}
 	push("starting workflow…", true)
 	_, err := starlark.ExecFileOptions(scriptFileOptions(), thread, a.TargetName+".star", p.Source, globals)
 	if err != nil {
 		// Cancel/Timeout → AUTOMATISCHER ROLLBACK des Undo-Stacks (LIFO).
-		if cancelled || ctx.Err() != nil {
+		if cancelled.Load() || ctx.Err() != nil {
 			reason := "cancelled by user"
-			if !cancelled {
+			if !cancelled.Load() {
 				reason = "timeout after " + timeout.String()
 			}
 			if cur >= 0 && states[cur].Status == "running" {

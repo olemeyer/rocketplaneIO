@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -210,6 +211,8 @@ func (s *Server) handleCreateAction(w http.ResponseWriter, r *http.Request) {
 	}
 	a.RequestedBy = user.Email
 	s.broker.Publish(clusterID, "actions", 0)
+	// dispatch weckt den Agent-Stream: claimen in Push-Latenz statt Poll-Takt.
+	s.broker.Publish(clusterID, "dispatch", 0)
 	writeJSON(w, http.StatusCreated, a)
 }
 
@@ -260,7 +263,8 @@ func (s *Server) handleWorkloadPods(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"pods": pods})
 }
 
-// handleAgentActions — GET /api/agent/actions (Agent-Poll; claimt pending → running).
+// handleAgentActions — GET /api/agent/actions (claimt pending → running; der
+// Agent ruft das auf ein dispatch-Signal hin auf, plus seltener Fallback-Poll).
 func (s *Server) handleAgentActions(w http.ResponseWriter, r *http.Request) {
 	clusterID, ok := auth.ClusterIDFrom(r.Context())
 	if !ok {
@@ -361,5 +365,11 @@ func (s *Server) handleCancelAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.broker.Publish(clusterID, "actions", 0)
+	if status == "running" {
+		// Der Agent führt bereits aus → cancel-Event mit actionId, damit der
+		// Rollback SOFORT startet (der Progress-Report-Rückkanal bleibt als
+		// Fallback, falls der Stream gerade nicht steht).
+		s.broker.PublishData(clusterID, "cancel", fmt.Sprintf(`{"actionId":%q}`, actionID))
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": status})
 }
