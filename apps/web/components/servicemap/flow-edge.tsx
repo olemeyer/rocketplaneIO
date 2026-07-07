@@ -40,9 +40,30 @@ function railWidth(weight: number): number {
   return 1.2 + Math.min(1, Math.max(0, weight)) * 1.8;
 }
 
-// Partikelanzahl: 1 … 4 (nur Liveness-Textur, bewusst zurückhaltend).
-function particleCount(weight: number): number {
-  return Math.round(1 + Math.min(1, Math.max(0, weight)) * 3);
+// ── Partikel-Flussrate: 1 Request = 1 Partikel-Durchlauf ──
+// Die Frequenz spiegelt die ECHTE Rate der Kante, beidseitig gecappt: unten,
+// damit eine lebende Kante nie tot wirkt (alle ~7s ein Partikel), oben, damit
+// High-Traffic-Kanten kein Partikel-Sturm werden (Dichte-Cap ≈ MAX_PARTICLES
+// gleichzeitig). Die TRANSIT-Zeit bleibt konstant — Geschwindigkeit kodiert
+// weiterhin nichts, nur die Frequenz spricht.
+const TRANSIT_S = 2.2; // Sekunden über die Kante (konstant)
+const MIN_PPS = 0.15; // Liveness-Boden
+const MAX_PPS = 3; // Cap — mehr Requests/s werden nicht mehr einzeln gezeigt
+const MAX_PARTICLES = 7;
+
+// particleRate leitet die Partikel/Sekunde aus der ehrlichsten Mengen-Metrik
+// der Kante ab: req/s bei Trace-Kanten; bei L4-Kanten gibt es keine Requests —
+// dort dient das Volumen (Bytes bzw. conns) als grobe Aktivitäts-Textur.
+function particleRate(d: FlowEdgeData): number {
+  let rate: number;
+  if (d.edgeSource === 'trace') {
+    rate = d.reqRate ?? Math.max(d.connCount, 1) / 60; // Trace-Graph: calls als schwacher Proxy
+  } else if (d.edgeSource === 'flow') {
+    rate = (d.bytesRate ?? 0) / 1024; // 1 Partikel je KiB/s — reine Textur
+  } else {
+    rate = d.connCount / 10;
+  }
+  return Math.min(MAX_PPS, Math.max(MIN_PPS, rate));
 }
 
 function fmtRate(v: number): string {
@@ -95,11 +116,16 @@ function FlowEdgeImpl({
   const railOpacity = d.dimmed ? 0.08 : d.focused || hovered ? 0.7 : 0.5;
   const railW = railWidth(d.weight);
 
-  // ── FLOW (Liveness-Textur) — live-only, nicht im frozen/dimmed-Zustand ──
+  // ── FLOW (Fluss-Textur) — live-only, nicht im frozen/dimmed-Zustand ──
+  // Frequenz = echte Rate (gecappt). n Slots im Abstand 1/pps; cycle streckt
+  // sich bei seltenen Requests über die Transit-Zeit hinaus — der Partikel
+  // parkt die Totzeit UNSICHTBAR unter dem Ziel-Node (keyPoints 0;1;1), statt
+  // künstlich langsamer zu fliegen (Speed bleibt konstant, kodiert nichts).
   const showParticles = !d.dimmed && !d.frozen;
-  const baseN = particleCount(d.weight);
-  const n = d.focused ? baseN + 2 : baseN;
-  const dur = 2.2; // konstant — kodiert NICHTS
+  const pps = particleRate(d);
+  const n = Math.max(1, Math.min(MAX_PARTICLES, Math.round(pps * TRANSIT_S)));
+  const cycle = Math.max(TRANSIT_S, n / pps);
+  const travelFrac = Math.min(1, TRANSIT_S / cycle);
   const errN = Math.round(n * Math.min(1, Math.max(0, d.errorRatio ?? 0)));
   const dotColor = d.focused ? 'var(--rp-accent)' : 'var(--rp-map-particle)';
   const dotOpacity = d.focused ? 0.95 : 0.6;
@@ -145,11 +171,11 @@ function FlowEdgeImpl({
             return (
               <circle key={i} r={r} fill={isErr ? 'var(--rp-red)' : dotColor} opacity={dotOpacity}>
                 <animateMotion
-                  dur={`${dur}s`}
-                  begin={`${(i * dur) / n}s`}
+                  dur={`${cycle.toFixed(2)}s`}
+                  begin={`${(i / pps).toFixed(2)}s`}
                   repeatCount="indefinite"
-                  keyPoints="0;1"
-                  keyTimes="0;1"
+                  keyPoints={travelFrac >= 0.999 ? '0;1' : '0;1;1'}
+                  keyTimes={travelFrac >= 0.999 ? '0;1' : `0;${travelFrac.toFixed(3)};1`}
                   calcMode="linear"
                 >
                   <mpath href={`#${pid}`} />

@@ -106,12 +106,16 @@ function computeMetrics(map: ServiceMap): Metrics {
   return m;
 }
 
-// Layout: verbundene Komponente als gerichtetes Flow-Layout (dagre LR), isolierte
-// Workloads (kein Traffic) als kompaktes Grid daneben. Node-Zellen tragen die
-// individuelle Squircle-Größe + Platz für den Namen.
+// Layout: verbundene Komponente als gerichtetes Flow-Layout (dagre LR) — die
+// Kanten tragen ihr Traffic-Gewicht, damit dagre die HAUPT-Pfade begradigt und
+// Nebenpfade drumherum legt (die Map liest sich dann entlang des Flusses).
+// Isolierte Workloads (kein Traffic) kommen als Grid DARUNTER: der Flow läuft
+// links→rechts, ein Block links davor würde wie sein Anfang wirken. Node-Zellen
+// tragen die individuelle Squircle-Größe + Platz für den Namen.
 function layout(map: ServiceMap, metrics: Metrics): Record<string, Pos> {
   const pos: Record<string, Pos> = {};
   const sizeOf = (id: string) => metrics.get(id)?.size ?? nodeSize(0);
+  const weights = edgeWeights(map);
 
   const degree = new Map<string, number>();
   for (const e of map.edges) {
@@ -124,20 +128,26 @@ function layout(map: ServiceMap, metrics: Metrics): Record<string, Pos> {
 
   let minX = 0;
   let minY = 0;
-  let connH = 0;
+  let maxY = 0;
+  let connW = 0;
   if (connected.length) {
     const g = new dagre.graphlib.Graph();
     g.setDefaultEdgeLabel(() => ({}));
-    g.setGraph({ rankdir: 'LR', nodesep: 26, ranksep: 120, marginx: 20, marginy: 20 });
+    g.setGraph({ rankdir: 'LR', nodesep: 34, ranksep: 140, edgesep: 18, marginx: 20, marginy: 20 });
     for (const n of connected) {
       const s = sizeOf(n.id);
       g.setNode(n.id, { width: s, height: s + NAME_H });
     }
-    for (const e of map.edges) if (e.from !== e.to) g.setEdge(e.from, e.to);
+    for (const e of map.edges) {
+      if (e.from === e.to) continue;
+      // dagre-weight 1..5: schwere Kanten werden kurz + gerade gehalten.
+      g.setEdge(e.from, e.to, { weight: 1 + Math.round((weights.get(e) ?? 0) * 4) });
+    }
     dagre.layout(g);
     minX = Infinity;
     minY = Infinity;
-    let maxY = -Infinity;
+    maxY = -Infinity;
+    let maxX = -Infinity;
     for (const n of connected) {
       const s = sizeOf(n.id);
       const gn = g.node(n.id);
@@ -145,9 +155,10 @@ function layout(map: ServiceMap, metrics: Metrics): Record<string, Pos> {
       pos[n.id] = p;
       minX = Math.min(minX, p.x);
       minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x + p.w);
       maxY = Math.max(maxY, p.y + p.h);
     }
-    connH = maxY - minY;
+    connW = maxX - minX;
   }
 
   if (isolated.length) {
@@ -155,13 +166,11 @@ function layout(map: ServiceMap, metrics: Metrics): Record<string, Pos> {
     // die Namen benachbarter Spalten.
     const cell = 156;
     const cellH = nodeSize(0) + NAME_H + 26;
-    const targetRows = connH > 0 ? Math.max(2, Math.round(connH / cellH)) : 4;
-    const rows = Math.min(isolated.length, targetRows);
-    const cols = Math.ceil(isolated.length / rows);
-    const gridW = cols * cell;
-    const gridH = Math.ceil(isolated.length / cols) * cellH;
-    const startX = (connected.length ? minX : 0) - gridW - 90;
-    const startY = connected.length ? minY + (connH - gridH) / 2 : 0;
+    // Grid-Breite an der Flow-Breite ausrichten — ein Sockel unter der Map,
+    // kein zweiter Turm daneben.
+    const cols = Math.max(4, Math.min(isolated.length, Math.floor(Math.max(connW, cell * 4) / cell)));
+    const startX = connected.length ? minX : 0;
+    const startY = connected.length ? maxY + 72 : 0;
     isolated.forEach((n, i) => {
       const s = sizeOf(n.id);
       const col = i % cols;
@@ -250,6 +259,7 @@ function buildGraph(
   selected: string | null,
   context: Set<string>,
   nodeActions: Map<string, WorkloadNodeData['action']>,
+  dragPos: Map<string, { x: number; y: number }>,
 ): { nodes: Node[]; edges: Edge[] } {
   const weights = edgeWeights(map);
 
@@ -265,12 +275,13 @@ function buildGraph(
   const nodes: Node[] = map.nodes.map((n: MapNode) => {
     const mm = metrics.get(n.id);
     const p = pos[n.id];
+    const dragged = dragPos.get(n.id);
     // Ohne Selektion dimmt der Namespace-Kontext; mit Selektion übersteuert diese.
     const dimmed = selected ? !neighbors.has(n.id) : context.has(n.id);
     return {
       id: n.id,
       type: 'workload',
-      position: { x: p?.x ?? 0, y: p?.y ?? 0 },
+      position: dragged ?? { x: p?.x ?? 0, y: p?.y ?? 0 },
       // RF-natives selected-Flag mitschreiben — sonst löscht jeder Rebuild die
       // Selektion und der Passer verschwindet.
       selected: selected === n.id,
@@ -387,6 +398,14 @@ function MapInner({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const posRef = useRef<{ sig: string; pos: Record<string, Pos> }>({ sig: '', pos: {} });
   const renderSigRef = useRef('');
+  // Von Hand gezogene Nodes bleiben, wo der Mensch sie hingelegt hat: die
+  // Overrides übersteuern das berechnete Layout bei JEDEM Background-Rebuild
+  // (Poll/SSE/Action-Tick), bis „re-layout" sie explizit verwirft. Während
+  // eines aktiven Drags wird gar nicht gefüttert — sonst springt der Node
+  // unter dem Cursor zurück.
+  const dragPos = useRef(new Map<string, { x: number; y: number }>());
+  const draggingRef = useRef(false);
+  const [layoutGen, setLayoutGen] = useState(0); // re-layout: erzwingt Neuaufbau
 
   const lastMapJson = useRef('');
   const load = useCallback(async () => {
@@ -468,13 +487,21 @@ function MapInner({
 
   useEffect(() => {
     if (!scoped) return;
-    const sig = (namespace ?? '*') + '|' + topoSig(scoped);
+    // Während eines aktiven Drags NIE füttern — setNodes würde den Node unter
+    // dem Cursor auf die Layout-Position zurückreißen.
+    if (draggingRef.current) return;
+    const sig = (namespace ?? '*') + '|' + layoutGen + '|' + topoSig(scoped);
     const metrics = computeMetrics(scoped);
     if (sig !== posRef.current.sig) {
       posRef.current = { sig, pos: layout(scoped, metrics) };
+      // Overrides verschwundener Nodes aufräumen — bestehende bleiben, wo der
+      // Mensch sie hingelegt hat, auch wenn die Topologie sich ändert.
+      for (const id of dragPos.current.keys()) {
+        if (!(id in posRef.current.pos)) dragPos.current.delete(id);
+      }
     }
     const nodeActions = actionsByNode(actions, scoped.nodes);
-    const built = buildGraph(scoped, posRef.current.pos, metrics, selected, context, nodeActions);
+    const built = buildGraph(scoped, posRef.current.pos, metrics, selected, context, nodeActions, dragPos.current);
     // Anti-Blink: React Flow nur füttern, wenn sich sichtbare Daten geändert
     // haben — sonst remounten die SVG-Kanten und ihre Animationen springen.
     const renderSig = JSON.stringify({
@@ -487,7 +514,7 @@ function MapInner({
       setEdges(built.edges);
     }
     // tick lässt abgelaufene Ergebnis-Ringe (linger) auch ohne neue Daten altern
-  }, [scoped, context, namespace, selected, actions, tick, setNodes, setEdges]);
+  }, [scoped, context, namespace, selected, actions, tick, layoutGen, setNodes, setEdges]);
 
   // Fit je Topologie — GENAU EINMAL pro Signatur. Retry über `nodes` (bis sig +
   // Messung bereit sind), aber die Signatur wird SOFORT geclaimt und der Fit läuft
@@ -582,6 +609,20 @@ function MapInner({
           <span className="font-mono text-[10px] text-muted tnum">
             {nodeCount} workloads · {edgeCount} flows · {nsCount} namespaces
           </span>
+          <span className="h-3 w-px" style={{ background: 'var(--rp-map-edge)' }} />
+          {/* verwirft manuelle Drag-Positionen und berechnet das Layout neu */}
+          <button
+            type="button"
+            className="rp-focus rp-micro !text-[10px] !text-muted transition-colors hover:!text-ink"
+            onClick={() => {
+              dragPos.current.clear();
+              fittedSig.current = '';
+              setLayoutGen((g) => g + 1);
+            }}
+            title="Recompute the layout (discards manually moved nodes)"
+          >
+            re-layout
+          </button>
         </div>
 
         <div
@@ -660,6 +701,13 @@ function MapInner({
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           onNodeClick={onNodeClick}
+          onNodeDragStart={() => {
+            draggingRef.current = true;
+          }}
+          onNodeDragStop={(_, node) => {
+            draggingRef.current = false;
+            dragPos.current.set(node.id, { x: node.position.x, y: node.position.y });
+          }}
           onPaneClick={() => setSelected(null)}
           minZoom={0.1}
           maxZoom={2}
