@@ -152,19 +152,25 @@ type MapEdge struct {
 	P95Ms    float64 `json:"p95Ms,omitempty"`    // p95-Latenz in ms
 }
 
-// RawTraceEdge ist eine aus Beyla-CLIENT-Spans aggregierte, NOCH NICHT auf
-// Workloads aufgelöste Kante: der Client-Workload ist sauber (ResourceAttributes),
-// das Ziel ist nur eine server.address (k8s-Service-Name oder IP). Die Auflösung
-// auf einen Map-Knoten passiert gegen die Cluster-Topologie (store.ResolveTraceEdges).
+// RawTraceEdge ist eine aus Beyla-Spans aggregierte, NOCH NICHT auf Workloads
+// aufgelöste Kante. Eine Seite ist sauber bekannt (der berichtende Workload aus
+// ResourceAttributes), die andere ist nur eine Adresse (server.address bei
+// Client-Spans, client.address bei Server-Spans) und wird gegen die Topologie
+// aufgelöst (store.ResolveTraceEdges).
 type RawTraceEdge struct {
-	ClientNs   string
-	ClientName string
-	ServerAddr string
-	ServerPort string
-	Protocol   string
-	Reqs       int64
-	Errs       int64
-	P95Ms      float64
+	// KnownNs/KnownName: die saubere Workload-Seite (der Span-berichtende Prozess).
+	KnownNs   string
+	KnownName string
+	// Peer: die noch aufzulösende Gegenseite — Service-Name, FQDN, IP oder (auf
+	// kube-proxy) ein Node-Name; Letzteres löst auf nichts auf und fällt weg.
+	Peer string
+	// KnownIsClient: true → Kante Known→Peer (aus einem CLIENT-Span); false →
+	// Peer→Known (aus einem SERVER-Span, die Gegenseite ist der Aufrufer).
+	KnownIsClient bool
+	Protocol      string
+	Reqs          int64
+	Errs          int64
+	P95Ms         float64
 }
 
 // ServiceMap ist die Antwort von GET …/clusters/{id}/service-map.

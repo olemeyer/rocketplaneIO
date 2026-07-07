@@ -36,13 +36,19 @@ func TestResolveTraceEdgesLive(t *testing.T) {
 	defer pool.Close()
 	st := New(pool)
 
-	// Rohkanten wie Beyla sie real liefert (server.address = Service-Name, ohne Port).
+	// Rohkanten wie Beyla sie real liefert (Peer = Service-Name/IP, ohne Port).
 	raw := []model.RawTraceEdge{
-		{ClientNs: "rocketplane", ClientName: "controlplane", ServerAddr: "clickhouse", Protocol: "http", Reqs: 30, Errs: 0, P95Ms: 12},
-		{ClientNs: "rocketplane", ClientName: "controlplane", ServerAddr: "postgres", Protocol: "postgresql", Reqs: 60, Errs: 3, P95Ms: 4},
-		{ClientNs: "modelstudio", ClientName: "modelstudio", ServerAddr: "postgres-rw", Protocol: "postgresql", Reqs: 10, Errs: 0, P95Ms: 5}, // Suffix -rw → Cluster/postgres
-		{ClientNs: "kube-system", ClientName: "coredns", ServerAddr: "100.64.0.1", Protocol: "http", Reqs: 8, Errs: 0, P95Ms: 26},           // apiserver-IP → nicht auflösbar → drop
-		{ClientNs: "modelstudio", ClientName: "postgres", ServerAddr: "postgres-rw", Protocol: "postgresql", Reqs: 4, Errs: 0, P95Ms: 3},    // Self-Edge → drop
+		// CLIENT-Spans: KnownName=Aufrufer, Peer=server.address.
+		{KnownNs: "rocketplane", KnownName: "controlplane", Peer: "clickhouse", KnownIsClient: true, Protocol: "http", Reqs: 30, Errs: 0, P95Ms: 12},
+		{KnownNs: "rocketplane", KnownName: "controlplane", Peer: "postgres", KnownIsClient: true, Protocol: "postgresql", Reqs: 60, Errs: 3, P95Ms: 4},
+		{KnownNs: "modelstudio", KnownName: "modelstudio", Peer: "postgres-rw", KnownIsClient: true, Protocol: "postgresql", Reqs: 10, Errs: 0, P95Ms: 5}, // Suffix -rw → Cluster/postgres
+		{KnownNs: "kube-system", KnownName: "coredns", Peer: "100.64.0.1", KnownIsClient: true, Protocol: "http", Reqs: 8, Errs: 0, P95Ms: 26},           // apiserver-IP → nicht auflösbar → drop
+		{KnownNs: "modelstudio", KnownName: "postgres", Peer: "postgres-rw", KnownIsClient: true, Protocol: "postgresql", Reqs: 4, Errs: 0, P95Ms: 3},    // Self-Edge → drop
+		// SERVER-Span mit Node-Name-Aufrufer (kube-proxy-SNAT) → Peer nicht auflösbar → drop.
+		{KnownNs: "rocketplane", KnownName: "controlplane", Peer: "default-c4ike2bvcc", KnownIsClient: false, Protocol: "http", Reqs: 5, Errs: 0, P95Ms: 9},
+		// SERVER-Span, dessen Client-Sicht schon existiert (controlplane→clickhouse):
+		// darf NICHT doppelt zählen (Pass-2 überspringt bekannte Paare).
+		{KnownNs: "rocketplane", KnownName: "clickhouse", Peer: "controlplane", KnownIsClient: false, Protocol: "http", Reqs: 999, Errs: 0, P95Ms: 999},
 	}
 
 	edges, err := st.ResolveTraceEdges(ctx, clusterID, raw, 60)
@@ -62,8 +68,10 @@ func TestResolveTraceEdgesLive(t *testing.T) {
 		"modelstudio/Cluster/postgres -> modelstudio/Cluster/postgres", // darf NICHT existieren (self)
 	}
 	// Positive: die beiden echten App→Infra-Kanten müssen da sein.
-	if _, ok := got[want[0]]; !ok {
+	if e, ok := got[want[0]]; !ok {
 		t.Errorf("missing edge: %s", want[0])
+	} else if e.ReqRate != 0.5 { // 30 reqs / 60s — der 999-reqs-Server-Span darf NICHT doppelt zählen
+		t.Errorf("controlplane->clickhouse reqRate = %v, want 0.5 (server-span double-count leaked?)", e.ReqRate)
 	}
 	if e, ok := got[want[1]]; !ok {
 		t.Errorf("missing edge: %s", want[1])

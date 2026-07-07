@@ -25,8 +25,13 @@ var ipRe = regexp.MustCompile(`^\d{1,3}(\.\d{1,3}){3}$`)
 var serviceSuffixes = []string{"-rw", "-ro", "-r", "-headless", "-primary", "-replica", "-master", "-svc", "-service"}
 
 // ResolveTraceEdges wandelt aggregierte RawTraceEdges in Map-Kanten mit RED um.
-// windowSecs ist das Aggregationsfenster (für Requests/Sekunde). Mehrere Rohkanten,
-// die auf dasselbe (from,to) auflösen, werden summiert.
+// windowSecs ist das Aggregationsfenster (für Requests/Sekunde).
+//
+// Zwei-Pass: CLIENT-Span-Kanten zuerst (sie tragen die Aufrufer-Sicht), danach
+// füllen SERVER-Span-Kanten nur (from,to)-Paare, die die Client-Pässe noch NICHT
+// erzeugt haben. So zählt derselbe Request (der je einen Client- UND einen Server-
+// Span erzeugt) nicht doppelt, während Server-Spans zusätzliche Kanten liefern, die
+// client-seitig gar nicht erst erfasst wurden.
 func (s *Store) ResolveTraceEdges(ctx context.Context, clusterID uuid.UUID, raw []model.RawTraceEdge, windowSecs float64) ([]model.MapEdge, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -43,25 +48,34 @@ func (s *Store) ResolveTraceEdges(ctx context.Context, clusterID uuid.UUID, raw 
 		reqs, errs int64
 		p95        float64
 		protocol   string
+		fromClient bool // Kante stammt (auch) aus einem Client-Span
 	}
 	agg := map[string]*acc{}
 	order := []string{}
 
-	for _, e := range raw {
-		from := res.workload(e.ClientNs, e.ClientName)
-		if from == "" {
-			continue // Aufrufer nicht in der Topologie — überspringen
+	add := func(e model.RawTraceEdge) {
+		known := res.workload(e.KnownNs, e.KnownName)
+		if known == "" {
+			return // berichtender Workload nicht in der Topologie
 		}
-		to := res.resolveServer(e.ClientNs, e.ServerAddr)
-		if to == "" || to == from {
-			continue // Ziel nicht auflösbar oder Selbst-Kante
+		peer := res.resolveServer(e.KnownNs, e.Peer)
+		if peer == "" || peer == known {
+			return // Gegenseite nicht auflösbar (z.B. Node-Name, apiserver) oder Selbst-Kante
+		}
+		from, to := known, peer
+		if !e.KnownIsClient {
+			from, to = peer, known // Server-Span: die Gegenseite ist der Aufrufer
 		}
 		key := from + "\x00" + to
 		a := agg[key]
 		if a == nil {
+			// Server-Span-Kante nur aufnehmen, wenn kein Client-Span sie schon lieferte
+			// wird über die zwei Pässe garantiert (siehe unten) — hier reicht Neuanlage.
 			a = &acc{protocol: e.Protocol}
 			agg[key] = a
 			order = append(order, key)
+		} else if !e.KnownIsClient && a.fromClient {
+			return // Client-Sicht existiert bereits → Server-Span nicht dazurechnen
 		}
 		a.reqs += e.Reqs
 		a.errs += e.Errs
@@ -70,6 +84,21 @@ func (s *Store) ResolveTraceEdges(ctx context.Context, clusterID uuid.UUID, raw 
 		}
 		if a.protocol == "" {
 			a.protocol = e.Protocol
+		}
+		if e.KnownIsClient {
+			a.fromClient = true
+		}
+	}
+
+	// Pass 1: Client-Span-Kanten. Pass 2: Server-Span-Kanten (füllen Lücken).
+	for _, e := range raw {
+		if e.KnownIsClient {
+			add(e)
+		}
+	}
+	for _, e := range raw {
+		if !e.KnownIsClient {
+			add(e)
 		}
 	}
 
