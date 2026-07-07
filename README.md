@@ -84,40 +84,41 @@ terminates — a reaper finalizes anything a dead agent leaves behind, and force
 
 ## Quick start
 
-No published container images yet — you run the platform from source (that's the alpha part).
-With Go 1.25+, Node 22+/pnpm and Docker installed:
+The whole platform runs from published images ([ghcr.io](https://github.com/olemeyer?tab=packages&repo_name=rocketplaneIO)).
+You need Docker and a Kubernetes cluster to point it at (minikube is fine).
+
+**1 — run the platform**
 
 ```bash
-git clone https://github.com/olemeyer/rocketplaneIO && cd rocketplaneIO
+curl -O https://raw.githubusercontent.com/olemeyer/rocketplaneIO/main/deploy/compose/docker-compose.prod.yml
+curl -o .env https://raw.githubusercontent.com/olemeyer/rocketplaneIO/main/deploy/compose/.env.example
+# set RP_SESSION_SECRET in .env (e.g. `openssl rand -hex 32`); defaults are fine for a local trial
 
-# 1 — data stores + OTLP collector (Postgres, ClickHouse — defaults just work)
-docker compose -f deploy/compose/docker-compose.yml up -d
-
-# 2 — control plane on :8090
-go run ./services/controlplane/cmd/controlplane &
-
-# 3 — web UI on :4173
-pnpm install && pnpm dev
+docker compose --env-file .env -f docker-compose.prod.yml up -d
 ```
 
-Open **http://localhost:4173**, create the owner account, hit **Connect cluster** — it hands you
-one copy-paste `kubectl` command that installs the agent and the Beyla DaemonSet. When the service
-map draws your namespaces and spans appear under Traces, you're live — without touching a line of
-your code.
+The UI comes up on **http://localhost:4173**, the control plane on `:8090`.
 
-**Copilot:** open it from the top bar and connect any LLM provider — the key stays on your
-instance, requests go straight from your control plane to the provider you chose.
+**2 — connect your cluster**
 
-**Demo workload:** a Python + Redis shop behind nginx that generates real traffic, errors and
-slow queries — the workload every screenshot here was taken from:
+Open the UI, create the owner account, hit **Connect cluster** — it hands you one copy-paste
+command that installs the agent and the Beyla DaemonSet (a rendered `kubectl apply`, or Helm).
+When the service map draws your namespaces and spans appear under Traces, you're live — without
+touching a line of your code.
 
-```bash
-kubectl apply -f deploy/dev/shop-realistic.yaml -f deploy/dev/frontdoor.yaml
-```
+> Local minikube note: your cluster reaches the control plane at `http://host.minikube.internal:8090`,
+> not `localhost` — set `RP_AGENT_CONTROLPLANE_URL` to that in `.env` before connecting.
 
-> Alpha gap: the agent image isn't on a public registry yet. For a local minikube:
-> `docker build -t rocketplane/agent:dev -f agent/Dockerfile . && minikube image load rocketplane/agent:dev`,
-> then set `RP_AGENT_IMAGE=rocketplane/agent:dev` on the control plane.
+**3 — turn on the Copilot**
+
+Open it from the top bar and connect any Anthropic- or OpenAI-compatible provider (including a
+local one). The key stays on your instance; requests go straight from your control plane to the
+provider you chose.
+
+<sub>Images are tagged <code>edge</code> (tracks <code>main</code>) today; tagged releases and a
+platform Helm chart are the next milestone. Want a demo workload? A Python + Redis shop behind
+nginx — the one in every screenshot here — ships in
+<a href="deploy/dev/">deploy/dev/</a> (<code>kubectl apply -f deploy/dev/shop-realistic.yaml -f deploy/dev/frontdoor.yaml</code>).</sub>
 
 ## Is it safe?
 
@@ -227,20 +228,44 @@ so Claude Code or Cursor can operate your cluster through the identical guardrai
 │       ├── alerts/ · telemetry/ · events/ · store/ · migrations/
 │       └── ../cmd/mcp/         #   MCP server — same tools for external agents
 ├── apps/web/                   # Next.js UI (RETICLE design system)
-└── deploy/                     # compose (dev stores), helm chart, install.yaml, demo shop
+└── deploy/                     # compose (platform + dev stores), helm chart, install.yaml, demo shop
+```
+</details>
+
+<details>
+<summary><b>Develop from source</b></summary>
+<br>
+
+Prereqs: Go 1.25+, Node 22+ with pnpm, Docker.
+
+```bash
+git clone https://github.com/olemeyer/rocketplaneIO && cd rocketplaneIO
+
+docker compose -f deploy/compose/docker-compose.yml up -d          # dev data stores + collector
+go run ./services/controlplane/cmd/controlplane                    # control plane on :8090
+cd apps/web && pnpm install && pnpm dev                            # UI on :4173
+```
+
+Building the platform images yourself (what CI publishes):
+
+```bash
+docker build -t rocketplaneio/controlplane -f services/controlplane/Dockerfile .
+docker build -t rocketplaneio/web          -f apps/web/Dockerfile .
+docker build -t rocketplaneio/agent        -f agent/Dockerfile .
 ```
 </details>
 
 ## Status
 
-| Works end-to-end today | Not yet |
+| Works end-to-end today | On the roadmap |
 |---|---|
-| Copilot: BYO-LLM investigation → guardrailed fixes | Published container images |
+| Copilot: BYO-LLM investigation → guardrailed fixes | Tagged releases + platform Helm chart |
 | eBPF traces incl. compiled Go, log→trace correlation | Hosted demo |
 | ~30 safe actions with verify, rollback and revert | Measured overhead numbers |
 | Runs audit trail, guaranteed-terminating cancel | Multi-user RBAC hardening |
 | Alerts with auto-remediation dispatch | Server-side LLM key vault |
 | PromQL + custom metrics on ClickHouse, full K8s inventory | |
+| Published multi-arch images (`edge`) + agent install.yaml | |
 
 ## Contributing
 

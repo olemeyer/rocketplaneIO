@@ -10,9 +10,14 @@ contributions right now are:
 
 ## Dev setup
 
-The [Quick Start](README.md#quick-start) in the README *is* the dev setup:
-Go 1.25+, Node 22+ with pnpm, Docker. `docker compose -f deploy/compose/docker-compose.yml up -d`,
-`go run ./services/controlplane/cmd/controlplane`, `pnpm install && pnpm dev`.
+The README's Quick start runs the *published images*; contributors run from source (Go 1.25+,
+Node 22+ with pnpm, Docker):
+
+```bash
+docker compose -f deploy/compose/docker-compose.yml up -d   # dev data stores + collector
+go run ./services/controlplane/cmd/controlplane             # control plane on :8090
+cd apps/web && pnpm install && pnpm dev                     # UI on :4173
+```
 
 - Web typecheck: `pnpm typecheck`
 - Go build: `cd services/controlplane && go build ./...`
