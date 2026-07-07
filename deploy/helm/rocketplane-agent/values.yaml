@@ -19,7 +19,7 @@ clusterName: ""
 
 image:
   repository: ghcr.io/olemeyer/rocketplaneio/agent
-  tag: latest
+  tag: edge
   pullPolicy: IfNotPresent
 
 # -- Optional image pull secrets for private registries.

@@ -46,7 +46,7 @@ func Load() *Config {
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 
 		AgentInstallMethod: env("RP_AGENT_INSTALL_METHOD", "helm"),
-		AgentImage:         env("RP_AGENT_IMAGE", "ghcr.io/olemeyer/rocketplaneio/agent:latest"),
+		AgentImage:         env("RP_AGENT_IMAGE", "ghcr.io/olemeyer/rocketplaneio/agent:edge"),
 		AgentChart:         env("RP_AGENT_CHART", "oci://ghcr.io/olemeyer/rocketplaneio/charts/rocketplane-agent"),
 		// Fällt auf PublicURL zurück, wenn nicht explizit gesetzt.
 		AgentControlPlaneURL: strings.TrimRight(env("RP_AGENT_CONTROLPLANE_URL", env("RP_PUBLIC_URL", "http://localhost:8090")), "/"),
