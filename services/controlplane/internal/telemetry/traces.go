@@ -75,12 +75,37 @@ type REDRow struct {
 
 // TracesQuery sind die Filter des Traces-Explorers.
 type TracesQuery struct {
-	Namespace string
-	Service   string
-	OnlyError bool
-	Since     time.Time
-	Until     time.Time
-	Limit     int
+	Namespace     string
+	Service       string
+	OnlyError     bool
+	MinDurationMs float64 // 0 = kein Filter (nur langsame Traces)
+	MinHTTPStatus int     // 0 = kein Filter (z.B. 500 = nur 5xx, 400 = ab 4xx)
+	Since         time.Time
+	Until         time.Time
+	Limit         int
+}
+
+// traceHaving baut die HAVING-Klausel aus den Post-Aggregat-Filtern (Fehler,
+// Mindestdauer, Mindest-HTTP-Status). Alle Werte sind numerisch validiert.
+func traceHaving(q TracesQuery) string {
+	h := ""
+	add := func(c string) {
+		if h == "" {
+			h = "HAVING " + c
+		} else {
+			h += " AND " + c
+		}
+	}
+	if q.OnlyError {
+		add("errCount > 0")
+	}
+	if q.MinDurationMs > 0 {
+		add(fmt.Sprintf("durMs >= %g", q.MinDurationMs))
+	}
+	if q.MinHTTPStatus > 0 {
+		add(fmt.Sprintf("httpStatus >= '%d'", q.MinHTTPStatus))
+	}
+	return h
 }
 
 // QueryTraces liest die jüngsten TRACES (ein Eintrag je TraceId, aggregiert):
@@ -111,7 +136,7 @@ func (s *Store) QueryTraces(ctx context.Context, q TracesQuery) ([]TraceRow, err
 		s.db,
 		cond(q.Namespace != "", "AND ResourceAttributes['k8s.namespace.name'] = {ns:String}"),
 		cond(q.Service != "", "AND ServiceName = {svc:String}"),
-		cond(q.OnlyError, "HAVING errCount > 0"),
+		traceHaving(q),
 		q.Limit)
 
 	params := url.Values{"query": {sql}}

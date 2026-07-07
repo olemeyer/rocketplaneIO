@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/telemetry"
@@ -47,12 +48,16 @@ func (s *Server) handleQueryTraces(w http.ResponseWriter, r *http.Request) {
 			until = t
 		}
 	}
+	minDur, _ := strconv.ParseFloat(v.Get("minDurationMs"), 64)
+	minStatus, _ := strconv.Atoi(v.Get("minHttpStatus"))
 	q := telemetry.TracesQuery{
-		Namespace: v.Get("namespace"),
-		Service:   v.Get("service"),
-		OnlyError: v.Get("onlyError") == "true",
-		Since:     since,
-		Until:     until,
+		Namespace:     v.Get("namespace"),
+		Service:       v.Get("service"),
+		OnlyError:     v.Get("onlyError") == "true",
+		MinDurationMs: minDur,
+		MinHTTPStatus: minStatus,
+		Since:         since,
+		Until:         until,
 	}
 
 	traces, err := s.tele.QueryTraces(r.Context(), q)
