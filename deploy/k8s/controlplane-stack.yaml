@@ -1,0 +1,218 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rocketplane
+  labels:
+    app.kubernetes.io/part-of: rocketplane
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rocketplane-cp
+  namespace: rocketplane
+type: Opaque
+stringData:
+  RP_SESSION_SECRET: "__SESSION_SECRET__"
+  POSTGRES_PASSWORD: "__PG_PASS__"
+  DATABASE_URL: "postgres://rocketplane:__PG_PASS__@rocketplane-pg-rw:5432/rocketplane?sslmode=disable"
+---
+# ---------- Postgres ----------
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: rocketplane
+spec:
+  selector: { app: postgres }
+  ports:
+    - name: pg
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: rocketplane
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata:
+      labels: { app: postgres }
+    spec:
+      securityContext:
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          env:
+            - name: POSTGRES_USER
+              value: rocketplane
+            - name: POSTGRES_DB
+              value: rocketplane
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: rocketplane-cp, key: POSTGRES_PASSWORD }
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "rocketplane"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: "" # ANPASSEN: eure SSD-StorageClass (leer = Default)
+        resources:
+          requests:
+            storage: 5Gi
+---
+# ---------- Control-Plane ----------
+apiVersion: v1
+kind: Service
+metadata:
+  name: controlplane
+  namespace: rocketplane
+spec:
+  selector: { app: controlplane }
+  ports:
+    - name: http
+      port: 8090
+      targetPort: 8090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controlplane
+  namespace: rocketplane
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: controlplane }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app: controlplane }
+    spec:
+      containers:
+        - name: controlplane
+          image: ghcr.io/olemeyer/rocketplaneio/controlplane:edge
+          imagePullPolicy: Always
+          env:
+            - name: RP_LISTEN
+              value: ":8090"
+            - name: RP_ENV
+              value: "production"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: rocketplane-cp, key: DATABASE_URL }
+            - name: RP_SESSION_SECRET
+              valueFrom:
+                secretKeyRef: { name: rocketplane-cp, key: RP_SESSION_SECRET }
+            - name: RP_PUBLIC_URL
+              value: "https://rocketplane.example.com" # ANPASSEN: URL, unter der euer Browser die UI erreicht
+            - name: RP_AGENT_CONTROLPLANE_URL
+              value: "http://controlplane.rocketplane.svc.cluster.local:8090"
+            - name: CLICKHOUSE_URL
+              value: "http://clickhouse:8123"
+            - name: CLICKHOUSE_USER
+              valueFrom: { secretKeyRef: { name: rocketplane-clickhouse, key: CLICKHOUSE_USER } }
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: { secretKeyRef: { name: rocketplane-clickhouse, key: CLICKHOUSE_PASSWORD } }
+            - name: CLICKHOUSE_DB
+              valueFrom: { secretKeyRef: { name: rocketplane-clickhouse, key: CLICKHOUSE_DB } }
+          ports:
+            - containerPort: 8090
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8090 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8090 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+---
+# ---------- Web UI ----------
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: rocketplane
+spec:
+  selector: { app: web }
+  ports:
+    - name: http
+      port: 4173
+      targetPort: 4173
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: rocketplane
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: web }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app: web }
+    spec:
+      containers:
+        - name: web
+          image: ghcr.io/olemeyer/rocketplaneio/web:edge
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 4173
+          readinessProbe:
+            httpGet: { path: /, port: 4173 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 25m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+---
+# ---------- Tailscale Ingress ----------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rocketplane
+  namespace: rocketplane
+spec:
+  ingressClassName: tailscale
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 4173
+  tls:
+    - hosts:
+        - rocketplane # ANPASSEN: gewünschter Tailscale-MagicDNS-Name

@@ -1,0 +1,43 @@
+---
+# App-User-Credentials für den CNPG-Cluster — Passwort bleibt das bisherige
+# PG_PASS, damit nur der Host in DATABASE_URL wechselt.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rocketplane-pg-app
+  namespace: rocketplane
+  labels:
+    cnpg.io/reload: "true"
+type: kubernetes.io/basic-auth
+stringData:
+  username: rocketplane
+  password: "__PG_PASS__"
+---
+# HA-Postgres via CloudNativePG: 1 Primary + 1 Streaming-Replica mit
+# automatischem Failover. Services: rocketplane-pg-rw (Primary),
+# rocketplane-pg-ro (Replicas), rocketplane-pg-r (alle).
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: rocketplane-pg
+  namespace: rocketplane
+spec:
+  instances: 2
+  imageName: ghcr.io/cloudnative-pg/postgresql:17
+  primaryUpdateStrategy: unsupervised
+  bootstrap:
+    initdb:
+      database: rocketplane
+      owner: rocketplane
+      secret:
+        name: rocketplane-pg-app
+  storage:
+    storageClass: "" # ANPASSEN: eure SSD-StorageClass (leer = Default)
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
