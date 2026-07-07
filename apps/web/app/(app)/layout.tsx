@@ -7,7 +7,7 @@ import { Sidebar, MobileNav, NavProvider } from '@/components/app/sidebar';
 import { Topbar } from '@/components/app/topbar';
 
 // App-Shell hinter dem Auth-Gate: Sidebar (≥md) + Mobile-Drawer (<md) + Topbar
-// (Scope-Selektor) + Session- und Scope-Kontext.
+// (mit AI-Copilot-Button, Primärfeature, ⌘J → eigene Seite) + Kontexte.
 export default function AppLayout({ children }: { children: ReactNode }) {
   return (
     <MeProvider>

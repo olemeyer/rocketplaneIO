@@ -1,0 +1,96 @@
+// approval.ts — Guardrails: Risk-Level je Action (vom Backend klassifiziert) und
+// der pro Level EINSTELLBARE Approval-Modus. So denkt ein Admin: nicht jede
+// Action ist gleich gefährlich, also verlangt nicht jede dieselbe Freigabe.
+//
+//   read        → nur beobachten, mutiert nichts
+//   reversible  → sauberer Auto-Rollback (scale-up, restart, config edits …)
+//   disruptive  → unterbricht laufende Pods, heilt sich selbst (evict, undo …)
+//   destructive → echter Blast-Radius (drain, scale-to-0, NoExecute-taint …)
+//
+//   auto    → läuft ohne Nachfrage
+//   click   → ein Button-Klick
+//   confirm → Ziel-Namen eintippen (arm-to-fire)
+//   off     → Copilot darf diese Stufe gar nicht ausführen
+
+export type RiskLevel = 'read' | 'reversible' | 'disruptive' | 'destructive';
+export type ApprovalMode = 'auto' | 'click' | 'confirm' | 'off';
+export type ApprovalPolicy = Record<RiskLevel, ApprovalMode>;
+
+export const RISK_LEVELS: RiskLevel[] = ['read', 'reversible', 'disruptive', 'destructive'];
+export const APPROVAL_MODES: ApprovalMode[] = ['auto', 'click', 'confirm', 'off'];
+
+export const DEFAULT_POLICY: ApprovalPolicy = {
+  read: 'auto',
+  reversible: 'click',
+  disruptive: 'click',
+  destructive: 'confirm',
+};
+
+export const LEVEL_META: Record<RiskLevel, { label: string; glyph: string; hint: string }> = {
+  read: { label: 'read-only', glyph: '◎', hint: 'observes only, changes nothing' },
+  reversible: { label: 'reversible', glyph: '↺', hint: 'clean auto-rollback (scale, restart, config)' },
+  disruptive: { label: 'disruptive', glyph: '◇', hint: 'interrupts pods, self-heals (evict, undo, cleanup)' },
+  destructive: { label: 'destructive', glyph: '△', hint: 'real blast radius (drain, scale-to-0, NoExecute)' },
+};
+
+const KEY = (cluster: string) => `rp-approval-${cluster}`;
+
+export function loadApprovalPolicy(clusterId: string): ApprovalPolicy {
+  if (typeof window === 'undefined') return DEFAULT_POLICY;
+  try {
+    const raw = window.localStorage.getItem(KEY(clusterId));
+    if (!raw) return DEFAULT_POLICY;
+    const p = JSON.parse(raw) as Partial<ApprovalPolicy>;
+    return { ...DEFAULT_POLICY, ...p };
+  } catch {
+    return DEFAULT_POLICY;
+  }
+}
+
+export function saveApprovalPolicy(clusterId: string, p: ApprovalPolicy): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(KEY(clusterId), JSON.stringify(p));
+  } catch {
+    /* quota */
+  }
+}
+
+// actionLevelOf spiegelt die Backend-Klassifizierung (copilot_policy.go) für die
+// UI — inkl. der param-abhängigen Fälle (scale-to-0, node_taint NoExecute).
+export function actionLevelOf(kind: string, params?: Record<string, unknown>): RiskLevel {
+  switch (kind) {
+    case 'debug_bundle':
+    case 'pod_events':
+    case 'rollout_history':
+    case 'drain_preview':
+      return 'read';
+    case 'scale':
+      return Number(params?.replicas ?? NaN) === 0 ? 'destructive' : 'reversible';
+    case 'node_taint':
+      return params?.effect === 'NoExecute' ? 'destructive' : 'reversible';
+    case 'drain':
+    case 'expand_pvc':
+      return 'destructive';
+    case 'delete_pod':
+    case 'evict_pod':
+    case 'rollout_undo':
+    case 'cleanup_pods':
+    case 'cleanup_jobs':
+    case 'cronjob_trigger':
+      return 'disruptive';
+    default:
+      return 'reversible';
+  }
+}
+
+export function levelColor(level?: string): string {
+  switch (level) {
+    case 'destructive':
+      return 'var(--rp-node-crit)';
+    case 'disruptive':
+      return 'var(--rp-node-warn)';
+    default:
+      return 'var(--rp-ink-faint)';
+  }
+}

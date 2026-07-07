@@ -5,6 +5,7 @@ import { CommandPalette, CommandTrigger } from './command-palette';
 import { ScopeSelector } from './scope-selector';
 import { UserMenu } from './user-menu';
 import { useNav } from './sidebar';
+import { CopilotButton } from './copilot';
 
 // Globale Kopfleiste — die Instrumenten-Blende: h-52, transluzent + backdrop-blur,
 // EINE 1px-Hairline unten (kein harter Strich mehr). Links mobil der Nav-Hamburger
@@ -33,7 +34,10 @@ export function Topbar() {
         </button>
         <ScopeSelector />
       </div>
-      <div className="flex items-center gap-1 sm:gap-1.5">
+      <div className="flex items-center gap-1.5 sm:gap-2">
+        {/* Primärfeature — der AI-Copilot, prominent */}
+        <CopilotButton />
+        <span className="mx-0.5 hidden h-4 w-px bg-line sm:block" aria-hidden />
         <div className="hidden sm:block">
           <CommandTrigger />
         </div>

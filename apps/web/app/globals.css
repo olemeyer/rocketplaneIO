@@ -315,6 +315,26 @@
   .rp-breath {
     animation: rp-breath 2s ease-in-out infinite;
   }
+  /* Stream-Cursor — blinkender Block am Ende des gestreamten Textes. */
+  .rp-caret {
+    display: inline-block;
+    width: 0.5em;
+    height: 1em;
+    margin-left: 1px;
+    vertical-align: text-bottom;
+    background: var(--rp-accent);
+    animation: rp-blink 1s steps(2, start) infinite;
+  }
+}
+
+@keyframes rp-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
 }
 
 @keyframes reveal-up {
@@ -389,6 +409,9 @@
     animation: none;
   }
   .rp-breath {
+    animation: none;
+  }
+  .rp-caret {
     animation: none;
   }
 }
