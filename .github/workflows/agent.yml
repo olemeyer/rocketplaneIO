@@ -88,6 +88,9 @@ jobs:
       - name: Package & push Helm chart
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          # Pin the chart's default image tag to the released version so
+          # `helm install` is reproducible (the checked-in default is `edge`).
+          sed -i "s|^  tag: .*|  tag: ${VERSION}|" deploy/helm/rocketplane-agent/values.yaml
           helm package deploy/helm/rocketplane-agent \
             --version "$VERSION" --app-version "$VERSION" -d /tmp/chart
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
