@@ -10,7 +10,16 @@
 //   auto    → läuft ohne Nachfrage
 //   click   → ein Button-Klick
 //   confirm → Ziel-Namen eintippen (arm-to-fire)
-//   off     → Copilot darf diese Stufe gar nicht ausführen
+//   off     → diese Stufe wird nicht angeboten (dismissed)
+//
+// WICHTIG — Sicherheitsmodell: der Approval-MODUS ist eine CLIENT-seitige UX-
+// Policy darüber, wie viel Reibung der Mensch pro Stufe sieht. Die harte,
+// SERVER-seitige Grenze ist eine andere und liegt tiefer: das LLM kann nichts
+// selbst ausführen (die eigentliche Ausführung braucht eine authentifizierte
+// Freigabe über den Decision-Endpoint), und jede Mutation läuft durch die
+// Whitelist + Param-Validierung + das Namespace-Scope-Gate der Control-Plane.
+// „off"/„confirm" begrenzen also die Autonomie des Assistenten in der UI, sind
+// aber keine Autorisierungskontrolle gegen einen bereits berechtigten Nutzer.
 
 export type RiskLevel = 'read' | 'reversible' | 'disruptive' | 'destructive';
 export type ApprovalMode = 'auto' | 'click' | 'confirm' | 'off';
