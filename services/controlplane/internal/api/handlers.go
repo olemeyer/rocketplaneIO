@@ -330,9 +330,15 @@ func (s *Server) kubectlInstallCommand(token, clusterName string) string {
 }
 
 // helmInstallCommand: der Helm-Weg über das veröffentlichte OCI-Chart.
+//
+// --devel ist zwingend: das Chart wird (wie das Produkt) als Pre-Release
+// publiziert (z.B. 0.1.0-alpha). Ohne --devel ignoriert `helm install`
+// Pre-Releases bei der "latest"-Auflösung und bricht mit "could not locate a
+// version matching provided version string" ab — der generierte Befehl schlägt
+// dann bei jedem Nutzer fehl. --devel lässt Pre-Releases als latest zu.
 func (s *Server) helmInstallCommand(token, clusterName string) string {
 	return fmt.Sprintf(
-		"helm install rocketplane-agent %s "+
+		"helm install rocketplane-agent %s --devel "+
 			"--namespace rocketplane --create-namespace "+
 			"--set controlplane.url=%s --set enrollToken=%s --set clusterName=%s",
 		s.cfg.AgentChart, s.cfg.AgentControlPlaneURL, token, clusterName)
