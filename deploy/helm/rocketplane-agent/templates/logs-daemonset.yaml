@@ -1,0 +1,105 @@
+{{- if .Values.logs.enabled }}
+# Log-Collector-DaemonSet: EIN Pod je Node, der die node-lokalen Container-Logs
+# unter /var/log/pods read-only tailt und OUTBOUND an die Control-Plane pusht.
+# Bewusst getrennt vom Haupt-Agent (Deployment):
+#   - Logs sind node-lokal → brauchen einen Pod pro Node (DaemonSet).
+#   - Topologie/Inventar/Actions bleiben EIN Writer (das Deployment) — dieser
+#     DaemonSet läuft mit RP_AGENT_ROLE=logs und macht NUR Log-Collection.
+#   - Keine conntrack-Privilegien (kein hostNetwork, kein NET_ADMIN) — Logs
+#     brauchen nur den read-only hostPath-Mount.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "rocketplane-agent.fullname" . }}-logs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rocketplane-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: logs
+spec:
+  selector:
+    matchLabels:
+      {{- include "rocketplane-agent.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: logs
+  template:
+    metadata:
+      labels:
+        {{- include "rocketplane-agent.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: logs
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "rocketplane-agent.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Auf ALLEN Nodes laufen (auch Control-Plane/getaintete Nodes) — Logs
+      # entstehen überall.
+      tolerations:
+        - operator: Exists
+      # Log-Collectors lesen node-eigene Dateien (root:root); wie Promtail/Fluent Bit
+      # als root, damit KEIN „permission denied"/gesperrtes Verzeichnis auftritt.
+      # Sonst gehärtet: read-only rootfs, keine Caps, keine Privilege-Escalation.
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: RP_AGENT_ROLE
+              value: logs
+            - name: RP_CONTROLPLANE_URL
+              value: {{ .Values.controlplane.url | quote }}
+            - name: RP_ENROLL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "rocketplane-agent.secretName" . }}
+                  key: enroll-token
+            - name: RP_CLUSTER_NAME
+              value: {{ .Values.clusterName | quote }}
+            - name: RP_AGENT_VERSION
+              value: {{ .Chart.AppVersion | quote }}
+          volumeMounts:
+            # Container-Logs (CRI/containerd: echte Dateien unter /var/log/pods).
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
+            {{- if .Values.logs.dockerContainers }}
+            # Docker-Runtime-Symlink-Ziele (minikube/docker-driver).
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            {{- end }}
+          {{- with .Values.logs.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
+        {{- if .Values.logs.dockerContainers }}
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+        {{- end }}
+{{- end }}

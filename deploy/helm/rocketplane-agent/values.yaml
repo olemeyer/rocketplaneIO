@@ -54,6 +54,28 @@ rbac:
 # writer avoids redundant control-plane traffic.
 replicaCount: 1
 
+# Container-log collection. A SEPARATE DaemonSet (one pod per node) tails the
+# node-local container logs under /var/log/pods read-only and ships them to the
+# control-plane. It runs with RP_AGENT_ROLE=logs (logs only — no topology/actions),
+# so the single-writer Deployment above stays the only writer. It needs no conntrack
+# privileges (no hostNetwork/NET_ADMIN), only the read-only host mount.
+logs:
+  # -- Deploy the node-local log-collector DaemonSet. Without it the UI shows no
+  # container logs (the single Deployment can only see its own node and does not
+  # mount host logs).
+  enabled: true
+  # -- Also mount /var/lib/docker/containers (only needed on the Docker runtime,
+  # e.g. minikube; containerd keeps the real files under /var/log/pods).
+  dockerContainers: false
+  # -- Resources for each log-collector pod. Slim — it tails files and ships batches.
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
 # -- Pod-level annotations.
 podAnnotations: {}
 
