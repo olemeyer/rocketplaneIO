@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest an action, a tool for the copilot, or anything else the loop is missing.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the operational situation — what do you do by hand today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to see?
+      description: |
+        If it's a new safe action: what does it change, what does "verified" look like,
+        and what is the rollback? If it's a copilot capability: what should it be able
+        to read or decide?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - New safe action
+        - Copilot / AI
+        - Observability (traces, logs, metrics)
+        - Alerts / auto-remediation
+        - UI / UX
+        - Deployment / operations
+        - Other

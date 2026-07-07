@@ -1,0 +1,56 @@
+name: Bug report
+description: Something broke — reports from real clusters are the most valuable contribution right now.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time! rocketplaneIO is **alpha** — cluster reports are exactly
+        what moves it forward.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+      placeholder: |
+        1. Connected a cluster …
+        2. Opened Traces …
+        3. Expected spans, got …
+    validations:
+      required: true
+  - type: input
+    id: kubernetes
+    attributes:
+      label: Kubernetes distribution & version
+      placeholder: e.g. minikube v1.38 / k3s v1.32 / EKS 1.31
+    validations:
+      required: true
+  - type: input
+    id: kernel
+    attributes:
+      label: Node kernel version
+      description: Relevant for eBPF capture — `uname -r` on a node.
+      placeholder: e.g. 6.8.0-45-generic
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Traces / eBPF capture
+        - Logs
+        - Metrics / PromQL
+        - Service map
+        - Copilot / AI
+        - Actions / Runs
+        - Alerts
+        - Agent / enrollment
+        - Web UI
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Agent logs (`kubectl logs -n rocketplane ds/rocketplane-agent`), Beyla logs, or control-plane output. Redact anything sensitive.
+      render: shell

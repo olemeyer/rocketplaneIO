@@ -10,7 +10,7 @@ contributions right now are:
 
 ## Dev setup
 
-The [Quick Start](README.md#quick-start--from-source-alpha) in the README *is* the dev setup:
+The [Quick Start](README.md#quick-start) in the README *is* the dev setup:
 Go 1.25+, Node 22+ with pnpm, Docker. `docker compose -f deploy/compose/docker-compose.yml up -d`,
 `go run ./services/controlplane/cmd/controlplane`, `pnpm install && pnpm dev`.
 
