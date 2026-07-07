@@ -161,8 +161,11 @@ function TraceGraphInner({
 
     const edges: Edge[] = agg.edges.map((e) => {
       const data: FlowEdgeData = {
+        // Gewicht log-normiert über die calls dieses Traces (gleicher Längenkanal
+        // wie die Service-Map); Herkunft ist per Definition L7 (Spans).
+        weight: maxEdge > 0 ? Math.log(1 + e.calls) / Math.log(1 + maxEdge) : 0,
+        edgeSource: 'trace',
         connCount: e.calls,
-        maxCount: maxEdge,
         errorRatio: e.calls > 0 ? e.errors / e.calls : 0,
         // ein Trace ist Vergangenheit — Partikel (Liveness) wären gelogen
         frozen: true,

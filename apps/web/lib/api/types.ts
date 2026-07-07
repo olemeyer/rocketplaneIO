@@ -99,11 +99,20 @@ export interface MapNode {
   icon: string;
 }
 
-/** Eine gerichtete, aggregierte Flow-Kante zwischen zwei Workloads. */
+/** Eine gerichtete, aggregierte Kante zwischen zwei Workloads. */
 export interface MapEdge {
   from: string; // MapNode.id
   to: string;
   connCount: number;
+  /** Kantenherkunft: "trace" = eBPF-L7-Spans (mit RED) · "flow" = eBPF-L4-
+   *  Netzwerk-Flows (nur Bytes; Protokolle ohne L7-Parsing wie NATS) ·
+   *  "conntrack" = Kernel-Fallback. Leer bei alten Control-Planes. */
+  source?: 'trace' | 'flow' | 'conntrack';
+  protocol?: string; // http | grpc | postgresql | … | tcp (flow)
+  reqRate?: number; // req/s über das Fenster (nur trace)
+  errRate?: number; // Fehleranteil 0..1 (nur trace)
+  p95Ms?: number; // p95-Latenz in ms (nur trace)
+  bytesRate?: number; // Bytes/s (nur flow)
 }
 
 /** Antwort von GET …/clusters/{id}/service-map. */

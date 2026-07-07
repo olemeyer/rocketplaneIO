@@ -21,7 +21,7 @@ import {
 
 import Link from 'next/link';
 import { getActions, getServiceMap } from '@/lib/api/controlplane';
-import type { ClusterAction, MapNode, ServiceMap, WorkloadHealth } from '@/lib/api/types';
+import type { ClusterAction, MapEdge, MapNode, ServiceMap, WorkloadHealth } from '@/lib/api/types';
 import { Spinner } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { useClusterEvents } from '@/lib/hooks/use-cluster-events';
@@ -42,33 +42,66 @@ const RESULT_LINGER_MS = 12_000; // Ergebnis-Ring bleibt so lange am Node stehen
 const NAME_H = 28; // vertikaler Platz für den Namen unter dem Squircle
 
 type Pos = { x: number; y: number; w: number; h: number };
-type Metrics = Map<string, { metric: number; size: number; connIn: number; connOut: number }>;
+type Metrics = Map<string, { metric: number; caption: string; size: number }>;
 
-// Traffic-Metrik je Node = gleichzeitige Verbindungen (conntrack-Gauge). Kanten sind
-// GERICHTET, also out (from) und in (to) getrennt aufsummieren — die zentrale Zahl ist
-// die Gesamt-Aktivität (in+out), in/out bleiben für den Hover-Breakdown erhalten.
-// Node-Größe skaliert mit dem Rang; nicht-gesunde Workloads bekommen einen Size-Floor,
-// damit ein traffic-armer CrashLoop nicht zum kleinsten (= übersehenen) Node wird.
-function computeMetrics(map: ServiceMap): Metrics {
-  const outSum = new Map<string, number>();
-  const inSum = new Map<string, number>();
+// Kanten tragen je nach Quelle verschiedene Mengen-Einheiten (trace: req/s ·
+// flow: Bytes/s · conntrack: conns). Für Breite/Größe braucht es EINEN
+// vergleichbaren Kanal: das Gewicht 0..1, log-normiert INNERHALB seiner Quelle
+// (Einheiten werden nie gemischt — die echten Werte zeigt der Hover).
+function edgeWeights(map: ServiceMap): Map<MapEdge, number> {
+  const maxOf = { trace: 0, flow: 0, conntrack: 0 };
+  const volume = (e: MapEdge): [keyof typeof maxOf, number] => {
+    if (e.source === 'trace') return ['trace', e.reqRate ?? 0];
+    if (e.source === 'flow') return ['flow', e.bytesRate ?? 0];
+    return ['conntrack', e.connCount];
+  };
   for (const e of map.edges) {
-    outSum.set(e.from, (outSum.get(e.from) ?? 0) + e.connCount);
-    inSum.set(e.to, (inSum.get(e.to) ?? 0) + e.connCount);
+    const [k, v] = volume(e);
+    maxOf[k] = Math.max(maxOf[k], v);
+  }
+  const w = new Map<MapEdge, number>();
+  for (const e of map.edges) {
+    const [k, v] = volume(e);
+    w.set(e, maxOf[k] > 0 ? Math.log(1 + v) / Math.log(1 + maxOf[k]) : 0);
+  }
+  return w;
+}
+
+// Traffic-Metrik je Node: die zentrale Zahl ist EHRLICH in ihrer Einheit —
+// req/s-Summe der Trace-Kanten, wo es welche gibt; sonst conns (conntrack).
+// Reine L4-Nachbarn (nur Bytes) zeigen keine erfundene Rate. Die GRÖSSE skaliert
+// über die quell-normierten Kantengewichte (vergleichbarer Rang ohne
+// Einheiten-Mix); nicht-gesunde Workloads behalten den Size-Floor, damit ein
+// traffic-armer CrashLoop nicht zum kleinsten (= übersehenen) Node wird.
+function computeMetrics(map: ServiceMap): Metrics {
+  const weights = edgeWeights(map);
+  const wSum = new Map<string, number>();
+  const reqSum = new Map<string, number>();
+  const connSum = new Map<string, number>();
+  const add = (m: Map<string, number>, id: string, v: number) => m.set(id, (m.get(id) ?? 0) + v);
+  for (const e of map.edges) {
+    const w = weights.get(e) ?? 0;
+    add(wSum, e.from, w);
+    add(wSum, e.to, w);
+    if (e.source === 'trace') {
+      add(reqSum, e.from, e.reqRate ?? 0);
+      add(reqSum, e.to, e.reqRate ?? 0);
+    } else if (e.source !== 'flow') {
+      add(connSum, e.from, e.connCount);
+      add(connSum, e.to, e.connCount);
+    }
   }
   let max = 1;
-  for (const n of map.nodes) {
-    max = Math.max(max, (outSum.get(n.id) ?? 0) + (inSum.get(n.id) ?? 0));
-  }
+  for (const n of map.nodes) max = Math.max(max, wSum.get(n.id) ?? 0);
   const m: Metrics = new Map();
   for (const n of map.nodes) {
-    const connIn = inSum.get(n.id) ?? 0;
-    const connOut = outSum.get(n.id) ?? 0;
-    const metric = connIn + connOut;
-    const t = Math.log(1 + metric) / Math.log(1 + max);
+    const req = reqSum.get(n.id) ?? 0;
+    const conns = connSum.get(n.id) ?? 0;
+    const [metric, caption] = req > 0 ? ([req, 'req/s'] as const) : ([conns, 'conns'] as const);
+    const t = Math.log(1 + (wSum.get(n.id) ?? 0)) / Math.log(1 + max);
     let size = nodeSize(t);
     if (n.health === 'critical' || n.health === 'degraded') size = Math.max(size, 64);
-    m.set(n.id, { metric, size, connIn, connOut });
+    m.set(n.id, { metric, caption, size });
   }
   return m;
 }
@@ -218,7 +251,7 @@ function buildGraph(
   context: Set<string>,
   nodeActions: Map<string, WorkloadNodeData['action']>,
 ): { nodes: Node[]; edges: Edge[] } {
-  const maxCount = map.edges.reduce((m, e) => Math.max(m, e.connCount), 1);
+  const weights = edgeWeights(map);
 
   const neighbors = new Set<string>();
   if (selected) {
@@ -250,6 +283,7 @@ function buildGraph(
         podsTotal: n.podsTotal,
         restarts: n.restarts,
         metric: mm?.metric ?? 0,
+        caption: mm?.caption,
         size: mm?.size ?? nodeSize(0),
         focused: selected ? neighbors.has(n.id) : false,
         dimmed,
@@ -268,8 +302,15 @@ function buildGraph(
       target: e.to,
       type: 'flow',
       data: {
+        weight: weights.get(e) ?? 0,
+        edgeSource: e.source ?? 'conntrack',
+        protocol: e.protocol,
+        reqRate: e.reqRate,
+        errRate: e.errRate,
+        p95Ms: e.p95Ms,
+        bytesRate: e.bytesRate,
         connCount: e.connCount,
-        maxCount,
+        errorRatio: e.errRate,
         focused: active,
         dimmed: selected ? !active : false,
       } satisfies FlowEdgeData,

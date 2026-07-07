@@ -70,7 +70,12 @@ const HEALTH_STYLE: Record<
 function fmtMetric(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
   if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
-  return String(n);
+  // Raten (req/s) sind Floats — nie roh rendern (0.4411111… ist unlesbar):
+  // ganze Zahlen bleiben ganz, Brüche bekommen max. 1–2 signifikante Dezimalen.
+  if (Number.isInteger(n)) return String(n);
+  if (n >= 10) return n.toFixed(0);
+  if (n >= 1) return n.toFixed(1);
+  return n.toFixed(2);
 }
 
 // LED-Segmentleiste: ready-Segmente gefüllt, fehlende glimmen rot. Bei vielen
