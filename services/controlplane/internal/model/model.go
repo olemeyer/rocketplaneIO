@@ -142,14 +142,29 @@ type MapEdge struct {
 	To        string `json:"to"`
 	ConnCount int64  `json:"connCount"`
 	// Source unterscheidet die Kantenherkunft: "trace" = aus Beyla-eBPF-Spans
-	// (primär, mit RED), "conntrack" = Fallback aus der Kernel-Conntrack-Tabelle
-	// (nur Verbindungszahl). Leer bei Alt-Clients.
+	// (primär, mit RED), "flow" = Beyla-L4-Netzwerk-Flows (Protokolle ohne
+	// L7-Parsing: NATS, ClickHouse-native, …), "conntrack" = letzter Fallback
+	// aus der Kernel-Conntrack-Tabelle. Leer bei Alt-Clients.
 	Source string `json:"source,omitempty"`
 	// L7-Anreicherung — nur bei Source=="trace" gesetzt.
 	Protocol string  `json:"protocol,omitempty"` // http | grpc | <db.system> (postgresql, redis, …)
 	ReqRate  float64 `json:"reqRate,omitempty"`  // Requests/Sekunde über das Fenster
 	ErrRate  float64 `json:"errRate,omitempty"`  // Fehleranteil 0..1
 	P95Ms    float64 `json:"p95Ms,omitempty"`    // p95-Latenz in ms
+	// L4-Anreicherung — nur bei Source=="flow" gesetzt (Bytes/s über das Fenster).
+	BytesRate float64 `json:"bytesRate,omitempty"`
+}
+
+// RawFlowEdge ist eine aus Beylas L4-Netzwerk-Flow-Metrik aggregierte, noch
+// nicht gegen die Topologie validierte Kante. Beide Seiten sind bereits von
+// Beyla kube-dekoriert (owner + namespace) — es bleibt nur der Abgleich gegen
+// bekannte Workloads (store.ResolveFlowEdges).
+type RawFlowEdge struct {
+	SrcNs   string
+	SrcName string
+	DstNs   string
+	DstName string
+	Bytes   float64
 }
 
 // RawTraceEdge ist eine aus Beyla-Spans aggregierte, NOCH NICHT auf Workloads

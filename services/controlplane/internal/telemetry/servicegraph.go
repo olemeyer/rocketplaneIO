@@ -46,6 +46,63 @@ func (s *Store) ServiceGraphEdges(ctx context.Context, since time.Time) ([]model
 	return append(client, server...), nil
 }
 
+// FlowEdges liest Beylas L4-Netzwerk-Flow-Metrik (beyla.network.flow.bytes):
+// Verbindungs-Kanten für Protokolle, die L7-seitig nicht parsebar sind (NATS,
+// ClickHouse-native, …). Beide Seiten sind von Beyla bereits kube-dekoriert
+// (k8s.src/dst.owner.name + namespace). Nur direction='request' — die
+// 'response'-Zeilen sind derselbe Verkehr rückwärts und würden jede Kante
+// spiegeln. Bytes = Counter-Delta je Beyla-Instanz (Restart-fest via greatest 0),
+// über Instanzen summiert.
+func (s *Store) FlowEdges(ctx context.Context, since time.Time) ([]model.RawFlowEdge, error) {
+	sql := fmt.Sprintf(`
+		SELECT srcNs, srcName, dstNs, dstName, sum(d) AS bytes
+		FROM (
+			SELECT
+			  Attributes['k8s.src.namespace'] AS srcNs,
+			  Attributes['k8s.src.owner.name'] AS srcName,
+			  Attributes['k8s.dst.namespace'] AS dstNs,
+			  Attributes['k8s.dst.owner.name'] AS dstName,
+			  greatest(0, max(Value) - min(Value)) AS d
+			FROM %s.otel_metrics_sum
+			WHERE MetricName = 'beyla.network.flow.bytes'
+			  AND Attributes['direction'] = 'request'
+			  AND TimeUnix >= {since:DateTime64(9)}
+			  AND srcName != '' AND dstName != ''
+			  AND srcNs != '' AND dstNs != ''
+			GROUP BY ResourceAttributes['service.instance.id'], srcNs, srcName, dstNs, dstName
+		)
+		GROUP BY srcNs, srcName, dstNs, dstName
+		ORDER BY bytes DESC
+		LIMIT 2000 FORMAT JSONEachRow`, s.db)
+
+	params := url.Values{"query": {sql}}
+	params.Set("param_since", nanoToCH(since.UnixNano()))
+
+	body, err := s.get(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	out := []model.RawFlowEdge{}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	for dec.More() {
+		var raw struct {
+			SrcNs   string  `json:"srcNs"`
+			SrcName string  `json:"srcName"`
+			DstNs   string  `json:"dstNs"`
+			DstName string  `json:"dstName"`
+			Bytes   float64 `json:"bytes"`
+		}
+		if err := dec.Decode(&raw); err != nil {
+			return nil, fmt.Errorf("decode flow row: %w", err)
+		}
+		out = append(out, model.RawFlowEdge{
+			SrcNs: raw.SrcNs, SrcName: raw.SrcName,
+			DstNs: raw.DstNs, DstName: raw.DstName, Bytes: raw.Bytes,
+		})
+	}
+	return out, nil
+}
+
 // spanEdges fragt eine Span-Richtung ab. knownIsClient=true → Client-Spans
 // (Peer = server.address), sonst Server-Spans (Peer = client.address).
 func (s *Store) spanEdges(ctx context.Context, since time.Time, knownIsClient bool) ([]model.RawTraceEdge, error) {

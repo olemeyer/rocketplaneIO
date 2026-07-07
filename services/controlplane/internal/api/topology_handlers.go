@@ -101,37 +101,54 @@ func (s *Server) handleServiceMap(w http.ResponseWriter, r *http.Request) {
 // stoßweisem/sparsamem Traffic nicht flackert; die RED-Rate ist ein Mittel darüber.
 const serviceMapWindow = 15 * time.Minute
 
-// enrichWithTraceEdges ersetzt/ergänzt die conntrack-Kanten durch trace-abgeleitete
-// Kanten (mit RED). Primär gewinnt Trace: eine conntrack-Kante bleibt nur, wenn es
-// für dasselbe (from,to) KEINE Trace-Kante gibt. Fehler werden geschluckt (Fallback
-// = unveränderte conntrack-Kanten), damit die Map robust bleibt.
+// enrichWithTraceEdges baut die Kanten dreistufig: L7-Trace-Kanten (RED) gewinnen,
+// Beyla-L4-Flow-Kanten füllen Paare ohne L7-Sicht (nicht parsebare Protokolle wie
+// NATS/ClickHouse-native), conntrack bleibt letzter Fallback. Jede Stufe ist
+// best-effort: fehlt/klemmt ClickHouse, bleibt die vorige Stufe — die Map darf
+// daran nie scheitern.
 func (s *Server) enrichWithTraceEdges(ctx context.Context, clusterID uuid.UUID, conntrack []model.MapEdge) []model.MapEdge {
 	if s.cfg.ClickHouseURL == "" {
 		return conntrack
 	}
-	raw, err := s.tele.ServiceGraphEdges(ctx, time.Now().Add(-serviceMapWindow))
-	if err != nil {
-		log.Printf("service-map: trace edges unavailable (falling back to conntrack): %v", err)
-		return conntrack
+	since := time.Now().Add(-serviceMapWindow)
+	winSecs := serviceMapWindow.Seconds()
+
+	var traceEdges []model.MapEdge
+	if raw, err := s.tele.ServiceGraphEdges(ctx, since); err != nil {
+		log.Printf("service-map: trace edges unavailable: %v", err)
+	} else if traceEdges, err = s.store.ResolveTraceEdges(ctx, clusterID, raw, winSecs); err != nil {
+		log.Printf("service-map: resolve trace edges failed: %v", err)
+		traceEdges = nil
 	}
-	traceEdges, err := s.store.ResolveTraceEdges(ctx, clusterID, raw, serviceMapWindow.Seconds())
-	if err != nil {
-		log.Printf("service-map: resolve trace edges failed (falling back to conntrack): %v", err)
-		return conntrack
+
+	var flowEdges []model.MapEdge
+	if raw, err := s.tele.FlowEdges(ctx, since); err != nil {
+		log.Printf("service-map: flow edges unavailable: %v", err)
+	} else if flowEdges, err = s.store.ResolveFlowEdges(ctx, clusterID, raw, winSecs); err != nil {
+		log.Printf("service-map: resolve flow edges failed: %v", err)
+		flowEdges = nil
 	}
-	if len(traceEdges) == 0 {
+
+	if len(traceEdges) == 0 && len(flowEdges) == 0 {
 		return conntrack
 	}
 
-	out := make([]model.MapEdge, 0, len(traceEdges)+len(conntrack))
-	seen := make(map[string]bool, len(traceEdges))
+	out := make([]model.MapEdge, 0, len(traceEdges)+len(flowEdges)+len(conntrack))
+	seen := make(map[string]bool, len(traceEdges)+len(flowEdges))
 	for _, e := range traceEdges {
+		out = append(out, e)
+		seen[e.From+"\x00"+e.To] = true
+	}
+	for _, e := range flowEdges {
+		if seen[e.From+"\x00"+e.To] {
+			continue // L7-Kante gewinnt (hat RED statt nur Bytes)
+		}
 		out = append(out, e)
 		seen[e.From+"\x00"+e.To] = true
 	}
 	for _, e := range conntrack {
 		if seen[e.From+"\x00"+e.To] {
-			continue // Trace-Kante gewinnt
+			continue
 		}
 		e.Source = "conntrack"
 		out = append(out, e)

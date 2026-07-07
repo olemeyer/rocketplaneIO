@@ -133,6 +133,53 @@ func (s *Store) ResolveTraceEdges(ctx context.Context, clusterID uuid.UUID, raw 
 	return out, nil
 }
 
+// ResolveFlowEdges validiert L4-Flow-Kanten (beide Seiten Beyla-kube-dekoriert)
+// gegen die Topologie und liefert Map-Kanten mit Bytes-Rate. Seiten, die auf
+// keinen bekannten Workload auflösen (externe Ziele, Kube-Services ohne
+// namensgleichen Workload wie 'kubernetes'), fallen weg; ebenso Self-Kanten.
+func (s *Store) ResolveFlowEdges(ctx context.Context, clusterID uuid.UUID, raw []model.RawFlowEdge, windowSecs float64) ([]model.MapEdge, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if windowSecs <= 0 {
+		windowSecs = 1
+	}
+	res, err := s.loadTopologyResolver(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	type acc struct{ bytes float64 }
+	agg := map[string]*acc{}
+	order := []string{}
+	for _, e := range raw {
+		from := res.workload(e.SrcNs, e.SrcName)
+		to := res.workload(e.DstNs, e.DstName)
+		if from == "" || to == "" || from == to {
+			continue
+		}
+		key := from + "\x00" + to
+		a := agg[key]
+		if a == nil {
+			a = &acc{}
+			agg[key] = a
+			order = append(order, key)
+		}
+		a.bytes += e.Bytes
+	}
+	out := make([]model.MapEdge, 0, len(order))
+	for _, key := range order {
+		fromTo := strings.SplitN(key, "\x00", 2)
+		out = append(out, model.MapEdge{
+			From:      fromTo[0],
+			To:        fromTo[1],
+			Source:    "flow",
+			Protocol:  "tcp",
+			BytesRate: agg[key].bytes / windowSecs,
+		})
+	}
+	return out, nil
+}
+
 // topologyResolver hält die für die Auflösung nötigen Topologie-Indizes eines
 // Clusters (einmal geladen, dann rein in-memory aufgelöst).
 type topologyResolver struct {
