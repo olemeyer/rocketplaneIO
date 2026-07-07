@@ -122,7 +122,14 @@ spec:
           image: "${RP_AGENT_IMAGE}"
           imagePullPolicy: IfNotPresent
           securityContext:
-            # conntrack-Netlink-Dump braucht CAP_NET_ADMIN; sonst keine Rechte.
+            # conntrack-Netlink-Dump braucht CAP_NET_ADMIN im EFFECTIVE-Set.
+            # Kubernetes kennt keine Ambient Capabilities: bei non-root (das
+            # Image läuft als USER nonroot) wird die Capability beim exec
+            # gestrippt → netlink EPERM, 0 Flows. Daher HIER root — diese
+            # Dev-Variante ist ohnehin hostNetwork+NET_ADMIN und nur für
+            # lokale Test-Cluster; deploy/install.yaml bleibt nonroot.
+            runAsUser: 0
+            runAsNonRoot: false
             capabilities:
               add: ["NET_ADMIN"]
               drop: ["ALL"]
