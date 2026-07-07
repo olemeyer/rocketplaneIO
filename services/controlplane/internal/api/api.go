@@ -15,6 +15,7 @@ import (
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/auth"
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/config"
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/events"
+	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/leader"
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/promqlx"
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/store"
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/telemetry"
@@ -41,7 +42,7 @@ type Server struct {
 // New builds the API server.
 func New(cfg *config.Config, st *store.Store, au *auth.Auth, pool *pgxpool.Pool) *Server {
 	tele := telemetry.NewStore(cfg.ClickHouseURL, cfg.ClickHouseUser, cfg.ClickHousePassword, cfg.ClickHouseDB)
-	return &Server{cfg: cfg, store: st, auth: au, pool: pool, tele: tele, broker: events.NewBroker(), promql: promqlx.New(tele), shutdownCh: make(chan struct{})}
+	return &Server{cfg: cfg, store: st, auth: au, pool: pool, tele: tele, broker: events.NewBroker(pool), promql: promqlx.New(tele), shutdownCh: make(chan struct{})}
 }
 
 // NotifyShutdown schließt alle offenen SSE-Streams; für
@@ -196,24 +197,36 @@ func (s *Server) StartBackground(ctx context.Context) {
 	if err := s.tele.EnsureLogsSchema(ctx); err != nil {
 		log.Printf("logs schema: %v", err)
 	}
-	go alerts.New(s.store, s.tele, s.broker, s.promql).Run(ctx)
 
-	// Action-Reaper: garantiert, dass Cancel/Runs nie ewig hängen (auch wenn der
-	// Agent tot ist). Läuft leichtgewichtig alle 30s.
-	go func() {
+	// Cross-Replica-Eventverteilung: der LISTEN-Loop stellt NOTIFYs an die
+	// lokalen SSE-Subscriber zu (Publish geht bei jeder Replica über NOTIFY).
+	go s.broker.Run(ctx)
+
+	// Singleton-Arbeit läuft nur auf dem Leader (Postgres-Advisory-Lock) —
+	// mit >1 Replica würden Alerts sonst doppelt feuern und der Reaper doppelt
+	// aufräumen. Verliert der Leader seine DB-Session, übernimmt eine andere.
+	go leader.Run(ctx, s.pool, "alerts+reaper", leaderLockKey, func(leadCtx context.Context) {
+		go alerts.New(s.store, s.tele, s.broker, s.promql).Run(leadCtx)
+
+		// Action-Reaper: garantiert, dass Cancel/Runs nie ewig hängen (auch wenn
+		// der Agent tot ist). Läuft leichtgewichtig alle 30s.
 		t := time.NewTicker(30 * time.Second)
 		defer t.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-leadCtx.Done():
 				return
 			case <-t.C:
-				if n, err := s.store.ReapActions(ctx); err != nil {
+				if n, err := s.store.ReapActions(leadCtx); err != nil {
 					log.Printf("action reaper: %v", err)
 				} else if n > 0 {
 					log.Printf("action reaper: finalized %d stuck action(s)", n)
 				}
 			}
 		}
-	}()
+	})
 }
+
+// leaderLockKey ist der clusterweit feste Advisory-Lock-Schlüssel für die
+// Singleton-Hintergrundarbeit der Control-Plane (zufällig gewählt, stabil).
+const leaderLockKey int64 = 0x726f636b_65740001
