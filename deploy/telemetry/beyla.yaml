@@ -1,0 +1,109 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: beyla
+  namespace: rocketplane
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rocketplane-beyla
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rocketplane-beyla
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: rocketplane-beyla
+subjects:
+  - kind: ServiceAccount
+    name: beyla
+    namespace: rocketplane
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: beyla
+  namespace: rocketplane
+  labels:
+    app.kubernetes.io/name: beyla
+    app.kubernetes.io/part-of: rocketplane
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: beyla
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: beyla
+        app.kubernetes.io/part-of: rocketplane
+    spec:
+      serviceAccountName: beyla
+      # hostPID: eBPF muss die PIDs aller Node-Prozesse sehen, um sie zu
+      # instrumentieren. hostNetwork: die L4-Flow-Erfassung (network metrics)
+      # attacht an die Interfaces des NETZ-Namespaces — ohne hostNetwork sieht
+      # Beyla nur den Traffic des eigenen Pods, nicht den der Node-Pods
+      # (Standard bei Netzwerk-Monitoren: Cilium/Coroot laufen genauso).
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: beyla
+          image: grafana/beyla:2.2
+          securityContext:
+            privileged: true
+          env:
+            # Breite Abdeckung: gängige HTTP/gRPC-App-Ports UND DB-Ports
+            # (Beyla erkennt SQL/Redis → App↔DB-Kanten in der Map).
+            - name: BEYLA_OPEN_PORT
+              value: "80,443,3000,3001,4173,5000,5678,8000,8080,8090,8443,9000,3306,5432,6379,27017"
+            # Go-Apps (pgx, clickhouse-go) machen DB-I/O OHNE database/sql —
+            # Beylas Go-Uprobes sehen davon nichts (0 Client-Spans trotz Last).
+            # Generische kprobe-Instrumentierung erfasst das Postgres-Protokoll
+            # auch bei Go-Prozessen; Preis: Go-spezifische Uprobe-Extras entfallen.
+            - name: BEYLA_SKIP_GO_SPECIFIC_TRACERS
+              value: "true"
+            - name: BEYLA_KUBE_METADATA_ENABLE
+              value: "true"
+            # L4-Netzwerk-Flows (eBPF): Verbindungs-Kanten für Protokolle, die
+            # L7-seitig nicht parsebar sind (NATS, ClickHouse-native, …). Die CP
+            # nutzt sie als Füll-Kanten unter den L7-Trace-Kanten — der CNI-
+            # agnostische Ersatz für conntrack.
+            - name: BEYLA_NETWORK_METRICS
+              value: "true"
+            - name: BEYLA_OTEL_METRICS_FEATURES
+              value: "application,network"
+            # Cluster-Identität in JEDE Telemetrie stempeln (k8s.cluster.name war
+            # sonst leer) — Grundlage für Multi-Cluster-Scoping in der CP.
+            - name: BEYLA_KUBE_CLUSTER_NAME
+              value: "my-cluster" # ANPASSEN: Name eures Clusters
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4318"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "http/protobuf"
+            - name: BEYLA_METRICS_INTERVAL
+              value: "15s"
+            # eBPF-Context-Propagation: W3C traceparent in ausgehende Requests
+            # instrumentierter Prozesse → service-übergreifende Traces ohne SDK.
+            # "headers": saubere W3C-traceparent-Verkettung (echte verteilte Traces).
+            # NICHT "all" — dessen IP/Connection-Heuristik klebt zusammenhanglose
+            # Requests einer Keep-Alive-Verbindung in EINEN Trace (falsche Waterfalls).
+            - name: BEYLA_BPF_CONTEXT_PROPAGATION
+              value: "headers"
+            - name: BEYLA_BPF_TRACK_REQUEST_HEADERS
+              value: "true"
+          resources:
+            requests: { cpu: 50m, memory: 256Mi }
+            limits: { cpu: 800m, memory: 1Gi }
