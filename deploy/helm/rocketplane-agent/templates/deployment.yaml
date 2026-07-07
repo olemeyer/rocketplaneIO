@@ -53,6 +53,15 @@ spec:
               value: {{ .Values.clusterName | quote }}
             - name: RP_AGENT_VERSION
               value: {{ .Chart.AppVersion | quote }}
+            # Leader-election identity (replicas>1: exactly one agent leads).
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

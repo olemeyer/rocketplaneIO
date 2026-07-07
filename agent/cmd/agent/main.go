@@ -17,6 +17,11 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/leaderelection"
+	"k8s.io/client-go/tools/leaderelection/resourcelock"
 
 	"github.com/rocketplaneio/rocketplane/agent/internal/actions"
 	"github.com/rocketplaneio/rocketplane/agent/internal/enroll"
@@ -107,39 +112,78 @@ func main() {
 		return
 	}
 
-	// role=full: der einzige Writer.
-	log.Printf("role=full — topology, inventory, actions, namespaces")
-	go func() {
-		if err := syncer.RunTopology(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("topology: %v", err)
+	// role=full: der einzige Writer — alle Loops laufen zusammen bis runCtx endet.
+	runFull := func(runCtx context.Context) {
+		go func() {
+			if err := syncer.RunTopology(runCtx); err != nil && runCtx.Err() == nil {
+				log.Printf("topology: %v", err)
+			}
+		}()
+		// Zero-config Log-Collection (no-op ohne /var/log/pods-Mount — auf Clustern mit
+		// dem logs-DaemonSet übernimmt dieser die Logs; hier bleibt es ein stiller No-Op).
+		go func() {
+			if err := syncer.RunLogs(runCtx); err != nil && runCtx.Err() == nil {
+				log.Printf("logs: %v", err)
+			}
+		}()
+		// K8s-Inventar (Services/Ingress/Config/Batch/… als kompakte Zusammenfassung)
+		// für die Resources-Seite + das list_resources-Tool des Copilots.
+		go func() {
+			if err := syncer.RunInventory(runCtx); err != nil && runCtx.Err() == nil {
+				log.Printf("inventory: %v", err)
+			}
+		}()
+		// Safe-Actions: dispatch/cancel kommen live über den outbound SSE-Stream
+		// (Fallback: seltener Poll), ausgeführt wird im Cluster — outbound-only.
+		// Nach jeder Aktion Topologie-Burst — die UI sieht den Rollout live.
+		go func() {
+			runner := actions.New(controlplaneURL, resp.AgentToken, clientset, syncer.TriggerTopologySync)
+			if err := runner.Run(runCtx); err != nil && runCtx.Err() == nil {
+				log.Printf("actions: %v", err)
+			}
+		}()
+		if err := syncer.Run(runCtx); err != nil && runCtx.Err() == nil {
+			log.Fatalf("sync: %v", err)
 		}
-	}()
-	// Zero-config Log-Collection (no-op ohne /var/log/pods-Mount — auf Clustern mit
-	// dem logs-DaemonSet übernimmt dieser die Logs; hier bleibt es ein stiller No-Op).
-	go func() {
-		if err := syncer.RunLogs(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("logs: %v", err)
-		}
-	}()
-	// K8s-Inventar (Services/Ingress/Config/Batch/… als kompakte Zusammenfassung)
-	// für die Resources-Seite + das list_resources-Tool des Copilots.
-	go func() {
-		if err := syncer.RunInventory(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("inventory: %v", err)
-		}
-	}()
-	// Safe-Actions: dispatch/cancel kommen live über den outbound SSE-Stream
-	// (Fallback: seltener Poll), ausgeführt wird im Cluster — outbound-only.
-	// Nach jeder Aktion Topologie-Burst — die UI sieht den Rollout live.
-	go func() {
-		runner := actions.New(controlplaneURL, resp.AgentToken, clientset, syncer.TriggerTopologySync)
-		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("actions: %v", err)
-		}
-	}()
-	if err := syncer.Run(ctx); err != nil && ctx.Err() == nil {
-		log.Fatalf("sync: %v", err)
 	}
+
+	// HA: mit replicas>1 darf genau EIN Agent schreiben/handeln (Topologie-
+	// Full-Sync + Action-Ausführung vertragen keine zwei Writer). Eine
+	// Kubernetes-Lease wählt den Leader; Standbys warten heiß. Verliert der
+	// Leader die Lease, beendet er sich hart — der Neustart ist der sauberste
+	// Weg, halb laufende Loops sicher loszuwerden (kein Split-Brain-Rest).
+	if envOr("RP_AGENT_LEADER_ELECT", "true") != "true" {
+		log.Printf("role=full — leader election disabled (RP_AGENT_LEADER_ELECT=false)")
+		runFull(ctx)
+		log.Printf("shutting down")
+		return
+	}
+	identity := envOr("POD_NAME", hostname())
+	leaseNs := envOr("POD_NAMESPACE", "rocketplane")
+	log.Printf("role=full — campaigning for lease %s/rocketplane-agent-leader (id=%s)", leaseNs, identity)
+	leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
+		Lock: &resourcelock.LeaseLock{
+			LeaseMeta:  metav1.ObjectMeta{Name: "rocketplane-agent-leader", Namespace: leaseNs},
+			Client:     clientset.CoordinationV1(),
+			LockConfig: resourcelock.ResourceLockConfig{Identity: identity},
+		},
+		ReleaseOnCancel: true, // SIGTERM gibt die Lease sofort frei → schneller Failover
+		LeaseDuration:   15 * time.Second,
+		RenewDeadline:   10 * time.Second,
+		RetryPeriod:     2 * time.Second,
+		Callbacks: leaderelection.LeaderCallbacks{
+			OnStartedLeading: func(leadCtx context.Context) {
+				log.Printf("leader: acquired — topology, inventory, actions, namespaces")
+				runFull(leadCtx)
+			},
+			OnStoppedLeading: func() {
+				if ctx.Err() != nil {
+					return // regulärer Shutdown
+				}
+				log.Fatalf("leader: lease lost — exiting for a clean restart")
+			},
+		},
+	})
 
 	log.Printf("shutting down")
 }

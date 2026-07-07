@@ -47,6 +47,11 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
     verbs: ["get", "list", "watch"]
+  # HA leader election: with replicas>1 exactly one agent syncs and acts;
+  # the leader is chosen via a Lease in the agent's namespace.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
   {{- if .Values.rbac.actions }}
   # ── ACT (safe actions) ──
   # scale/restart/set-image/set-env/set-resources/rollout-*/partition = patch controllers

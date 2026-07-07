@@ -62,6 +62,10 @@ rules:
   - apiGroups: [""]
     resources: ["nodes/proxy"]
     verbs: ["get"]
+  # HA leader election: with replicas>1 exactly one agent syncs and acts.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["delete"]
@@ -157,6 +161,14 @@ spec:
               value: {{ y .ClusterName }}
             - name: RP_AGENT_VERSION
               value: {{ y .AgentVersion }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           # Zero-config Log-Collection: Node-Logs read-only mitlesen.
           # /var/lib/docker/containers deckt Docker-Runtime-Symlinks ab (minikube).
           volumeMounts:
@@ -221,6 +233,14 @@ spec:
               value: {{ y .ClusterName }}
             - name: RP_AGENT_VERSION
               value: {{ y .AgentVersion }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           resources:
             requests: {cpu: 50m, memory: 64Mi}
             limits: {cpu: 200m, memory: 128Mi}

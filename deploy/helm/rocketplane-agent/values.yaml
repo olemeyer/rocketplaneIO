@@ -50,8 +50,10 @@ rbac:
   # pod delete, node patch, evictions). Set false for observe-only.
   actions: true
 
-# -- Number of agent replicas. Keep at 1: the agent performs full-sync and a single
-# writer avoids redundant control-plane traffic.
+# -- Number of agent replicas. A Kubernetes Lease elects exactly ONE leader that
+# syncs and executes actions; extra replicas are hot standbys for fast failover.
+# 1 is fine for most clusters (Kubernetes restarts the pod quickly anyway);
+# set 2 for HA.
 replicaCount: 1
 
 # Container-log collection. A SEPARATE DaemonSet (one pod per node) tails the
