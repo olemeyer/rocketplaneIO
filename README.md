@@ -138,6 +138,11 @@ The section every platform team reads first:
   lands in the audit trail.
 - **eBPF:** Beyla runs as a privileged DaemonSet (kernel ≥ 5.8 with BTF). The capture layer is
   upstream OpenTelemetry tooling — rocketplaneIO is the investigation-and-action loop on top.
+- **Footprint** (measured on single-node minikube under continuous synthetic load — indicative,
+  not a production benchmark): the rocketplaneIO **agent** is one lightweight pod at **~2m CPU
+  and ~10Mi memory**, cluster-wide. **Beyla** is the real cost and scales with request volume —
+  **~0.02 core idle, spiking to ~0.25 core under load, ~280Mi memory per node** (bounded; its
+  default limit is 512Mi). One agent for the cluster, one Beyla per node.
 
 ## What else is in the box
 
@@ -261,7 +266,7 @@ docker build -t rocketplaneio/agent        -f agent/Dockerfile .
 |---|---|
 | Copilot: BYO-LLM investigation → guardrailed fixes | Tagged releases + platform Helm chart |
 | eBPF traces incl. compiled Go, log→trace correlation | Hosted demo |
-| ~30 safe actions with verify, rollback and revert | Measured overhead numbers |
+| ~30 safe actions with verify, rollback and revert | Production-scale overhead benchmarks |
 | Runs audit trail, guaranteed-terminating cancel | Multi-user RBAC hardening |
 | Alerts with auto-remediation dispatch | Server-side LLM key vault |
 | PromQL + custom metrics on ClickHouse, full K8s inventory | |
