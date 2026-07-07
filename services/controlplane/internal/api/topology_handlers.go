@@ -1,10 +1,13 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/auth"
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/model"
@@ -86,7 +89,54 @@ func (s *Server) handleServiceMap(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "failed to build service map")
 		return
 	}
+	// Trace-Kanten (Beyla-eBPF) sind die PRIMÄRE Quelle; die conntrack-Kanten aus
+	// der ServiceMap sind der Fallback. Best-effort: fehlt/klemmt ClickHouse, bleibt
+	// es bei der conntrack-Map — die Map darf daran nie scheitern.
+	m.Edges = s.enrichWithTraceEdges(r.Context(), clusterID, m.Edges)
 	writeJSON(w, http.StatusOK, m)
+}
+
+// serviceMapWindow ist das Fenster, über das Trace-Kanten und ihre RED-Werte
+// aggregiert werden. Bewusst großzügig (15 min), damit die Map auf Clustern mit
+// stoßweisem/sparsamem Traffic nicht flackert; die RED-Rate ist ein Mittel darüber.
+const serviceMapWindow = 15 * time.Minute
+
+// enrichWithTraceEdges ersetzt/ergänzt die conntrack-Kanten durch trace-abgeleitete
+// Kanten (mit RED). Primär gewinnt Trace: eine conntrack-Kante bleibt nur, wenn es
+// für dasselbe (from,to) KEINE Trace-Kante gibt. Fehler werden geschluckt (Fallback
+// = unveränderte conntrack-Kanten), damit die Map robust bleibt.
+func (s *Server) enrichWithTraceEdges(ctx context.Context, clusterID uuid.UUID, conntrack []model.MapEdge) []model.MapEdge {
+	if s.cfg.ClickHouseURL == "" {
+		return conntrack
+	}
+	raw, err := s.tele.ServiceGraphEdges(ctx, time.Now().Add(-serviceMapWindow))
+	if err != nil {
+		log.Printf("service-map: trace edges unavailable (falling back to conntrack): %v", err)
+		return conntrack
+	}
+	traceEdges, err := s.store.ResolveTraceEdges(ctx, clusterID, raw, serviceMapWindow.Seconds())
+	if err != nil {
+		log.Printf("service-map: resolve trace edges failed (falling back to conntrack): %v", err)
+		return conntrack
+	}
+	if len(traceEdges) == 0 {
+		return conntrack
+	}
+
+	out := make([]model.MapEdge, 0, len(traceEdges)+len(conntrack))
+	seen := make(map[string]bool, len(traceEdges))
+	for _, e := range traceEdges {
+		out = append(out, e)
+		seen[e.From+"\x00"+e.To] = true
+	}
+	for _, e := range conntrack {
+		if seen[e.From+"\x00"+e.To] {
+			continue // Trace-Kante gewinnt
+		}
+		e.Source = "conntrack"
+		out = append(out, e)
+	}
+	return out
 }
 
 // handleSetWorkloadIcon — PUT /api/orgs/{org}/clusters/{cluster}/workload-icon

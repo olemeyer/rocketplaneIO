@@ -136,11 +136,35 @@ type MapNode struct {
 	Icon  string `json:"icon"`
 }
 
-// MapEdge ist eine gerichtete, aggregierte Flow-Kante zwischen zwei Workloads.
+// MapEdge ist eine gerichtete, aggregierte Kante zwischen zwei Workloads.
 type MapEdge struct {
 	From      string `json:"from"` // MapNode.ID
 	To        string `json:"to"`
 	ConnCount int64  `json:"connCount"`
+	// Source unterscheidet die Kantenherkunft: "trace" = aus Beyla-eBPF-Spans
+	// (primär, mit RED), "conntrack" = Fallback aus der Kernel-Conntrack-Tabelle
+	// (nur Verbindungszahl). Leer bei Alt-Clients.
+	Source string `json:"source,omitempty"`
+	// L7-Anreicherung — nur bei Source=="trace" gesetzt.
+	Protocol string  `json:"protocol,omitempty"` // http | grpc | <db.system> (postgresql, redis, …)
+	ReqRate  float64 `json:"reqRate,omitempty"`  // Requests/Sekunde über das Fenster
+	ErrRate  float64 `json:"errRate,omitempty"`  // Fehleranteil 0..1
+	P95Ms    float64 `json:"p95Ms,omitempty"`    // p95-Latenz in ms
+}
+
+// RawTraceEdge ist eine aus Beyla-CLIENT-Spans aggregierte, NOCH NICHT auf
+// Workloads aufgelöste Kante: der Client-Workload ist sauber (ResourceAttributes),
+// das Ziel ist nur eine server.address (k8s-Service-Name oder IP). Die Auflösung
+// auf einen Map-Knoten passiert gegen die Cluster-Topologie (store.ResolveTraceEdges).
+type RawTraceEdge struct {
+	ClientNs   string
+	ClientName string
+	ServerAddr string
+	ServerPort string
+	Protocol   string
+	Reqs       int64
+	Errs       int64
+	P95Ms      float64
 }
 
 // ServiceMap ist die Antwort von GET …/clusters/{id}/service-map.
