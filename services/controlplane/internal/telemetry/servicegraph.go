@@ -50,12 +50,24 @@ func (s *Store) ServiceGraphEdges(ctx context.Context, since time.Time) ([]model
 // (Peer = server.address), sonst Server-Spans (Peer = client.address).
 func (s *Store) spanEdges(ctx context.Context, since time.Time, knownIsClient bool) ([]model.RawTraceEdge, error) {
 	kind, peerAttr := "Server", "client.address"
+	// Ephemeral-Port-Guard (nur Client-Spans): Beyla vertauscht bei Verbindungen,
+	// die VOR dem eBPF-Attach bestanden, gelegentlich die Richtung und emittiert
+	// auf der Server-Seite Client-Spans, deren server.port dann der EPHEMERAL-
+	// Quellport des echten Clients ist (>=32768). Legitime Ziele haben Service-
+	// Ports (5432, 8123, 443, …) — ephemere server.ports sind ein sicheres
+	// Flip-Signal und werden an der Quelle verworfen (sonst entstehen Rückwärts-
+	// Kanten wie postgres→pgbouncer).
+	portGuard := ""
 	if knownIsClient {
 		kind, peerAttr = "Client", "server.address"
+		portGuard = "AND (SpanAttributes['server.port'] = '' OR toUInt32OrZero(SpanAttributes['server.port']) < 32768)"
 	}
+	// knownNs fällt auf service.namespace zurück: Beyla verliert bei geforkten
+	// DB-Backends (CNPG-Postgres) zeitweise die k8s-Dekoration, setzt aber
+	// service.namespace korrekt — ohne Fallback gingen deren Kanten verloren.
 	sql := fmt.Sprintf(`
 		SELECT
-		  ResourceAttributes['k8s.namespace.name'] AS knownNs,
+		  coalesce(nullIf(ResourceAttributes['k8s.namespace.name'], ''), ResourceAttributes['service.namespace']) AS knownNs,
 		  coalesce(nullIf(ResourceAttributes['k8s.owner.name'], ''), ResourceAttributes['service.name']) AS knownName,
 		  lower(replaceRegexpOne(SpanAttributes['%s'], ':[0-9]+$', '')) AS peer,
 		  multiIf(SpanAttributes['db.system.name'] != '', SpanAttributes['db.system.name'],
@@ -68,10 +80,11 @@ func (s *Store) spanEdges(ctx context.Context, since time.Time, knownIsClient bo
 		  AND Timestamp >= {since:DateTime64(9)}
 		  AND knownNs != '' AND knownName != ''
 		  AND peer NOT IN ('', '127.0.0.1', '::1', 'localhost')
+		  %s
 		GROUP BY knownNs, knownName, peer, protocol
 		HAVING reqs > 0
 		ORDER BY reqs DESC
-		LIMIT 2000 FORMAT JSONEachRow`, peerAttr, s.db)
+		LIMIT 2000 FORMAT JSONEachRow`, peerAttr, s.db, portGuard)
 
 	params := url.Values{"query": {sql}}
 	params.Set("param_since", nanoToCH(since.UnixNano()))

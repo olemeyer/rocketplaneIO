@@ -49,6 +49,10 @@ func TestResolveTraceEdgesLive(t *testing.T) {
 		// SERVER-Span, dessen Client-Sicht schon existiert (controlplane→clickhouse):
 		// darf NICHT doppelt zählen (Pass-2 überspringt bekannte Paare).
 		{KnownNs: "rocketplane", KnownName: "clickhouse", Peer: "controlplane", KnownIsClient: false, Protocol: "http", Reqs: 999, Errs: 0, P95Ms: 999},
+		// GEFLIPPTER Server-Span: würde die GESPIEGELTE Kante clickhouse→controlplane
+		// erzeugen — der Reverse-Pair-Guard muss sie verwerfen (Client-Kante
+		// controlplane→clickhouse existiert).
+		{KnownNs: "rocketplane", KnownName: "controlplane", Peer: "clickhouse", KnownIsClient: false, Protocol: "http", Reqs: 50, Errs: 0, P95Ms: 1},
 	}
 
 	edges, err := st.ResolveTraceEdges(ctx, clusterID, raw, 60)
@@ -95,6 +99,10 @@ func TestResolveTraceEdgesLive(t *testing.T) {
 		if k == "kube-system/Deployment/coredns -> " || len(k) > 0 && contains(k, "100.64.0.1") {
 			t.Errorf("apiserver IP produced an edge: %s", k)
 		}
+	}
+	// Reverse-Pair-Guard: die gespiegelte Server-Span-Kante darf nicht existieren.
+	if _, ok := got["rocketplane/StatefulSet/clickhouse -> rocketplane/Deployment/controlplane"]; ok {
+		t.Errorf("mirrored server-span edge leaked (reverse-pair guard failed)")
 	}
 	t.Logf("resolved %d edges from %d raw", len(edges), len(raw))
 }

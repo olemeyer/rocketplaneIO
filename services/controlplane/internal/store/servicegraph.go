@@ -58,13 +58,23 @@ func (s *Store) ResolveTraceEdges(ctx context.Context, clusterID uuid.UUID, raw 
 		if known == "" {
 			return // berichtender Workload nicht in der Topologie
 		}
-		peer := res.resolveServer(e.KnownNs, e.Peer)
+		// Server-Span-Peers sind von Beyla IMMER kube-dekoriert (bare-name oder
+		// name.namespace) — der clusterweite Namens-Fallback ist für sie nur ein
+		// Phantom-Kanten-Risiko und bleibt Client-Peers vorbehalten.
+		peer := res.resolveServer(e.KnownNs, e.Peer, e.KnownIsClient)
 		if peer == "" || peer == known {
 			return // Gegenseite nicht auflösbar (z.B. Node-Name, apiserver) oder Selbst-Kante
 		}
 		from, to := known, peer
 		if !e.KnownIsClient {
 			from, to = peer, known // Server-Span: die Gegenseite ist der Aufrufer
+			// Reverse-Pair-Guard: liegt die GEGENRICHTUNG bereits als Client-
+			// Span-Kante vor, ist diese Server-Kante fast sicher derselbe
+			// Verkehr mit gekippter Beyla-Richtungserkennung — verwerfen statt
+			// eine gespiegelte Zweitkante zu materialisieren.
+			if rev := agg[to+"\x00"+from]; rev != nil && rev.fromClient {
+				return
+			}
 		}
 		key := from + "\x00" + to
 		a := agg[key]
@@ -138,6 +148,10 @@ type topologyResolver struct {
 	podByIP map[string]string
 	// bekannte Namespaces (für FQDN-Zerlegung name.namespace.svc…)
 	namespaces map[string]bool
+	// Node-Namen des Clusters: SNAT schreibt Client-IPs auf Node-Adressen um,
+	// Beyla dekoriert sie zu Node-Namen — die sind nie App-Peers und werden
+	// explizit verworfen (nicht nur "zufällig kein Workload dieses Namens").
+	nodeNames map[string]bool
 }
 
 func (s *Store) loadTopologyResolver(ctx context.Context, clusterID uuid.UUID) (*topologyResolver, error) {
@@ -148,6 +162,7 @@ func (s *Store) loadTopologyResolver(ctx context.Context, clusterID uuid.UUID) (
 		svcByIP:     map[string]string{},
 		podByIP:     map[string]string{},
 		namespaces:  map[string]bool{},
+		nodeNames:   map[string]bool{},
 	}
 
 	wr, err := s.pool.Query(ctx, `SELECT namespace, kind, name FROM workloads WHERE cluster_id=$1`, clusterID)
@@ -191,7 +206,11 @@ func (s *Store) loadTopologyResolver(ctx context.Context, clusterID uuid.UUID) (
 		return nil, err
 	}
 
-	pr, err := s.pool.Query(ctx, `SELECT namespace, name, ip, workload_kind, workload_name FROM pods WHERE cluster_id=$1 AND ip <> ''`, clusterID)
+	// Nur lebende Pods in den IP-Index: Failed/Succeeded-Pods behalten in ihrem
+	// Status eine podIP, die das CNI längst neu vergeben hat — ein toter Job-Pod
+	// würde sonst die IP eines laufenden Pods kapern und Kanten fehl-auflösen.
+	pr, err := s.pool.Query(ctx, `SELECT namespace, name, ip, workload_kind, workload_name FROM pods
+		WHERE cluster_id=$1 AND ip <> '' AND phase NOT IN ('Succeeded','Failed')`, clusterID)
 	if err != nil {
 		return nil, fmt.Errorf("load pods: %w", err)
 	}
@@ -208,6 +227,23 @@ func (s *Store) loadTopologyResolver(ctx context.Context, clusterID uuid.UUID) (
 	}
 	pr.Close()
 	if err := pr.Err(); err != nil {
+		return nil, err
+	}
+
+	nr, err := s.pool.Query(ctx, `SELECT name FROM nodes WHERE cluster_id=$1`, clusterID)
+	if err != nil {
+		return nil, fmt.Errorf("load nodes: %w", err)
+	}
+	for nr.Next() {
+		var name string
+		if err := nr.Scan(&name); err != nil {
+			nr.Close()
+			return nil, err
+		}
+		r.nodeNames[strings.ToLower(name)] = true
+	}
+	nr.Close()
+	if err := nr.Err(); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -227,12 +263,21 @@ func (r *topologyResolver) workload(ns, name string) string {
 	return ""
 }
 
-// resolveServer löst eine server.address (Name/FQDN/IP) auf einen Workload-Knoten
-// im Kontext des Aufrufer-Namespace auf. Reihenfolge: IP → Pod/Service; Name →
-// (FQDN-Namespace|Client-Namespace) Workload/Service; letzte Instanz: eindeutiger
-// clusterweiter Namenstreffer.
-func (r *topologyResolver) resolveServer(clientNs, addr string) string {
+// resolveServer löst eine Peer-Adresse (Name/FQDN/IP) auf einen Workload-Knoten
+// im Kontext des Aufrufer-Namespace auf. Reihenfolge: Node-Blacklist → IP →
+// (FQDN-Namespace|Client-Namespace) Workload/Service → letzte Instanz nur für
+// Client-Peers OHNE expliziten Namespace: eindeutiger clusterweiter Namenstreffer.
+//
+// allowGlobal steuert die letzte Instanz: Client-Span-Peers (server.address)
+// können rohe Hostnamen sein, Server-Span-Peers (client.address) sind von Beyla
+// immer kube-dekoriert (bare-name oder name.namespace) — für sie ist der
+// clusterweite Fallback nur ein Phantom-Kanten-Risiko.
+func (r *topologyResolver) resolveServer(clientNs, addr string, allowGlobal bool) string {
 	if addr == "" {
+		return ""
+	}
+	// Node-Namen sind SNAT-Artefakte, nie App-Peers.
+	if r.nodeNames[addr] {
 		return ""
 	}
 	// IP-Ziel
@@ -251,11 +296,13 @@ func (r *topologyResolver) resolveServer(clientNs, addr string) string {
 
 	// FQDN zerlegen: name.namespace.svc.cluster.local → (name, namespace)
 	name, ns := addr, clientNs
+	explicitNs := false
 	if strings.Contains(addr, ".") {
 		segs := strings.Split(addr, ".")
 		name = segs[0]
 		if len(segs) >= 2 && r.namespaces[segs[1]] {
 			ns = segs[1]
+			explicitNs = true
 		}
 	}
 
@@ -270,7 +317,13 @@ func (r *topologyResolver) resolveServer(clientNs, addr string) string {
 			return id
 		}
 	}
-	// Letzte Instanz: clusterweit EINDEUTIGER Namenstreffer (sonst mehrdeutig → drop).
+	// Letzte Instanz: clusterweit EINDEUTIGER Namenstreffer — aber nie, wenn die
+	// Adresse einen EXPLIZITEN Namespace trug (dann ist "kein Treffer dort" die
+	// Antwort; ein zufälliger Namensvetter anderswo wäre eine Phantom-Kante, wie
+	// beim IP-Reuse eines toten Job-Pods beobachtet), und nie für Server-Peers.
+	if !allowGlobal || explicitNs {
+		return ""
+	}
 	if ids := r.wlByName[name]; len(ids) == 1 {
 		return ids[0]
 	}
