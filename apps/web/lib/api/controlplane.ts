@@ -241,8 +241,10 @@ export function cancelAction(
   orgId: string,
   clusterId: string,
   actionId: string,
+  force = false,
 ): Promise<{ status: string }> {
-  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/actions/${enc(actionId)}/cancel`, {
+  const suffix = force ? '?force=true' : '';
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/actions/${enc(actionId)}/cancel${suffix}`, {
     method: 'POST',
     body: '{}',
   });
@@ -398,4 +400,15 @@ export function getDerivedSeries(
   const q = new URLSearchParams({ id: defId });
   if (since) q.set('since', since);
   return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/metrics/derived?${q}`);
+}
+
+export interface InventoryKind {
+  kind: string;
+  items: { namespace?: string; name: string; createdAt: string; info: Record<string, string> }[];
+  updatedAt: string;
+}
+
+export function getInventory(orgId: string, clusterId: string, kind = ''): Promise<{ kinds: InventoryKind[] }> {
+  const q = kind ? `?kind=${enc(kind)}` : '';
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/inventory${q}`);
 }

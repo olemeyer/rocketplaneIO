@@ -8,7 +8,7 @@ import { useMe } from '@/components/app/me-context';
 import { PageHeader } from '@/components/app/page-header';
 import { useClusterEvents } from '@/lib/hooks/use-cluster-events';
 import { useInfra } from '@/lib/hooks/use-infra';
-import { ActionRunCard } from '@/components/actions/run-card';
+import { GuardrailsMenu } from '@/components/app/copilot';
 import { StarlarkEditor } from '@/components/actions/starlark-editor';
 import {
   cancelAction,
@@ -23,6 +23,8 @@ import {
 } from '@/lib/api/controlplane';
 import type { ActionDefParam, ActionDefinition, ActionKind, ClusterAction, ServiceMap } from '@/lib/api/types';
 import { BUILTIN_STARLARK } from '@/lib/action-templates';
+import { LEVEL_META, RISK_LEVELS, levelColor, type RiskLevel } from '@/lib/approval';
+import Link from 'next/link';
 
 // Actions — der AKT-Bereich: links die LIBRARY (eingebaute Handgriffe +
 // org-weite Custom-WORKFLOWS in Starlark), rechts die LIVE-Runs des Clusters.
@@ -205,6 +207,137 @@ const BUILTINS: { kind: string; name: string; description: string; fields: Actio
       { name: 'name', type: 'workload', required: true },
     ],
   },
+  {
+    kind: 'set_resources',
+    name: 'set resources',
+    description: 'Set CPU/memory requests & limits on a container and run the verified rollout — the OOMKilled / CPU-throttle fix. Cancel restores the previous resources.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'kind', type: 'enum', options: ['Deployment', 'StatefulSet', 'DaemonSet'], default: 'Deployment' },
+      { name: 'name', type: 'workload', required: true },
+      { name: 'container', type: 'string', description: 'blank = the sole container' },
+      { name: 'requestsCpu', type: 'string', description: 'e.g. 100m' },
+      { name: 'requestsMemory', type: 'string', description: 'e.g. 128Mi' },
+      { name: 'limitsCpu', type: 'string', description: 'e.g. 500m' },
+      { name: 'limitsMemory', type: 'string', description: 'e.g. 256Mi' },
+    ],
+  },
+  {
+    kind: 'set_env',
+    name: 'set env var',
+    description: 'Set or unset a plaintext env var on a container and roll out — log level, feature flag, bad config. Cancel restores the previous value.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'kind', type: 'enum', options: ['Deployment', 'StatefulSet', 'DaemonSet'], default: 'Deployment' },
+      { name: 'name', type: 'workload', required: true },
+      { name: 'container', type: 'string', description: 'blank = the sole container' },
+      { name: 'envName', type: 'string', required: true, description: 'env var name, e.g. LOG_LEVEL' },
+      { name: 'value', type: 'string', description: 'value (ignored when remove=true)' },
+      { name: 'remove', type: 'bool', description: 'unset the var instead' },
+    ],
+  },
+  {
+    kind: 'rollout_history',
+    name: 'rollout history',
+    description: 'Read-only: the revision history of a Deployment (revision, image, change-cause, age) — pick a target for rollout to revision.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'name', type: 'workload', required: true },
+      { name: 'limit', type: 'int', min: 1, max: 20, default: '10' },
+    ],
+  },
+  {
+    kind: 'rollout_to_revision',
+    name: 'rollout to revision',
+    description: 'Roll a Deployment to a specific historical revision (verified rollout). Cancel restores the current template.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'name', type: 'workload', required: true },
+      { name: 'revision', type: 'int', min: 1, required: true, description: 'from rollout history' },
+    ],
+  },
+  {
+    kind: 'statefulset_partition',
+    name: 'staged canary (partition)',
+    description: 'Set a StatefulSet RollingUpdate partition — only ordinals ≥ partition update on the next change. Cancel restores the prior partition.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'name', type: 'workload', required: true },
+      { name: 'partition', type: 'int', min: 0, required: true },
+    ],
+  },
+  {
+    kind: 'hpa_toggle',
+    name: 'freeze / unfreeze HPA',
+    description: 'Freeze an HPA (pin min=max at the current size) so it stops fighting a manual fix — or unfreeze to restore its bounds.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'name', type: 'workload', required: true, description: 'HPA name' },
+      { name: 'enabled', type: 'bool', description: 'on = unfreeze (restore), off = freeze' },
+    ],
+  },
+  {
+    kind: 'patch_configmap',
+    name: 'patch configmap',
+    description: 'Set or remove a single key in a ConfigMap. NOTE: running pods pick it up only after a rollout restart. Cancel restores the prior value.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'name', type: 'string', required: true, description: 'configmap name' },
+      { name: 'key', type: 'string', required: true },
+      { name: 'value', type: 'string', description: 'ignored when remove=true' },
+      { name: 'remove', type: 'bool' },
+    ],
+  },
+  {
+    kind: 'annotate',
+    name: 'annotate object',
+    description: 'Set or remove a single metadata annotation on almost any object (pause an operator, tag for triage). Cancel restores the prior value.',
+    fields: [
+      { name: 'kind', type: 'enum', options: ['Deployment', 'StatefulSet', 'DaemonSet', 'Pod', 'ConfigMap', 'Service', 'PersistentVolumeClaim', 'CronJob', 'HorizontalPodAutoscaler', 'Namespace', 'Node'], default: 'Deployment' },
+      { name: 'namespace', type: 'namespace', default: 'shop', description: 'blank for Node/Namespace' },
+      { name: 'name', type: 'string', required: true, description: 'object name' },
+      { name: 'key', type: 'string', required: true },
+      { name: 'value', type: 'string', description: 'ignored when remove=true' },
+      { name: 'remove', type: 'bool' },
+    ],
+  },
+  {
+    kind: 'set_label',
+    name: 'set label',
+    description: 'Set or remove a label on a Node or Namespace — steer scheduling / namespace admission. Cancel restores the prior value.',
+    fields: [
+      { name: 'kind', type: 'enum', options: ['Node', 'Namespace'], default: 'Node' },
+      { name: 'name', type: 'string', required: true, description: 'node or namespace name' },
+      { name: 'key', type: 'string', required: true },
+      { name: 'value', type: 'string', description: 'ignored when remove=true' },
+      { name: 'remove', type: 'bool' },
+    ],
+  },
+  {
+    kind: 'evict_pod',
+    name: 'evict pod',
+    description: 'The safe recreate: graceful, PDB-aware Eviction API (never force), wait for a ready replacement.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'pod', type: 'string', required: true, description: 'exact pod name' },
+      { name: 'gracePeriodSeconds', type: 'int', min: 0, max: 300, description: 'optional' },
+    ],
+  },
+  {
+    kind: 'cleanup_jobs',
+    name: 'cleanup jobs',
+    description: 'Delete finished (Complete/Failed) Jobs and their pods in a namespace — active jobs untouched.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'olderThanHours', type: 'int', min: 0, description: '0 = all matching' },
+    ],
+  },
+  {
+    kind: 'drain_preview',
+    name: 'drain preview',
+    description: 'Read-only blast radius before a drain: evictable pods, per-workload loss, blocking PDBs.',
+    fields: [{ name: 'node', type: 'node', required: true }],
+  },
 ];
 
 const EXAMPLE_SOURCE = `# Safe scale-up with automatic rollback.
@@ -238,7 +371,8 @@ report("settled at %d replicas" % target)
 // buildActionBody übersetzt (kind, Formularwerte) in den createAction-Body:
 // Target-Auflösung (Node/Namespace/Pod/HPA/CronJob/Workload) + typed Params.
 // Ein Ort für die ganze Zuordnung — neue Kinds hängen genau hier ein.
-const NODE_KINDS = ['cordon', 'uncordon', 'drain', 'node_taint', 'node_untaint'];
+const NODE_KINDS = ['cordon', 'uncordon', 'drain', 'node_taint', 'node_untaint', 'drain_preview'];
+const isTrue = (v?: string) => v === 'true' || v === 'on' || v === '1';
 const CRON_KINDS = ['cronjob_trigger', 'cronjob_suspend', 'cronjob_resume'];
 
 function buildActionBody(kind: string, values: Record<string, string>) {
@@ -251,19 +385,29 @@ function buildActionBody(kind: string, values: Record<string, string>) {
     targetNamespace = '-';
     targetKind = 'Node';
     targetName = values.node ?? '';
-  } else if (kind === 'cleanup_pods') {
+  } else if (kind === 'cleanup_pods' || kind === 'cleanup_jobs') {
     targetNamespace = '-';
     targetKind = 'Namespace';
     targetName = values.namespace ?? '';
-  } else if (kind === 'delete_pod') {
+  } else if (kind === 'delete_pod' || kind === 'evict_pod') {
     targetKind = 'Pod';
     targetName = values.pod ?? '';
-  } else if (kind === 'hpa_set') {
+  } else if (kind === 'hpa_set' || kind === 'hpa_toggle') {
     targetKind = 'HorizontalPodAutoscaler';
+  } else if (kind === 'patch_configmap') {
+    targetKind = 'ConfigMap';
+  } else if (kind === 'statefulset_partition') {
+    targetKind = 'StatefulSet';
+  } else if (kind === 'rollout_to_revision' || kind === 'rollout_pause' || kind === 'rollout_resume') {
+    targetKind = 'Deployment';
+  } else if (kind === 'set_label') {
+    targetKind = values.kind ?? 'Node';
+    targetNamespace = '-';
+  } else if (kind === 'annotate') {
+    targetKind = values.kind ?? 'Deployment';
+    if (targetKind === 'Node' || targetKind === 'Namespace') targetNamespace = '-';
   } else if (CRON_KINDS.includes(kind)) {
     targetKind = 'CronJob';
-  } else if (kind === 'rollout_pause' || kind === 'rollout_resume') {
-    targetKind = 'Deployment';
   }
 
   if (kind === 'scale') params = { replicas: Number(values.replicas ?? 1) };
@@ -274,19 +418,38 @@ function buildActionBody(kind: string, values: Record<string, string>) {
   else if (kind === 'node_taint')
     params = { key: values.key ?? '', value: values.value ?? '', effect: values.effect ?? 'NoSchedule' };
   else if (kind === 'node_untaint') params = { key: values.key ?? '' };
+  else if (kind === 'set_resources')
+    params = {
+      ...(values.container ? { container: values.container } : {}),
+      ...(values.requestsCpu ? { requestsCpu: values.requestsCpu } : {}),
+      ...(values.requestsMemory ? { requestsMemory: values.requestsMemory } : {}),
+      ...(values.limitsCpu ? { limitsCpu: values.limitsCpu } : {}),
+      ...(values.limitsMemory ? { limitsMemory: values.limitsMemory } : {}),
+    };
+  else if (kind === 'set_env')
+    params = { ...(values.container ? { container: values.container } : {}), name: values.envName ?? '', value: values.value ?? '', remove: isTrue(values.remove) };
+  else if (kind === 'rollout_to_revision') params = { revision: Number(values.revision ?? 1) };
+  else if (kind === 'rollout_history') params = { limit: Number(values.limit ?? 10) };
+  else if (kind === 'statefulset_partition') params = { partition: Number(values.partition ?? 0) };
+  else if (kind === 'hpa_toggle') params = { enabled: isTrue(values.enabled) };
+  else if (kind === 'patch_configmap' || kind === 'annotate' || kind === 'set_label')
+    params = { key: values.key ?? '', value: values.value ?? '', remove: isTrue(values.remove) };
+  else if (kind === 'evict_pod') params = values.gracePeriodSeconds ? { gracePeriodSeconds: Number(values.gracePeriodSeconds) } : {};
+  else if (kind === 'cleanup_jobs') params = values.olderThanHours ? { olderThanHours: Number(values.olderThanHours) } : {};
 
   return { kind: kind as ActionKind, targetNamespace, targetKind, targetName, params };
 }
 
 /* ── Library-Katalog: Kategorien, Sicherheitsklassen, Icons (App-Store) ──── */
 
-type Category = 'deploy' | 'scale' | 'batch' | 'pods' | 'node' | 'investigate';
-type ActionClass = 'read' | 'reversible' | 'destructive';
+type Category = 'deploy' | 'scale' | 'config' | 'batch' | 'pods' | 'node' | 'investigate';
+type ActionClass = RiskLevel; // dieselbe 4er-Skala wie die Guardrails (lib/approval)
 
 const CATEGORY_ORDER: { key: Category; label: string }[] = [
   { key: 'investigate', label: 'Investigate' },
   { key: 'deploy', label: 'Deploy & Release' },
   { key: 'scale', label: 'Scaling' },
+  { key: 'config', label: 'Config & Tuning' },
   { key: 'batch', label: 'Batch' },
   { key: 'pods', label: 'Pods & Housekeeping' },
   { key: 'node', label: 'Node ops' },
@@ -298,6 +461,7 @@ const LIB_TABS: { key: string; label: string }[] = [
   { key: 'investigate', label: 'Investigate' },
   { key: 'deploy', label: 'Deploy' },
   { key: 'scale', label: 'Scaling' },
+  { key: 'config', label: 'Config' },
   { key: 'batch', label: 'Batch' },
   { key: 'pods', label: 'Pods' },
   { key: 'node', label: 'Node ops' },
@@ -313,26 +477,36 @@ const ACTION_META: Record<string, { category: Category; klass: ActionClass }> = 
   rollout_restart: { category: 'deploy', klass: 'reversible' },
   rollout_pause: { category: 'deploy', klass: 'reversible' },
   rollout_resume: { category: 'deploy', klass: 'reversible' },
-  rollout_undo: { category: 'deploy', klass: 'reversible' },
+  rollout_undo: { category: 'deploy', klass: 'disruptive' },
   scale: { category: 'scale', klass: 'reversible' },
   hpa_set: { category: 'scale', klass: 'reversible' },
-  cronjob_trigger: { category: 'batch', klass: 'reversible' },
+  cronjob_trigger: { category: 'batch', klass: 'disruptive' },
   cronjob_suspend: { category: 'batch', klass: 'reversible' },
   cronjob_resume: { category: 'batch', klass: 'reversible' },
-  delete_pod: { category: 'pods', klass: 'reversible' },
-  cleanup_pods: { category: 'pods', klass: 'destructive' },
+  delete_pod: { category: 'pods', klass: 'disruptive' },
+  cleanup_pods: { category: 'pods', klass: 'disruptive' },
   cordon: { category: 'node', klass: 'reversible' },
   uncordon: { category: 'node', klass: 'reversible' },
   drain: { category: 'node', klass: 'destructive' },
+  drain_preview: { category: 'node', klass: 'read' },
   node_taint: { category: 'node', klass: 'reversible' },
   node_untaint: { category: 'node', klass: 'reversible' },
+  // Erweiterter Katalog (Batch 1)
+  rollout_history: { category: 'deploy', klass: 'read' },
+  rollout_to_revision: { category: 'deploy', klass: 'reversible' },
+  statefulset_partition: { category: 'deploy', klass: 'reversible' },
+  set_resources: { category: 'config', klass: 'reversible' },
+  set_env: { category: 'config', klass: 'reversible' },
+  patch_configmap: { category: 'config', klass: 'reversible' },
+  annotate: { category: 'config', klass: 'reversible' },
+  set_label: { category: 'config', klass: 'reversible' },
+  hpa_toggle: { category: 'scale', klass: 'reversible' },
+  evict_pod: { category: 'pods', klass: 'disruptive' },
+  cleanup_jobs: { category: 'batch', klass: 'disruptive' },
 };
 
-const CLASS_LABEL: Record<ActionClass, string> = {
-  read: 'read-only',
-  reversible: 'auto-rollback',
-  destructive: 'destructive',
-};
+// Level-Labels/Glyphs kommen aus lib/approval (LEVEL_META) — eine Quelle für
+// Katalog, Copilot-Guardrails und Runs-Seite.
 
 // Monochrome Line-Icons (RETICLE: kein Farb-Spam — currentColor, 1.6px stroke).
 function ActionIcon({ kind }: { kind: string }) {
@@ -356,6 +530,18 @@ function ActionIcon({ kind }: { kind: string }) {
     node_untaint: (<><path d="M4 4h7l9 9-7 7-9-9V4z" /><path d="M3.5 3.5l17 17" /></>),
     debug_bundle: (<><circle cx="10.5" cy="10.5" r="6" /><path d="M15 15l5 5" /></>),
     pod_events: <path d="M4 6h16M4 12h16M4 18h10" />,
+    set_resources: (<><rect x="3.5" y="4" width="17" height="16" rx="1.5" /><path d="M8 8v8M8 16l4-3 4 3M16 8v4" /></>),
+    set_env: (<><path d="M4 7h6v10H4zM14 7h6v10h-6" /><path d="M10 12h4" /></>),
+    rollout_history: (<><circle cx="12" cy="12" r="8" /><path d="M12 7v5l3 2" /><path d="M4 4v3h3" /></>),
+    rollout_to_revision: (<><path d="M9 7L4 12l5 5" /><path d="M4 12h9a6 6 0 0 1 6 6" /><circle cx="19" cy="6" r="1.6" /></>),
+    statefulset_partition: (<><rect x="4" y="4" width="16" height="6" rx="1" /><rect x="4" y="14" width="16" height="6" rx="1" /><path d="M4 12h7" /></>),
+    hpa_toggle: (<><rect x="3.5" y="8" width="17" height="8" rx="4" /><circle cx="8" cy="12" r="2.4" /></>),
+    patch_configmap: (<><rect x="4" y="4" width="16" height="16" rx="1.5" /><path d="M8 9h8M8 13h5" /></>),
+    annotate: (<><path d="M4 5h16v10H10l-4 4v-4H4z" /></>),
+    set_label: (<><path d="M4 8l6-4h9a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9l-6-4z" /><circle cx="16" cy="9" r="1.2" /></>),
+    evict_pod: (<><circle cx="12" cy="9" r="4" /><path d="M6 20a6 6 0 0 1 12 0" /><path d="M19 4l2 2-2 2" /></>),
+    cleanup_jobs: (<><path d="M5 7h14M10 7V5h4v2M6.5 7l1 12h9l1-12" /><path d="M10 11v5M14 11v5" /></>),
+    drain_preview: (<><path d="M12 3s6.5 7.2 6.5 11.5a6.5 6.5 0 0 1-13 0C5.5 10.2 12 3 12 3z" /><circle cx="12" cy="13" r="2.2" /></>),
   };
   return (
     <svg
@@ -412,6 +598,7 @@ export default function ActionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [libQ, setLibQ] = useState('');
   const [libTab, setLibTab] = useState<string>('all');
+  const [levelF, setLevelF] = useState<ActionClass | 'all'>('all');
 
   const loadDefs = useCallback(() => {
     if (!orgId) return;
@@ -491,52 +678,91 @@ export default function ActionsPage() {
 
   return (
     <div className="flex h-[calc(100dvh-52px)] flex-col px-4 pt-4 sm:px-5">
-      <PageHeader kicker="act / safe-actions" title="Actions">
-        <div className="flex items-center gap-3 font-mono text-[11px] text-muted tnum">
-          <span>{BUILTINS.length} built-in</span>
-          <span>{defs?.length ?? 0} workflows</span>
-          {running > 0 ? (
-            <span className="flex items-center gap-1.5" style={{ color: 'var(--rp-ink-mid)' }}>
-              <span
-                className="rp-breath inline-block h-1.5 w-1.5 rounded-full"
-                style={{ background: 'var(--rp-green)', color: 'var(--rp-green)' }}
-              />
-              {running} running
-            </span>
-          ) : null}
+      <PageHeader kicker="act / safe-actions" title="Actions" meta={`${BUILTINS.length} built-in · ${defs?.length ?? 0} custom`}>
+        <div className="flex items-center gap-2">
+          <Link
+            href={`/clusters/${clusterId}/runs`}
+            className="rp-focus flex h-8 items-center gap-1.5 rounded-skin-sm border border-line px-2.5 font-mono text-[11px] text-mid transition-colors hover:bg-hover hover:text-ink"
+          >
+            {running > 0 ? (
+              <>
+                <span className="rp-breath inline-block h-1.5 w-1.5 rounded-full" style={{ background: 'var(--rp-green)', color: 'var(--rp-green)' }} />
+                <span className="tnum">{running} running</span>
+              </>
+            ) : (
+              'runs'
+            )}
+            <span aria-hidden>→</span>
+          </Link>
+          <GuardrailsMenu clusterId={clusterId} />
+          <button
+            type="button"
+            onClick={() =>
+              setEditor({
+                id: null,
+                name: '',
+                description: '',
+                params: [
+                  { name: 'namespace', type: 'namespace', default: 'shop', required: true },
+                  { name: 'name', type: 'workload', required: true },
+                  { name: 'replicas', type: 'int', min: 0, max: 10, default: '2', required: true },
+                ],
+                source: EXAMPLE_SOURCE,
+                timeoutSeconds: 600,
+              })
+            }
+            className="rp-focus h-8 rounded-skin-sm px-3 font-mono text-[11px] font-semibold transition-opacity hover:opacity-90"
+            style={{ background: 'var(--rp-btn-bg)', color: 'var(--rp-btn-fg)' }}
+          >
+            + New workflow
+          </button>
         </div>
       </PageHeader>
 
-      <div className="mt-3 grid min-h-0 flex-1 grid-cols-1 gap-3 pb-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        {/* ── Library ── */}
-        <section className="min-h-0 overflow-y-auto pr-1">
-          <div className="flex items-center justify-between">
-            <span className="rp-micro !text-[10px]">library</span>
-            <button
-              type="button"
-              onClick={() =>
-                setEditor({
-                  id: null,
-                  name: '',
-                  description: '',
-                  params: [
-                    { name: 'namespace', type: 'namespace', default: 'shop', required: true },
-                    { name: 'name', type: 'workload', required: true },
-                    { name: 'replicas', type: 'int', min: 0, max: 10, default: '2', required: true },
-                  ],
-                  source: EXAMPLE_SOURCE,
-                  timeoutSeconds: 600,
-                })
-              }
-              className="rp-focus h-8 rounded-skin-sm px-3 font-mono text-[11px] font-semibold transition-opacity hover:opacity-90"
-              style={{ background: 'var(--rp-btn-bg)', color: 'var(--rp-btn-fg)' }}
-            >
-              + New workflow
-            </button>
+      <div className="mt-3 flex min-h-0 flex-1 flex-col pb-3">
+        {/* ── Toolbar: Suche · Level-Filter · Kategorie-Tabs ── */}
+        <div className="shrink-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={libQ}
+              onChange={(e) => setLibQ(e.target.value)}
+              spellCheck={false}
+              placeholder={`search ${BUILTINS.length} actions…`}
+              className="rp-focus h-9 min-w-[220px] flex-1 rounded-skin-sm border border-line bg-inset px-3 font-mono text-[12px] text-ink placeholder:text-faint"
+            />
+            <div className="flex items-center gap-1">
+              {(['all', ...RISK_LEVELS] as const).map((l) => {
+                const on = levelF === l;
+                const count =
+                  l === 'all'
+                    ? BUILTINS.length
+                    : BUILTINS.filter((b) => (ACTION_META[b.kind]?.klass ?? 'reversible') === l).length;
+                return (
+                  <button
+                    key={l}
+                    type="button"
+                    onClick={() => setLevelF(l as ActionClass | 'all')}
+                    className={cn(
+                      'rp-focus flex items-center gap-1 rounded-skin-chip border px-2 py-1 font-mono text-[10px] transition-colors',
+                      on ? 'border-line-strong bg-hover text-ink' : 'border-line text-muted hover:text-ink',
+                    )}
+                  >
+                    {l === 'all' ? (
+                      'any level'
+                    ) : (
+                      <>
+                        <span style={{ color: levelColor(l) }}>{LEVEL_META[l as RiskLevel].glyph}</span>
+                        {LEVEL_META[l as RiskLevel].label}
+                      </>
+                    )}
+                    <span className="text-[9px] text-faint tnum">{count}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
-          {/* Tabs oben — Action-Typen + Custom */}
-          <div className="mt-3 flex gap-1 overflow-x-auto pb-1">
+          <div className="mt-2 flex gap-1 overflow-x-auto pb-1">
             {LIB_TABS.map((t) => {
               const count =
                 t.key === 'all'
@@ -562,22 +788,25 @@ export default function ActionsPage() {
               );
             })}
           </div>
+        </div>
 
+        {/* ── Katalog ── */}
+        <div className="mt-2 min-h-0 flex-1 overflow-y-auto pr-1">
           {libTab === 'custom' ? (
             defs === null ? (
-              <div className="mt-3 flex items-center gap-2 text-muted">
+              <div className="mt-2 flex items-center gap-2 text-muted">
                 <Spinner /> <span className="font-mono text-[11px]">loading…</span>
               </div>
             ) : defs.length === 0 ? (
               <div
-                className="mt-3 rounded-skin border border-dashed p-5 text-center font-mono text-[11px] leading-relaxed text-muted"
+                className="mt-2 rounded-skin border border-dashed p-5 text-center font-mono text-[11px] leading-relaxed text-muted"
                 style={{ borderColor: 'var(--rp-line-strong)' }}
               >
                 No workflows yet — fork any built-in action or start from scratch. Hermetic
                 Python, verified on the pod, auto-rolled-back. Hit “+ New workflow”.
               </div>
             ) : (
-              <div className="mt-3 space-y-2">
+              <div className="mt-1 space-y-2">
                 {defs.map((d) => (
                   <div
                     key={d.id}
@@ -628,113 +857,84 @@ export default function ActionsPage() {
               </div>
             )
           ) : (
-            <>
-              <div className="mt-3">
-                <input
-                  value={libQ}
-                  onChange={(e) => setLibQ(e.target.value)}
-                  spellCheck={false}
-                  placeholder="search actions…"
-                  className="rp-focus h-9 w-full rounded-skin-sm border border-line bg-inset px-3 font-mono text-[12px] text-ink placeholder:text-faint"
-                />
-              </div>
-              {(() => {
-                const items = BUILTINS.filter(
-                  (b) => (libTab === 'all' || ACTION_META[b.kind]?.category === libTab) && matchAction(b, libQ),
-                );
-                if (items.length === 0)
-                  return <div className="mt-3 font-mono text-[11px] text-faint">no actions match.</div>;
-                return (
-                  <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2 2xl:grid-cols-3">
-                    {items.map((b) => {
-                      const klass = ACTION_META[b.kind]?.klass ?? 'reversible';
+            (() => {
+              const visible = BUILTINS.filter(
+                (b) =>
+                  (libTab === 'all' || ACTION_META[b.kind]?.category === libTab) &&
+                  (levelF === 'all' || (ACTION_META[b.kind]?.klass ?? 'reversible') === levelF) &&
+                  matchAction(b, libQ),
+              );
+              if (visible.length === 0)
+                return <div className="mt-3 font-mono text-[11px] text-faint">no actions match.</div>;
+              // Auf „All" ohne Suche: nach Kategorie gruppiert (skaliert auf hunderte
+              // Actions); gefiltert/gesucht: flache Treffer-Liste.
+              const groups =
+                libTab === 'all' && !libQ.trim()
+                  ? CATEGORY_ORDER.map((c) => ({
+                      label: c.label,
+                      items: visible.filter((b) => ACTION_META[b.kind]?.category === c.key),
+                    })).filter((g) => g.items.length > 0)
+                  : [{ label: '', items: visible }];
+              return groups.map((g) => (
+                <div key={g.label || 'results'} className="mb-4">
+                  {g.label ? (
+                    <div className="sticky top-0 z-10 -mx-1 mb-1.5 flex items-baseline gap-2 px-1 py-1 backdrop-blur-sm" style={{ background: 'color-mix(in oklab, var(--rp-bg-base) 88%, transparent)' }}>
+                      <span className="rp-micro !text-[10px]">{g.label}</span>
+                      <span className="font-mono text-[9.5px] text-faint tnum">{g.items.length}</span>
+                    </div>
+                  ) : null}
+                  <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                    {g.items.map((b) => {
+                      const klass = (ACTION_META[b.kind]?.klass ?? 'reversible') as RiskLevel;
                       return (
                         <div
                           key={b.kind}
-                          className="group flex flex-col rounded-skin border border-line bg-raised p-3 text-left transition-colors hover:border-line-strong"
-                          style={{ boxShadow: 'var(--rp-rim)' }}
+                          className="group flex items-start gap-2.5 rounded-skin-sm border border-line bg-raised p-2.5 transition-colors hover:border-line-strong"
                         >
-                          <div className="flex items-center gap-2.5">
-                            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-skin-sm border border-line bg-inset text-mid transition-colors group-hover:text-ink">
-                              <ActionIcon kind={b.kind} />
-                            </span>
-                            <div className="min-w-0">
-                              <div className="truncate font-mono text-[12px] font-semibold text-ink">
-                                {b.name}
-                              </div>
-                              <div
-                                className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.05em]"
-                                style={{
-                                  color:
-                                    klass === 'destructive' ? 'var(--rp-ink-mid)' : 'var(--rp-ink-faint)',
-                                }}
+                          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-skin-sm border border-line bg-inset text-mid transition-colors group-hover:text-ink">
+                            <ActionIcon kind={b.kind} />
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="min-w-0 truncate font-mono text-[11.5px] font-semibold text-ink">{b.name}</span>
+                              <span
+                                className="ml-auto shrink-0 font-mono text-[9px] uppercase tracking-[0.05em]"
+                                style={{ color: levelColor(klass) }}
+                                title={LEVEL_META[klass].hint}
                               >
-                                {klass === 'read' ? '◎ ' : klass === 'destructive' ? '△ ' : '↺ '}
-                                {CLASS_LABEL[klass]}
-                              </div>
+                                {LEVEL_META[klass].glyph} {LEVEL_META[klass].label}
+                              </span>
                             </div>
-                          </div>
-                          <p className="mt-2 flex-1 font-mono text-[10.5px] leading-relaxed text-muted">
-                            {b.description}
-                          </p>
-                          <div className="mt-2.5 flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setRunDialog({ type: 'builtin', builtin: b })}
-                              className="rp-focus rounded-skin-sm border border-line px-2.5 py-1 font-mono text-[11px] text-ink transition-colors hover:bg-hover"
-                            >
-                              run →
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => forkBuiltin(b)}
-                              title="fork as an editable Starlark workflow — copy this code and build your own"
-                              className="rp-focus rounded-skin-sm border border-line px-2 py-1 font-mono text-[11px] text-mid transition-colors hover:bg-hover hover:text-ink"
-                            >
-                              {'</>'} fork
-                            </button>
+                            <p className="mt-0.5 line-clamp-2 font-mono text-[10px] leading-snug text-muted" title={b.description}>
+                              {b.description}
+                            </p>
+                            <div className="mt-1.5 flex items-center gap-1.5 opacity-70 transition-opacity group-hover:opacity-100">
+                              <button
+                                type="button"
+                                onClick={() => setRunDialog({ type: 'builtin', builtin: b })}
+                                className="rp-focus rounded-skin-chip border border-line px-2 py-0.5 font-mono text-[10px] text-ink transition-colors hover:bg-hover"
+                              >
+                                run →
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => forkBuiltin(b)}
+                                title="fork as an editable Starlark workflow"
+                                className="rp-focus rounded-skin-chip border border-line px-1.5 py-0.5 font-mono text-[10px] text-mid transition-colors hover:bg-hover hover:text-ink"
+                              >
+                                {'</>'}
+                              </button>
+                            </div>
                           </div>
                         </div>
                       );
                     })}
                   </div>
-                );
-              })()}
-            </>
+                </div>
+              ));
+            })()
           )}
-        </section>
-
-        {/* ── Runs ── */}
-        <section
-          className="flex min-h-0 flex-col overflow-hidden rounded-skin border border-line bg-raised"
-          style={{ boxShadow: 'var(--rp-rim)' }}
-        >
-          <div className="flex shrink-0 items-center justify-between border-b border-line px-3 py-2">
-            <span className="rp-micro !text-[10px]">runs · this cluster</span>
-            <span className="font-mono text-[10px] text-muted tnum">{runs?.length ?? 0}</span>
-          </div>
-          <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-2">
-            {runs === null ? (
-              <div className="flex h-24 items-center justify-center gap-2 text-muted">
-                <Spinner /> <span className="font-mono text-[11px]">loading…</span>
-              </div>
-            ) : runs.length === 0 ? (
-              <div className="flex h-24 items-center justify-center font-mono text-[11px] text-faint">
-                no runs yet
-              </div>
-            ) : (
-              runs.map((a) => (
-                <ActionRunCard
-                  key={a.id}
-                  action={a}
-                  onCancel={(id) => {
-                    if (orgId) void cancelAction(orgId, clusterId, id).catch(() => {});
-                  }}
-                />
-              ))
-            )}
-          </div>
-        </section>
+        </div>
       </div>
 
       {editor ? (
@@ -1079,10 +1279,9 @@ function RunDialog({
             {klass ? (
               <span
                 className="font-mono text-[9px] uppercase tracking-[0.05em]"
-                style={{ color: klass === 'destructive' ? 'var(--rp-node-crit)' : 'var(--rp-ink-faint)' }}
+                style={{ color: levelColor(klass) }}
               >
-                {klass === 'read' ? '◎ ' : klass === 'destructive' ? '△ ' : '↺ '}
-                {CLASS_LABEL[klass]}
+                {LEVEL_META[klass].glyph} {LEVEL_META[klass].label}
               </span>
             ) : (
               <span className="rounded-skin-chip bg-inset px-1 py-px font-mono text-[9px] uppercase tracking-[0.05em] text-muted">

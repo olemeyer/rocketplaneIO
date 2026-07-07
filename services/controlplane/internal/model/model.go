@@ -170,6 +170,9 @@ type Action struct {
 	// Steps der Zustand des gesamten Ablaufs ([{name,status,detail}]).
 	Progress        string          `json:"progress"`
 	Steps           json.RawMessage `json:"steps"`
+	// Revert: die inverse Katalog-Action (vom Agenten mit Before-Snapshot
+	// befüllt, nur bei succeeded) — Grundlage des "Revert"-Buttons der Runs-Seite.
+	Revert          json.RawMessage `json:"revert,omitempty"`
 	CancelRequested bool            `json:"cancelRequested"`
 	CreatedAt       time.Time       `json:"createdAt"`
 	UpdatedAt       time.Time       `json:"updatedAt"`
@@ -212,6 +215,19 @@ type Dashboard struct {
 	Spec        string    `json:"spec"` // Perses-YAML
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+// CopilotChat ist ein gespeicherter Copilot-Vorgang (Konversation). Data hält
+// den kompletten Render-Zustand (Chat-Verlauf + Tool-Aktivitäten) als JSON.
+type CopilotChat struct {
+	ID        uuid.UUID       `json:"id"`
+	ClusterID uuid.UUID       `json:"clusterId"`
+	UserID    uuid.UUID       `json:"userId"`
+	Title     string          `json:"title"`
+	Summary   string          `json:"summary"`
+	Data      json.RawMessage `json:"data,omitempty"`
+	CreatedAt time.Time       `json:"createdAt"`
+	UpdatedAt time.Time       `json:"updatedAt"`
 }
 
 // ── Infrastruktur (Nodes + PVCs) ───────────────────────────────────────────

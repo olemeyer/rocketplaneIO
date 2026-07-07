@@ -44,7 +44,7 @@ func (s *Store) ListActions(ctx context.Context, clusterID uuid.UUID, ns, target
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT a.id, a.cluster_id, COALESCE(u.email, ''), a.kind, a.target_namespace, a.target_kind, a.target_name,
-		       a.params, a.status, a.result, a.progress, a.steps, a.cancel_requested, a.created_at, a.updated_at
+		       a.params, a.status, a.result, a.progress, a.steps, a.revert, a.cancel_requested, a.created_at, a.updated_at
 		FROM cluster_actions a
 		LEFT JOIN users u ON u.id = a.requested_by
 		WHERE a.cluster_id = $1
@@ -60,7 +60,7 @@ func (s *Store) ListActions(ctx context.Context, clusterID uuid.UUID, ns, target
 	for rows.Next() {
 		var a model.Action
 		if err := rows.Scan(&a.ID, &a.ClusterID, &a.RequestedBy, &a.Kind, &a.TargetNamespace, &a.TargetKind, &a.TargetName,
-			&a.Params, &a.Status, &a.Result, &a.Progress, &a.Steps, &a.CancelRequested, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			&a.Params, &a.Status, &a.Result, &a.Progress, &a.Steps, &a.Revert, &a.CancelRequested, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan action: %w", err)
 		}
 		out = append(out, a)
@@ -146,15 +146,77 @@ func (s *Store) RequestCancel(ctx context.Context, clusterID, actionID uuid.UUID
 	return status, nil
 }
 
+// ForceCancel finalisiert eine hängende Aktion SOFORT als cancelled — ohne auf
+// den Agenten zu warten. Der Nutzer-Notausgang: nichts bleibt dauerhaft hängen.
+// (Der Agent, falls er noch lebt, beendet/rollt im Cluster weiter zurück; sein
+// spätes Result trifft dann auf status!=running und wird verworfen.)
+func (s *Store) ForceCancel(ctx context.Context, clusterID, actionID uuid.UUID) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE cluster_actions SET status='cancelled', cancel_requested=true,
+			result='force-cancelled by user — the agent may still be rolling back in the cluster',
+			progress='', updated_at=now()
+		WHERE id = $2 AND cluster_id = $1 AND status IN ('pending','running')`,
+		clusterID, actionID)
+	if err != nil {
+		return fmt.Errorf("force cancel: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ReapActions garantiert, dass KEINE Aktion ewig hängt — Cancel geht IMMER durch:
+//  1. cancel_requested ohne Agent-Bestätigung (keine Updates > 90s) → cancelled.
+//  2. running ohne jedes Progress-Update > 8m (Agent-monitorTimeout ist 3m —
+//     ein lebender Agent meldet IMMER vorher) → failed (stale).
+//  3. pending, das > 10m kein Agent geclaimt hat → cancelled (expired) — sonst
+//     würde es unerwartet ausgeführt, wenn der Agent irgendwann zurückkommt.
+func (s *Store) ReapActions(ctx context.Context) (int64, error) {
+	var total int64
+	t1, err := s.pool.Exec(ctx, `
+		UPDATE cluster_actions SET status='cancelled',
+			result='cancel forced — the agent did not confirm within 90s (unreachable?)',
+			progress='', updated_at=now()
+		WHERE status='running' AND cancel_requested AND updated_at < now() - interval '90 seconds'`)
+	if err != nil {
+		return 0, fmt.Errorf("reap cancels: %w", err)
+	}
+	total += t1.RowsAffected()
+	t2, err := s.pool.Exec(ctx, `
+		UPDATE cluster_actions SET status='failed',
+			result='stale — no progress from the agent for 8 minutes',
+			progress='', updated_at=now()
+		WHERE status='running' AND updated_at < now() - interval '8 minutes'`)
+	if err != nil {
+		return total, fmt.Errorf("reap stale: %w", err)
+	}
+	total += t2.RowsAffected()
+	t3, err := s.pool.Exec(ctx, `
+		UPDATE cluster_actions SET status='cancelled',
+			result='expired — no agent claimed it within 10 minutes',
+			updated_at=now()
+		WHERE status='pending' AND created_at < now() - interval '10 minutes'`)
+	if err != nil {
+		return total, fmt.Errorf("reap pending: %w", err)
+	}
+	total += t3.RowsAffected()
+	return total, nil
+}
+
 // CompleteAction setzt das Ergebnis einer running-Aktion (Agent-Callback).
-func (s *Store) CompleteAction(ctx context.Context, clusterID, actionID uuid.UUID, status, result string, steps json.RawMessage) error {
+func (s *Store) CompleteAction(ctx context.Context, clusterID, actionID uuid.UUID, status, result string, steps, revert json.RawMessage) error {
 	if len(steps) == 0 {
 		steps = json.RawMessage("[]")
 	}
+	var rev any
+	if len(revert) > 0 {
+		rev = revert
+	}
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE cluster_actions SET status = $3, result = $4, steps = $5, progress = '', updated_at = now()
+		UPDATE cluster_actions SET status = $3, result = $4, steps = $5, revert = COALESCE($6, revert), progress = '', updated_at = now()
 		WHERE id = $2 AND cluster_id = $1 AND status = 'running'`,
-		clusterID, actionID, status, result, steps)
+		clusterID, actionID, status, result, steps, rev)
 	if err != nil {
 		return fmt.Errorf("complete action: %w", err)
 	}

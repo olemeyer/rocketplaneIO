@@ -201,6 +201,7 @@ func (r *Runner) execute(ctx context.Context, a Action) {
 	r.registerCancel(a.ID, requestCancel)
 	defer r.unregisterCancel(a.ID)
 	undoDesc, undoFn := r.prepareUndo(ctx, a)
+	revertSpec := r.prepareRevert(ctx, a) // inverse Action mit VOR-Zustand (für Revert-später)
 
 	steps := r.plan(a)
 	states := make([]stepState, len(steps))
@@ -224,7 +225,11 @@ func (r *Runner) execute(ctx context.Context, a Action) {
 
 	finish := func(status, result string) {
 		log.Printf("actions: %s %s/%s → %s (%s)", a.Kind, a.TargetNamespace, a.TargetName, status, result)
-		r.report(ctx, a.ID, status, result, "", states)
+		var rev json.RawMessage
+		if status == "succeeded" {
+			rev = revertSpec // nur ein ERFOLG hat einen sinnvollen Revert
+		}
+		r.reportWithRevert(ctx, a.ID, status, result, "", states, rev)
 		if r.onExecuted != nil {
 			r.onExecuted()
 		}
@@ -385,6 +390,30 @@ func (r *Runner) plan(a Action) []step {
 		return r.planPodEvents(a)
 	case "debug_bundle":
 		return r.planDebugBundle(a)
+	case "annotate":
+		return r.planMetaSet(a, "annotations")
+	case "set_label":
+		return r.planMetaSet(a, "labels")
+	case "patch_configmap":
+		return r.planPatchConfigmap(a)
+	case "set_env":
+		return r.planSetEnv(a)
+	case "set_resources":
+		return r.planSetResources(a)
+	case "statefulset_partition":
+		return r.planStatefulsetPartition(a)
+	case "hpa_toggle":
+		return r.planHPAToggle(a)
+	case "rollout_to_revision":
+		return r.planRolloutToRevision(a)
+	case "evict_pod":
+		return r.planEvictPod(a)
+	case "cleanup_jobs":
+		return r.planCleanupJobs(a)
+	case "rollout_history":
+		return r.planRolloutHistory(a)
+	case "drain_preview":
+		return r.planDrainPreview(a)
 	case "delete_pod":
 		return []step{
 			{name: "delete", run: func(ctx context.Context, _ func(string)) (string, error) {
@@ -470,6 +499,20 @@ func (r *Runner) prepareUndo(ctx context.Context, a Action) (string, func(contex
 		return "taint removed", func(rctx context.Context) error {
 			return r.applyTaint(rctx, a, true)
 		}
+	case "annotate":
+		return r.undoMetaSet(ctx, a, "annotations")
+	case "set_label":
+		return r.undoMetaSet(ctx, a, "labels")
+	case "patch_configmap":
+		return r.undoPatchConfigmap(ctx, a)
+	case "set_env":
+		return r.undoContainerTemplate(ctx, a, "env")
+	case "set_resources":
+		return r.undoContainerTemplate(ctx, a, "resources")
+	case "statefulset_partition":
+		return r.undoPartition(ctx, a)
+	case "rollout_to_revision":
+		return r.undoTemplateReplace(ctx, a)
 	}
 	return "", nil
 }
@@ -904,12 +947,22 @@ func (r *Runner) observeReplacement(ctx context.Context, a Action, report func(s
 // nutzen einen Kontext OHNE die Action-Deadline — auch ein Timeout/Cancel
 // muss seinen Endstatus noch loswerden.
 func (r *Runner) report(ctx context.Context, actionID, status, result, progress string, steps []stepState) bool {
-	payload, _ := json.Marshal(map[string]any{
+	return r.reportWithRevert(ctx, actionID, status, result, progress, steps, nil)
+}
+
+// reportWithRevert: wie report, liefert bei Endergebnissen zusätzlich die
+// inverse Katalog-Action (Before-Snapshot) für den Revert-Button der Runs-Seite.
+func (r *Runner) reportWithRevert(ctx context.Context, actionID, status, result, progress string, steps []stepState, revert json.RawMessage) bool {
+	body := map[string]any{
 		"status":   status,
 		"result":   result,
 		"progress": progress,
 		"steps":    steps,
-	})
+	}
+	if len(revert) > 0 {
+		body["revert"] = revert
+	}
+	payload, _ := json.Marshal(body)
 	attempts := 1
 	if status != "running" { // Endergebnisse sind wichtig → Retry + frischer ctx
 		attempts = 2

@@ -227,6 +227,18 @@ export type ActionKind =
   | 'drain'
   | 'node_taint'
   | 'node_untaint'
+  | 'set_resources'
+  | 'set_env'
+  | 'rollout_to_revision'
+  | 'rollout_history'
+  | 'statefulset_partition'
+  | 'hpa_toggle'
+  | 'annotate'
+  | 'set_label'
+  | 'patch_configmap'
+  | 'evict_pod'
+  | 'cleanup_jobs'
+  | 'drain_preview'
   | 'script';
 export type ActionStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
@@ -245,6 +257,8 @@ export interface ClusterAction {
   progress: string;
   /** Ablauf-Schritte (trigger → observe → verify), live vom Agenten. */
   steps: ActionStep[];
+  /** Inverse Katalog-Action mit Before-Snapshot (nur bei succeeded) — Revert-Button. */
+  revert?: { kind: string; targetNamespace: string; targetKind: string; targetName: string; params: Record<string, unknown> };
   /** User hat Abbruch angefordert; Engine rollt zurück → cancelled. */
   cancelRequested: boolean;
   createdAt: string;

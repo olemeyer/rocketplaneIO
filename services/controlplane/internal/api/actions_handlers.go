@@ -47,6 +47,19 @@ var actionTargetKinds = map[string]map[string]bool{
 	"drain":        {"Node": true},
 	"node_taint":   {"Node": true},
 	"node_untaint": {"Node": true},
+	// Erweiterter Katalog (Batch 1)
+	"annotate":              {"Deployment": true, "StatefulSet": true, "DaemonSet": true, "Pod": true, "Node": true, "Namespace": true, "ConfigMap": true, "Service": true, "PersistentVolumeClaim": true, "CronJob": true, "HorizontalPodAutoscaler": true},
+	"set_label":             {"Node": true, "Namespace": true},
+	"patch_configmap":       {"ConfigMap": true},
+	"set_env":               {"Deployment": true, "StatefulSet": true, "DaemonSet": true},
+	"set_resources":         {"Deployment": true, "StatefulSet": true, "DaemonSet": true},
+	"statefulset_partition": {"StatefulSet": true},
+	"hpa_toggle":            {"HorizontalPodAutoscaler": true},
+	"rollout_to_revision":   {"Deployment": true},
+	"evict_pod":             {"Pod": true},
+	"cleanup_jobs":          {"Namespace": true},
+	"rollout_history":       {"Deployment": true, "StatefulSet": true}, // read
+	"drain_preview":         {"Node": true},                            // read
 }
 
 // validateActionParams prüft die typisierten Params je Kind — nichts
@@ -108,6 +121,67 @@ func validateActionParams(w http.ResponseWriter, kind string, raw json.RawMessag
 		}
 		if err := json.Unmarshal(raw, &p); err != nil || p.Key == "" {
 			writeErr(w, http.StatusBadRequest, "node_untaint requires params.key")
+			return false
+		}
+	case "annotate", "set_label":
+		var p struct {
+			Key    string `json:"key"`
+			Remove bool   `json:"remove"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || p.Key == "" || len(p.Key) > 253 {
+			writeErr(w, http.StatusBadRequest, kind+" requires params.key (<=253 chars)")
+			return false
+		}
+	case "patch_configmap":
+		var p struct {
+			Key   string `json:"key"`
+			Value string `json:"value"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || p.Key == "" || len(p.Value) > 64*1024 {
+			writeErr(w, http.StatusBadRequest, "patch_configmap requires params.key (value <=64KiB)")
+			return false
+		}
+	case "set_env":
+		var p struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || p.Name == "" || len(p.Name) > 128 {
+			writeErr(w, http.StatusBadRequest, "set_env requires params.name (<=128 chars)")
+			return false
+		}
+	case "set_resources":
+		var p struct {
+			RequestsCPU    string `json:"requestsCpu"`
+			RequestsMemory string `json:"requestsMemory"`
+			LimitsCPU      string `json:"limitsCpu"`
+			LimitsMemory   string `json:"limitsMemory"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || (p.RequestsCPU == "" && p.RequestsMemory == "" && p.LimitsCPU == "" && p.LimitsMemory == "") {
+			writeErr(w, http.StatusBadRequest, "set_resources requires at least one of requestsCpu/requestsMemory/limitsCpu/limitsMemory")
+			return false
+		}
+	case "statefulset_partition":
+		var p struct {
+			Partition *int `json:"partition"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || p.Partition == nil || *p.Partition < 0 {
+			writeErr(w, http.StatusBadRequest, "statefulset_partition requires params.partition >= 0")
+			return false
+		}
+	case "hpa_toggle":
+		var p struct {
+			Enabled *bool `json:"enabled"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || p.Enabled == nil {
+			writeErr(w, http.StatusBadRequest, "hpa_toggle requires params.enabled (bool)")
+			return false
+		}
+	case "rollout_to_revision":
+		var p struct {
+			Revision *int64 `json:"revision"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || p.Revision == nil || *p.Revision < 1 {
+			writeErr(w, http.StatusBadRequest, "rollout_to_revision requires params.revision >= 1")
 			return false
 		}
 	}
@@ -296,6 +370,8 @@ func (s *Server) handleAgentActionResult(w http.ResponseWriter, r *http.Request)
 		Result   string          `json:"result"`
 		Progress string          `json:"progress"`
 		Steps    json.RawMessage `json:"steps"`
+		// Revert: inverse Katalog-Action mit Before-Snapshot (nur bei succeeded).
+		Revert json.RawMessage `json:"revert"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -310,6 +386,9 @@ func (s *Server) handleAgentActionResult(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusBadRequest, "steps too large")
 		return
 	}
+	if len(req.Revert) > 8_000 {
+		req.Revert = nil // Revert ist optional — zu groß heisst schlicht: keiner
+	}
 	var err2 error
 	cancel := false
 	switch req.Status {
@@ -318,7 +397,7 @@ func (s *Server) handleAgentActionResult(w http.ResponseWriter, r *http.Request)
 		// Agenten (outbound-only-Rückkanal).
 		cancel, err2 = s.store.UpdateActionProgress(r.Context(), clusterID, actionID, req.Progress, req.Steps)
 	case "succeeded", "failed", "cancelled":
-		err2 = s.store.CompleteAction(r.Context(), clusterID, actionID, req.Status, req.Result, req.Steps)
+		err2 = s.store.CompleteAction(r.Context(), clusterID, actionID, req.Status, req.Result, req.Steps, req.Revert)
 	default:
 		writeErr(w, http.StatusBadRequest, "status must be running, succeeded, failed or cancelled")
 		return
@@ -353,6 +432,23 @@ func (s *Server) handleCancelAction(w http.ResponseWriter, r *http.Request) {
 	actionID, err := uuid.Parse(r.PathValue("action"))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid action id")
+		return
+	}
+	if r.URL.Query().Get("force") == "true" {
+		// Notausgang: sofort finalisieren, ohne auf den Agenten zu warten —
+		// nichts bleibt jemals dauerhaft hängen.
+		if err := s.store.ForceCancel(r.Context(), clusterID, actionID); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				writeErr(w, http.StatusNotFound, "action not found or already finished")
+				return
+			}
+			writeErr(w, http.StatusInternalServerError, "failed to force-cancel")
+			return
+		}
+		s.broker.Publish(clusterID, "actions", 0)
+		// Dem (evtl. noch lebenden) Agenten trotzdem den Abbruch signalisieren.
+		s.broker.PublishData(clusterID, "cancel", fmt.Sprintf(`{"actionId":%q}`, actionID))
+		writeJSON(w, http.StatusOK, map[string]any{"status": "cancelled", "forced": true})
 		return
 	}
 	status, err := s.store.RequestCancel(r.Context(), clusterID, actionID)
