@@ -1,6 +1,10 @@
 package api
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
 
 // copilot_policy.go — Risk-Level je Action + Namespace-Scope-Enforcement.
 // Der Level ist die EINE Wahrheit (Backend), aus der die UI Farbe + Approval-
@@ -15,8 +19,12 @@ func actionLevel(kind string, params map[string]any) string {
 	case "debug_bundle", "pod_events", "rollout_history", "drain_preview":
 		return "read"
 	case "scale":
-		if n, ok := toIntVal(params["replicas"]); ok && n == 0 {
-			return "destructive" // scale-to-0 = voller Ausfall des Workloads
+		// Fail-closed: replicas nicht als >0-Int parsebar (z.B. String "0",
+		// fehlend) → destructive, damit ein scale-to-0 nie unter ein weicheres
+		// Gate rutscht.
+		n, ok := toIntVal(params["replicas"])
+		if !ok || n == 0 {
+			return "destructive"
 		}
 		return "reversible"
 	case "node_taint":
@@ -24,20 +32,33 @@ func actionLevel(kind string, params map[string]any) string {
 			return "destructive" // evictet laufende Pods
 		}
 		return "reversible"
+	case "rollout_restart", "rollout_pause", "rollout_resume", "rollout_to_revision",
+		"set_image", "set_env", "set_resources", "hpa_set", "hpa_toggle", "cordon", "uncordon",
+		"cronjob_suspend", "cronjob_resume", "node_untaint", "statefulset_partition",
+		"annotate", "set_label", "patch_configmap":
+		return "reversible"
 	case "drain", "expand_pvc":
 		return "destructive" // node leeren / PVC nicht schrumpfbar
 	case "delete_pod", "evict_pod", "rollout_undo", "cleanup_pods", "cleanup_jobs", "cronjob_trigger":
 		return "disruptive"
 	}
-	return "reversible"
+	// Fail-closed default: ein neuer, noch nicht klassifizierter Kind läuft nie
+	// still unter dem schwächsten Gate — er verlangt die strengste Freigabe.
+	return "destructive"
 }
 
+// toIntVal akzeptiert float64/int UND numerische Strings ("0") — sonst würde ein
+// string-typisiertes replicas die scale-Klassifizierung unterlaufen.
 func toIntVal(v any) (int, bool) {
 	switch n := v.(type) {
 	case float64:
 		return int(n), true
 	case int:
 		return n, true
+	case string:
+		if i, err := strconv.Atoi(strings.TrimSpace(n)); err == nil {
+			return i, true
+		}
 	}
 	return 0, false
 }
@@ -50,11 +71,13 @@ func scopeViolation(scope, targetNamespace, targetKind, targetName string) strin
 		return ""
 	}
 	// Cluster-scoped (Node) unter einem Namespace-Scope nicht erlaubt.
-	if targetKind == "Node" || targetNamespace == "-" {
+	// Case-insensitive: die Whitelist ist case-sensitive, aber das Scope-Gate
+	// darf sich nicht darauf verlassen — "node" darf nicht durchrutschen.
+	if strings.EqualFold(targetKind, "Node") || targetNamespace == "-" {
 		return fmt.Sprintf("blocked by scope: a single namespace (%q) is selected — switch the scope to 'all namespaces' to act on nodes/cluster-scoped objects", scope)
 	}
 	ns := targetNamespace
-	if targetKind == "Namespace" { // cleanup_pods / set_label auf Namespace: TargetName = ns
+	if strings.EqualFold(targetKind, "Namespace") { // cleanup_pods / set_label auf Namespace: TargetName = ns
 		ns = targetName
 	}
 	if ns != scope {
