@@ -3,186 +3,89 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/banner-dark.png">
   <source media="(prefers-color-scheme: light)" srcset=".github/assets/banner-light.png">
-  <img alt="rocketplaneIO — observability that fixes things" src=".github/assets/banner-dark.png" width="100%">
+  <img alt="rocketplaneIO" src=".github/assets/banner-dark.png" width="100%">
 </picture>
 
-<h3>eBPF traces for services you never instrumented.<br>
-Alerts that dispatch remediations that verify themselves — or roll back.</h3>
+<h2>An AI SRE for your Kubernetes cluster —<br>that can actually fix things, safely.</h2>
+
+<p><b>Self-hosted · Apache-2.0 · bring your own LLM · air-gapped capable</b></p>
 
 ![Status](https://img.shields.io/badge/status-alpha-e5484d)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 ![Go](https://img.shields.io/badge/go-1.25+-00ADD8)
 
-[**Quick Start**](#quick-start--from-source-alpha) · [**Five-minute tour**](#five-minute-tour) · [**How an action runs**](#how-an-action-runs) · [**Security**](#will-it-break-my-cluster) · [**Architecture**](#architecture) · [**Status**](#status--roadmap)
+[**Quick start**](#quick-start) · [**Is it safe?**](#is-it-safe) · [**Under the hood**](#under-the-hood)
 
 </div>
 
 <br>
 
-<div align="center">
-  <img alt="From an ERROR log line to the full distributed trace in two clicks" src=".github/assets/demo-investigation.gif" width="92%">
-  <br><sub>An ERROR log line → its distributed trace, in two clicks. Every span here comes from eBPF —
-  none of these services contain a tracing SDK.</sub>
-</div>
+<img alt="The Copilot investigating a latency spike: evidence-based root cause, then a scale action waiting for one-click approval" src=".github/assets/shot-copilot.png" width="100%">
+<div align="center"><sub>You ask <i>“why is checkout slow?”</i>. The Copilot reads the service map and the logs itself,
+names the root cause with evidence, and proposes <b>one</b> fix — which runs only after you approve it,
+as a pipeline that verifies itself or rolls back.</sub></div>
 
-> **Alpha.** The full loop — connect, observe, investigate, alert, remediate — works end-to-end
-> today (developed against minikube; reports from real clusters are the contribution we want
-> most). APIs, schemas and UI still change without notice.
-
-## Why rocketplaneIO
-
-Every observability tool ends at the same place: a dashboard and a page. The fixing happens
-somewhere else — in a terminal, from a runbook, from memory, under pressure.
-
-rocketplaneIO closes that loop:
-
-- **See** — one outbound-only agent plus an eBPF DaemonSet ([Grafana Beyla](https://github.com/grafana/beyla),
-  now OpenTelemetry eBPF Instrumentation). Traces for services you never instrumented, including
-  compiled Go binaries. No SDKs, no sidecars, no code changes.
-- **Understand** — a log line to the full distributed trace in two clicks. PromQL evaluated by the
-  Prometheus engine itself, embedded and pointed at ClickHouse.
-- **Act** — a firing alert can dispatch a remediation workflow. Every action is a pipeline that
-  checks the cluster actually converged — and rolls itself back when it doesn't.
-
-**Where it sits:** like [Coroot](https://github.com/coroot/coroot) and
-[SigNoz](https://github.com/SigNoz/signoz), it's eBPF + ClickHouse.
-[Robusta](https://github.com/robusta-dev/robusta) reacts to alerts too — the difference here
-is that every action must *prove convergence at pod level or roll itself back*: deterministic,
-human-written workflows, no LLM in the loop.
-
-## What you get
-
-- **Safe actions** — restart, scale, drain, rollout-undo as pipelines: trigger → observe → verify
-  at pod level. Cancel or timeout rolls back automatically.
-- **Auto-remediation** — a firing alert dispatches a workflow, once per transition, fully audited.
-- **Starlark workflows** — automate what an operator does by hand; typed parameters render as
-  forms, source is compiled and validated at save.
-- **Zero-instrumentation traces** — HTTP/gRPC with cross-service context propagation (including
-  compiled Go, via uprobes), plus SQL, Redis and Kafka client spans.
-- **Live service map** — topology from real traffic flows, tech logos auto-matched from
-  container images (170+ known), updates pushed over SSE instead of polling.
-- **PromQL on ClickHouse** — the Prometheus evaluation engine, embedded
-  ([`internal/promqlx`](services/controlplane/internal/promqlx)); editor built on the official
-  [codemirror-promql](https://github.com/prometheus/codemirror-promql) with autocomplete and
-  linting. Custom metrics are named PromQL expressions — a broken one fails at save time
-  (parse + probe run).
-- **Alerts** — typed checks or PromQL conditions, `ok → pending → firing` with `for`-durations,
-  webhook/Slack/email, per-rule sparklines, snooze.
-- **Infrastructure** — nodes with kubelet-level stats, PVC usage, cordon/drain from the UI.
-
-## See it work
-
-<img alt="Live service map with automatic technology detection" src=".github/assets/shot-servicemap.png" width="100%">
-<sub><b>The service map, drawn from eBPF traffic flows.</b> Nginx, Go and Python matched from
-the container images; edges carry the live flows between workloads.</sub>
-
-<br><br>
-
-<img alt="A real 500 investigated: error spans plus correlated logs" src=".github/assets/shot-trace.png" width="100%">
-<sub><b>A real 500 on <code>GET /checkout</code> from the demo shop.</b> The failure cascades
-frontdoor → checkout → catalog; the exact ERROR log lines of the failing service are correlated on
-the right. No SDK in any of these services.</sub>
-
-<br><br>
-
-<img alt="Alert rule firing and dispatching an auto-remediation workflow" src=".github/assets/shot-alerts.png" width="100%">
-<sub><b>A checkout-p95 PromQL rule, currently firing</b> — the card carries the evaluator's value
-history against the threshold line; the event feed on the right records every
-<code>ok → pending → firing</code> transition and the auto-remediation dispatch.</sub>
-
-<details>
-<summary><b>More screens: actions catalog, PromQL editor, logs, nodes</b></summary>
 <br>
 
-<img alt="Actions catalog with verified pipeline runs" src=".github/assets/shot-actions.png" width="100%">
-<sub><b>Actions</b> — built-in catalog plus custom Starlark workflows; every run on the right is a
-verified pipeline with pod-level checks.</sub>
+> **Alpha.** The full loop works end-to-end today, developed against minikube. APIs and schemas
+> still change without notice — don't point it at production yet.
 
-<br><br>
+## Three things you don't get anywhere else
 
-<img alt="PromQL editor on ClickHouse" src=".github/assets/shot-promql.png" width="100%">
-<sub><b>PromQL</b> — <code>histogram_quantile</code> over eBPF-captured latency histograms,
-evaluated by the embedded Prometheus engine on ClickHouse.</sub>
+### 1 · An AI SRE with a safety catalog — not an AI with kubectl
 
-<br><br>
+The Copilot investigates on its own: eBPF traces, logs, PromQL metrics, the live service map and
+the **full Kubernetes inventory** (Services, Ingress, ConfigMaps, policies — everything). But it
+can only change the cluster through **~30 named, reversible action pipelines**. No shell, no
+`kubectl`, no YAML it could hallucinate.
 
-<img alt="Log stream with severity histogram" src=".github/assets/shot-logs.png" width="100%">
-<sub><b>Logs</b> — severity histogram, brushing, and the two-click path to the trace shown in the
-GIF above.</sub>
+Every action is risk-graded — and *you* set the approval rule per level:
 
-<br><br>
+| Level | Examples | Default approval |
+|---|---|---|
+| ◎ read-only | debug bundle, rollout history, drain preview | runs automatically |
+| ↺ reversible | scale up, restart, set image, config edits | one click |
+| ◇ disruptive | evict pod, rollout undo, cleanup | one click |
+| △ destructive | drain, **scale-to-0**, NoExecute taint | **type the target's name to arm** |
 
-<img alt="Node infrastructure with kubelet stats" src=".github/assets/shot-nodes.png" width="100%">
-<sub><b>Infrastructure</b> — kubelet-level node stats, cordon/drain as verified actions.</sub>
+Risk is parameter-aware (`scale replicas=3` is reversible; `replicas=0` is destructive), scope is
+enforced server-side (a namespace-scoped session cannot touch nodes or other namespaces), and
+every level can be set to `auto`, `click`, `confirm` or `off`.
 
-<br><br>
+**The model proposes. Deterministic pipelines execute, verify at pod level, and roll back.**
+The LLM never touches the cluster directly.
 
-<sub>The UI follows a strict instrument-panel design system (RETICLE) — healthy is calm,
-only anomalies speak.</sub>
-</details>
+Bring any Anthropic- or OpenAI-compatible model — including a fully local, air-gapped one. Your
+telemetry never leaves your infrastructure either way.
 
-## How an action runs
+### 2 · Traces for services you never instrumented
 
-Actions are not fire-and-forget `kubectl` calls. Built-ins and custom workflows alike run as
-pipelines — **trigger → observe → verify** — and only report success when the cluster actually
-converged. This is a scale workflow exactly as you write it in the actions editor:
+One outbound-only agent plus an eBPF DaemonSet
+([OTel eBPF Instrumentation](https://github.com/grafana/beyla), née Grafana Beyla). HTTP/gRPC
+spans **with cross-service context propagation — including compiled Go binaries** — plus SQL,
+Redis and Kafka client spans. No SDKs, no sidecars, no code changes.
 
-```python
-ns = args["namespace"]
-name = args["name"]
-target = int(args["replicas"])
+<img alt="A real 500 investigated: the failure cascades across three services, correlated error logs on the right" src=".github/assets/shot-trace.png" width="100%">
+<div align="center"><sub>A real 500 on <code>GET /checkout</code>: the failure cascades frontdoor → checkout → catalog,
+the exact ERROR log lines are correlated on the right. <b>No SDK in any of these services.</b>
+An ERROR log line is two clicks away from this view. PromQL runs on the real Prometheus engine, embedded, on ClickHouse.</sub></div>
 
-step("snapshot")
-before = k8s.get(ns, "Deployment", name)["desired"]
-report("current replicas: %d" % before)
+### 3 · Every change proves itself — or undoes itself
 
-step("scale to %d" % target)
-k8s.scale(ns, "Deployment", name, target)
-ok = wait_ready(ns, "Deployment", name, timeout=120)
+Actions aren't fire-and-forget `kubectl` calls. Each one is a pipeline —
+**trigger → observe → verify** — that only reports success when the cluster actually converged:
+old pods gone, new pods Ready, stable. Cancel, timeout or a failed verify triggers automatic
+rollback from a snapshot taken *before* the mutation.
 
-if not ok:
-    step("rollback")
-    k8s.scale(ns, "Deployment", name, before)
-    wait_ready(ns, "Deployment", name, timeout=120)
-    fail("scale to %d did not settle - rolled back to %d" % (target, before))
+<img alt="The Runs audit trail: every execution as an expandable row with its full pipeline, and a one-click revert" src=".github/assets/shot-runs.png" width="100%">
+<div align="center"><sub><b>Runs</b> — the audit trail. Who ran what, the full step timeline, and
+<b>↺ revert</b>: one click re-applies the exact state captured before the change. Cancel always
+terminates — a reaper finalizes anything a dead agent leaves behind, and force-cancel never waits.</sub></div>
 
-step("verify")
-report("settled at %d replicas" % target)
-```
+## Quick start
 
-Workflows are Starlark (a Python dialect built for embedding): deterministic, human-written,
-no LLM in the loop. Parameters are typed and render as a form; the source is compiled at save,
-so a broken workflow can't be stored. Cancel or timeout triggers rollback from the engine's
-undo stack. An alert rule can dispatch any of these when it fires — that's the whole
-auto-remediation story: **not an AI that guesses, not a bare one-liner — a pipeline that
-proves convergence or undoes itself.**
-
-## Will it break my cluster?
-
-The section every platform team reads first, so here it is early:
-
-- **Outbound-only.** The agent dials the control plane over HTTPS; nothing connects into your
-  cluster, nothing listens. Actions are *claimed* by the agent via polling — they are never
-  pushed in.
-- **Enumerated RBAC, split in two blocks** ([`deploy/install.yaml`](deploy/install.yaml)):
-  *observe* is read-only (`get/list/watch` on namespaces, pods, services, nodes, PVCs, events,
-  kubelet stats via `nodes/proxy`); *act* holds exactly the write verbs safe actions need
-  (`patch` on workload controllers and nodes, `delete` on pods, `create` on `pods/eviction` for
-  PDB-respecting drains). Delete the act block — or set `rbac.actions=false` in the Helm chart —
-  for a strictly observe-only agent. No wildcard, no cluster-admin, and no RBAC for Secrets at all.
-- **What leaves the cluster:** workload/pod/node/PVC metadata, container logs, and
-  eBPF-captured spans and metrics (OTLP). Nothing else — the agent can't read what it has no
-  RBAC for.
-- **eBPF requirements:** Beyla runs as a privileged DaemonSet and needs a Linux kernel ≥ 5.8
-  with BTF (default since 5.14). Capture is [Grafana Beyla](https://github.com/grafana/beyla),
-  since donated to OpenTelemetry as OTel eBPF Instrumentation — rocketplaneIO is the
-  investigation and action loop on top, not homegrown eBPF.
-
-## Quick Start — from source (alpha)
-
-No published container images yet — you run the platform from source (that's the alpha part;
-images and a platform Helm chart are next, see [roadmap](#status--roadmap)). With Go 1.25+,
-Node 22+/pnpm and Docker installed, expect **about ten minutes to your first trace**:
+No published container images yet — you run the platform from source (that's the alpha part).
+With Go 1.25+, Node 22+/pnpm and Docker installed:
 
 ```bash
 git clone https://github.com/olemeyer/rocketplaneIO && cd rocketplaneIO
@@ -197,125 +100,157 @@ go run ./services/controlplane/cmd/controlplane &
 pnpm install && pnpm dev
 ```
 
-Open **http://localhost:4173**, create the owner account (local email+password; Google SSO is
-optional config), then hit **Connect cluster** — it hands you a single copy-paste `kubectl`
-command that installs the agent and the Beyla DaemonSet.
+Open **http://localhost:4173**, create the owner account, hit **Connect cluster** — it hands you
+one copy-paste `kubectl` command that installs the agent and the Beyla DaemonSet. When the service
+map draws your namespaces and spans appear under Traces, you're live — without touching a line of
+your code.
 
-**Alpha gap:** the agent image isn't on a public registry yet ([roadmap](#status--roadmap)).
-For a local minikube, build it into the cluster first and point the control plane at it:
+**Copilot:** open it from the top bar and connect any LLM provider — the key stays on your
+instance, requests go straight from your control plane to the provider you chose.
 
-```bash
-docker build -t rocketplane/agent:dev -f agent/Dockerfile . && minikube image load rocketplane/agent:dev
-# control plane env: RP_AGENT_IMAGE=rocketplane/agent:dev
-```
-
-You'll know it worked when the service map draws your namespaces and the first spans appear
-under Traces — without touching a line of your code.
-
-## Five-minute tour
-
-An empty minikube doesn't show off an observability tool, so the repo ships a realistic
-demo — the workload the screenshots above were taken from:
+**Demo workload:** a Python + Redis shop behind nginx that generates real traffic, errors and
+slow queries — the workload every screenshot here was taken from:
 
 ```bash
-# a Python + Redis shop behind an nginx frontdoor, generating real traffic, errors and slow queries
 kubectl apply -f deploy/dev/shop-realistic.yaml -f deploy/dev/frontdoor.yaml
 ```
 
-(The Go service in the trace screenshots lives in [`deploy/dev/inventory-go`](deploy/dev/inventory-go)
-— optional, needs a locally built image.)
+> Alpha gap: the agent image isn't on a public registry yet. For a local minikube:
+> `docker build -t rocketplane/agent:dev -f agent/Dockerfile . && minikube image load rocketplane/agent:dev`,
+> then set `RP_AGENT_IMAGE=rocketplane/agent:dev` on the control plane.
 
-1. Watch the **service map** light up: frontdoor → checkout → payments/orders/catalog → redis,
-   with tech logos auto-matched.
-2. Open **Logs**, click an `ERROR` from checkout — then *Traces around this log*. Two clicks,
-   and you're inside the distributed trace with the failing span focused and its logs correlated
-   (the GIF at the top of this page).
-3. Open **Alerts**, create a PromQL rule on checkout p95 with a low threshold, and watch it go
-   `ok → pending → firing` — then attach a remediation workflow (create one from the template
-   library under Actions) and watch the firing rule dispatch it under Actions → runs.
+## Is it safe?
 
-## Architecture
+The section every platform team reads first:
+
+- **Outbound-only.** The agent dials out over HTTPS; nothing connects into your cluster, nothing
+  listens. Actions are *claimed* by the agent — never pushed in.
+- **Enumerated RBAC, two blocks** ([`deploy/install.yaml`](deploy/install.yaml)): *observe* is
+  read-only; *act* holds exactly the write verbs the action catalog needs. Delete the act block
+  (or set `rbac.actions=false` in Helm) for a strictly observe-only agent. No wildcards, no
+  cluster-admin.
+- **Secrets:** the inventory shows names, types and key counts — never values. That restraint is
+  enforced in agent code; if you'd rather enforce it with RBAC too, delete the one `secrets` rule
+  and the agent degrades gracefully.
+- **The LLM is caged.** It reads through the same authenticated APIs you use, and mutates only
+  via the whitelisted, validated, risk-gated action catalog. Every proposal, approval and result
+  lands in the audit trail.
+- **eBPF:** Beyla runs as a privileged DaemonSet (kernel ≥ 5.8 with BTF). The capture layer is
+  upstream OpenTelemetry tooling — rocketplaneIO is the investigation-and-action loop on top.
+
+## What else is in the box
+
+<details>
+<summary><b>Live service map · alerts with auto-remediation · PromQL on ClickHouse · full K8s inventory · Starlark workflows · more screens</b></summary>
+<br>
+
+<img alt="Live service map with automatic technology detection" src=".github/assets/shot-servicemap.png" width="100%">
+<sub><b>Service map</b> — topology from real eBPF traffic flows; tech logos matched from container
+images; live-updating.</sub>
+
+<br><br>
+
+<img alt="Alert rule firing and dispatching an auto-remediation workflow" src=".github/assets/shot-alerts.png" width="100%">
+<sub><b>Alerts</b> — typed checks or PromQL conditions with <code>for</code>-durations and
+sparklines. A firing rule can dispatch a remediation workflow: once per transition, fully audited,
+still subject to verify-or-rollback.</sub>
+
+<br><br>
+
+<img alt="PromQL editor on ClickHouse" src=".github/assets/shot-promql.png" width="100%">
+<sub><b>PromQL</b> — the actual Prometheus evaluation engine, embedded and pointed at ClickHouse
+(<a href="services/controlplane/internal/promqlx">internal/promqlx</a>); editor built on
+codemirror-promql. Custom metrics are named PromQL expressions, validated at save.</sub>
+
+<br><br>
+
+<img alt="Full Kubernetes inventory, tabbed by resource kind" src=".github/assets/shot-resources.png" width="100%">
+<sub><b>Resources</b> — the complete cluster inventory (Services, Ingress, ConfigMaps, batch,
+policies, volumes, quotas), synced every 60s. The same data the Copilot reads via
+<code>list_resources</code>.</sub>
+
+<br><br>
+
+<img alt="Actions catalog, grouped by category with risk levels" src=".github/assets/shot-actions.png" width="100%">
+<sub><b>Actions</b> — the catalog, searchable and risk-graded. Every built-in is also readable,
+forkable <b>Starlark</b>: automate what an operator does by hand, with typed parameters that
+render as forms. Deterministic, compiled at save.</sub>
+
+<br><br>
+
+<img alt="Log stream with severity histogram" src=".github/assets/shot-logs.png" width="100%">
+<sub><b>Logs</b> — severity histogram, brushing, and the two-click path to the distributed
+trace.</sub>
+
+<br><br>
+
+<img alt="Node infrastructure with kubelet stats" src=".github/assets/shot-nodes.png" width="100%">
+<sub><b>Nodes</b> — kubelet-level stats; cordon/drain are verified actions, with a read-only
+<code>drain preview</code> that shows the blast radius first.</sub>
+
+<br><br>
+
+<sub>The UI follows a strict instrument-panel design system (RETICLE) — healthy is calm, only
+anomalies speak.</sub>
+</details>
+
+## Under the hood
 
 ```
- YOUR CLUSTER   ┌──────────────────────────────────────────────────────────┐
-                │  agent — outbound-only, enumerated RBAC                   │
-                │  topology & pod sync · log shipping · action claims       │
-                │  beyla eBPF DaemonSet — HTTP/gRPC/Go · SQL/Redis/Kafka    │
-                └───────┬──────────────────────────────────┬───────────────┘
-                        │ agent ──HTTPS──▶ control plane   │ beyla ──OTLP──▶ collector ──▶ ClickHouse
-                        ▼                                  ▼
- CONTROL PLANE  ┌──────────────────────────────────────────────────────────┐
-                │  control plane (Go, single binary)                        │
-                │  API · auth/orgs · alert evaluator · action queue         │
-                │  embedded Prometheus engine — PromQL → ClickHouse         │
-                │  SSE event broker — push-invalidated live UI              │
-                └──────────┬──────────────────────┬────────────────────────┘
-                           ▼                      ▼
- DATA              PostgreSQL              ClickHouse
-                   state · orgs · rules    logs · traces · metrics (OTel)
-
- ACCESS            web (Next.js) ──▶ control-plane API · live via SSE
+ YOUR CLUSTER   agent (Go, outbound-only, enumerated RBAC)      beyla eBPF DaemonSet
+                topology · logs · inventory · action pipelines   HTTP/gRPC/Go · SQL/Redis/Kafka
+                        │ HTTPS                                          │ OTLP
+                        ▼                                                ▼
+ CONTROL PLANE  control plane (Go, single binary)                OTel collector → ClickHouse
+                API · auth/orgs · alert evaluator · action queue · Copilot loop
+                embedded Prometheus engine (PromQL → ClickHouse) · SSE broker
+                        │
+ DATA           PostgreSQL (state, rules, runs, chats)  ·  ClickHouse (logs, traces, metrics)
+ ACCESS         web (Next.js) — service map · copilot · logs · traces · metrics · alerts · actions · runs
 ```
 
-- **Agent** (`agent/`) — Go binary in the cluster. Syncs topology (deployments, pods, nodes,
-  PVCs with kubelet stats), ships logs, and executes claimed actions through step pipelines
-  with verification and rollback. Strictly outbound.
-- **Control plane** (`services/controlplane/`) — Go, single binary. Multi-org auth, cluster
-  enrollment, telemetry queries, the alert evaluator (typed + PromQL rules, auto-remediation
-  dispatch), the Starlark engine's control side, and an SSE broker so open views update on push.
-- **Web** (`apps/web/`) — Next.js App Router: service map, logs, traces, metrics with the
-  PromQL editor, alerts, actions, infrastructure.
-- **ClickHouse** — OTel logs, traces and metrics; PromQL runs against it through the embedded
-  engine. **PostgreSQL** — control-plane state: orgs, clusters, rules, workflows, actions.
+The Copilot is a tool-calling loop inside the control plane: 16 read tools (logs, traces —
+including single-trace waterfalls and trace↔log correlation — PromQL, service map, inventory,
+debug bundles) plus exactly one mutating tool, `run_safe_action`, which pauses the stream for
+human approval. The same toolbox is exposed as an [MCP server](services/controlplane/cmd/mcp),
+so Claude Code or Cursor can operate your cluster through the identical guardrails.
 
 <details>
 <summary><b>Monorepo layout</b></summary>
 
 ```
-├── agent/                     # in-cluster agent (Go) — sync, log shipping, action pipelines
-├── services/controlplane/     # control plane (Go) — API, auth, alerts, actions, PromQL
+├── agent/                      # in-cluster agent (Go): sync, logs, inventory, action pipelines + revert snapshots
+├── services/controlplane/      # control plane (Go): API, auth, alerts, Copilot loop, PromQL engine
 │   └── internal/
-│       ├── api/               #   HTTP handlers (REST + SSE + Prometheus-compatible API)
-│       ├── alerts/            #   evaluator: state machine, providers, auto-remediation
-│       ├── promqlx/           #   embedded Prometheus engine on ClickHouse
-│       ├── telemetry/         #   ClickHouse queries (logs, traces, RED, infra metrics)
-│       ├── events/            #   SSE broker (invalidation signals)
-│       ├── store/ · model/    #   PostgreSQL access + domain types
-│       └── migrations/        #   SQL migrations (applied at boot)
-├── apps/web/                  # Next.js dashboard (App Router, Tailwind)
-├── packages/ui/               # shared design tokens
-├── deploy/
-│   ├── compose/               #   local data stores + OTel collector
-│   ├── helm/rocketplane-agent/#   agent Helm chart
-│   ├── install.yaml           #   Helm-free agent install (kubectl)
-│   └── dev/                   #   demo shop workload, Beyla manifest
+│       ├── api/                #   REST + SSE + copilot_* (loop, guardrails, approval gate)
+│       ├── promqlx/            #   embedded Prometheus engine on ClickHouse
+│       ├── alerts/ · telemetry/ · events/ · store/ · migrations/
+│       └── ../cmd/mcp/         #   MCP server — same tools for external agents
+├── apps/web/                   # Next.js UI (RETICLE design system)
+└── deploy/                     # compose (dev stores), helm chart, install.yaml, demo shop
 ```
 </details>
 
-## Status & roadmap
+## Status
 
 | Works end-to-end today | Not yet |
-| --- | --- |
-| eBPF traces incl. compiled Go, with context propagation | Published container images |
-| Service map, logs → trace investigation, three trace views | Platform Helm chart (agent chart exists) |
-| PromQL + custom metrics on ClickHouse | Hosted demo |
-| Alerts with auto-remediation dispatch | Measured agent/Beyla overhead numbers |
-| Safe actions with verify + auto-rollback, Starlark workflows | Multi-user RBAC hardening |
-| Nodes/PVC view, cordon/drain from the UI | |
+|---|---|
+| Copilot: BYO-LLM investigation → guardrailed fixes | Published container images |
+| eBPF traces incl. compiled Go, log→trace correlation | Hosted demo |
+| ~30 safe actions with verify, rollback and revert | Measured overhead numbers |
+| Runs audit trail, guaranteed-terminating cancel | Multi-user RBAC hardening |
+| Alerts with auto-remediation dispatch | Server-side LLM key vault |
+| PromQL + custom metrics on ClickHouse, full K8s inventory | |
 
-Alpha means alpha: interfaces change without notice, and you should not point this at a
-production cluster yet.
+## Contributing
 
-## Contributing & community
-
-Issues and feedback are very welcome — especially reports from real clusters:
-[open an issue](https://github.com/olemeyer/rocketplaneIO/issues). For anything else, see
-[CONTRIBUTING.md](CONTRIBUTING.md). If you got this far and it resonates, a star helps others
-find it.
+Reports from real clusters are the contribution we want most —
+[open an issue](https://github.com/olemeyer/rocketplaneIO/issues). See
+[CONTRIBUTING.md](CONTRIBUTING.md). If this resonates, a star helps others find it.
 
 ## License
 
-rocketplaneIO is open source under the [Apache License 2.0](LICENSE).
+[Apache-2.0](LICENSE).
 
 ---
 
