@@ -250,13 +250,15 @@ func (s *Server) execCopilotTool(ctx context.Context, scope, org, cluster, cooki
 		return s
 	}
 
-	// Scope-Default: ist ein Namespace gewählt, filtern Reads standardmässig darauf.
+	// Scope-ERZWINGUNG (symmetrisch zum Write-Gate scopeViolation): ist ein
+	// Namespace gewählt, laufen Reads AUSSCHLIESSLICH darin — ein explizit vom
+	// LLM genannter Fremd-Namespace wird ignoriert, sonst könnte ein
+	// namespace-scoped Chat jeden anderen Namespace auslesen (nur Namen nennen).
 	scopedNS := func(k string) string {
-		v := getStr(k)
-		if v == "" && scope != "" {
+		if scope != "" {
 			return scope
 		}
-		return v
+		return getStr(k)
 	}
 
 	switch name {
@@ -489,7 +491,7 @@ func (s *Server) execCopilotTool(ctx context.Context, scope, org, cluster, cooki
 		if kind == "" {
 			kind = "Deployment"
 		}
-		return post("/actions", map[string]any{"kind": "debug_bundle", "targetNamespace": getStr("namespace"), "targetKind": kind, "targetName": getStr("name")})
+		return post("/actions", map[string]any{"kind": "debug_bundle", "targetNamespace": scopedNS("namespace"), "targetKind": kind, "targetName": getStr("name")})
 	}
 	return "", fmt.Errorf("unknown tool %q", name)
 }
