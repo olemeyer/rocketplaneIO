@@ -114,6 +114,30 @@ func (s *Syncer) RunTopology(ctx context.Context) error {
 	}
 }
 
+// RunPodInformer startet NUR den Pod-Informer (für das Pod→Workload-Mapping des
+// Log-Collectors) und blockiert bis ctx endet — OHNE Topologie-Push. Das ist der
+// Einstieg für die logs-Rolle (separater DaemonSet): jeder Node-Agent tailt seine
+// lokalen Logs, aber nur der Haupt-Agent (Deployment) pusht die Topologie, damit
+// es genau EINEN Writer gibt und Actions nicht mehrfach ausgeführt werden.
+func (s *Syncer) RunPodInformer(ctx context.Context) error {
+	factory := informers.NewSharedInformerFactory(s.clientset, informerResync)
+	podInf := factory.Core().V1().Pods()
+	podLister := podInf.Lister()
+
+	factory.Start(ctx.Done())
+	if !cache.WaitForCacheSync(ctx.Done(), podInf.Informer().HasSynced) {
+		log.Printf("topology: pod informer cache sync failed")
+		return nil
+	}
+	log.Printf("logs: pod informer synced (workload mapping ready)")
+
+	s.podLister = podLister
+	close(s.podReady)
+
+	<-ctx.Done()
+	return nil
+}
+
 // pushTopology listet Pods + Services aus dem Cache und POSTet sie als Full-Sync.
 func (s *Syncer) pushTopology(ctx context.Context, pods listersv1.PodLister, svcs listersv1.ServiceLister) {
 	podList, err := pods.List(labels.Everything())

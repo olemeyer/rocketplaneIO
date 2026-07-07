@@ -82,15 +82,40 @@ func main() {
 	}
 	log.Printf("enrolled: clusterId=%s", resp.ClusterID)
 
-	// 4+5. Namespace-Sync + Heartbeat + Topologie-Sync (Pods/Services für die
-	// Service-Map), alle bis zum Shutdown. Topologie läuft parallel zum Namespace-Sync.
 	syncer := agentsync.New(controlplaneURL, resp.AgentToken, agentVersion, clientset)
+
+	// Rolle bestimmt, WELCHE Loops laufen:
+	//   full (default) — ein Deployment, EINZIGER Writer: Namespace-Sync, Heartbeat,
+	//                    Topologie, Inventar, Actions (+ no-op Logs ohne Mount).
+	//   logs           — ein DaemonSet je Node, das AUSSCHLIESSLICH die node-lokalen
+	//                    Container-Logs tailt (/var/log/pods). Kein Topologie-Push,
+	//                    keine Actions → keine Doppel-Writer/Doppelausführung.
+	// Log-Collection ist bewusst von den conntrack-Flow-Privilegien entkoppelt: ein
+	// Log-DaemonSet braucht weder hostNetwork noch NET_ADMIN, nur den read-only Mount.
+	role := envOr("RP_AGENT_ROLE", "full")
+	if role == "logs" {
+		log.Printf("role=logs — node-local log collection only (no topology/actions)")
+		go func() {
+			if err := syncer.RunPodInformer(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("logs: pod informer: %v", err)
+			}
+		}()
+		if err := syncer.RunLogs(ctx); err != nil && ctx.Err() == nil {
+			log.Fatalf("logs: %v", err)
+		}
+		log.Printf("shutting down")
+		return
+	}
+
+	// role=full: der einzige Writer.
+	log.Printf("role=full — topology, inventory, actions, namespaces")
 	go func() {
 		if err := syncer.RunTopology(ctx); err != nil && ctx.Err() == nil {
 			log.Printf("topology: %v", err)
 		}
 	}()
-	// Zero-config Log-Collection (no-op ohne /var/log/pods-Mount).
+	// Zero-config Log-Collection (no-op ohne /var/log/pods-Mount — auf Clustern mit
+	// dem logs-DaemonSet übernimmt dieser die Logs; hier bleibt es ein stiller No-Op).
 	go func() {
 		if err := syncer.RunLogs(ctx); err != nil && ctx.Err() == nil {
 			log.Printf("logs: %v", err)
