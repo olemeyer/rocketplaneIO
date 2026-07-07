@@ -1,4 +1,4 @@
-{{- if .Values.logs.enabled }}
+{{- if and .Values.logs .Values.logs.enabled }}
 # Log-Collector-DaemonSet: EIN Pod je Node, der die node-lokalen Container-Logs
 # unter /var/log/pods read-only tailt und OUTBOUND an die Control-Plane pusht.
 # Bewusst getrennt vom Haupt-Agent (Deployment):
