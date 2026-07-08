@@ -5,9 +5,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useScope } from './scope-context';
 import { ToolResultView } from './copilot-panels';
-import { InvestigationGraph } from './copilot-graph';
 import { copilotStore, GREETING, type Item, type Block, type Activity, type ChatSummary } from './copilot-store';
-import { APPROVAL_MODES, LEVEL_META, RISK_LEVELS, levelColor, loadApprovalPolicy, saveApprovalPolicy, type ApprovalMode, type ApprovalPolicy, type RiskLevel } from '@/lib/approval';
+import { APPROVAL_MODES, LEVEL_META, RISK_LEVELS, actionCategoryOf, levelColor, loadApprovalPolicy, saveApprovalPolicy, type ApprovalMode, type ApprovalPolicy, type RiskLevel } from '@/lib/approval';
 import type { LLMConfig } from '@/lib/llm';
 
 // copilot.tsx — das Primärfeature: der AI-Infrastruktur-Copilot. Prominenter
@@ -406,6 +405,8 @@ export function CopilotChat({ orgId, clusterId, config }: { orgId: string; clust
           </div>
         ) : null}
 
+        <ChangesSummary activities={activities} onOpen={(aid) => { setSelected(aid); setInspectorOpen(true); }} />
+
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
           <div className="mx-auto max-w-[720px] space-y-3.5">
             {items.map((it, i) => {
@@ -483,6 +484,12 @@ export function CopilotChat({ orgId, clusterId, config }: { orgId: string; clust
                           if (!act) return null;
                           return <QuestionCard key={j} act={act} onAnswer={answer} onDismiss={() => decide(act, false)} />;
                         }
+                        if (b.type === 'node') {
+                          const node = nodes.find((n) => n.id === b.nodeId);
+                          if (!node) return null;
+                          const toolCount = activities.filter((a) => a.nodeId === b.nodeId).length;
+                          return <InlineNode key={j} node={node} toolCount={toolCount} onOpen={() => focusNode(b.nodeId)} />;
+                        }
                         // action
                         const act = activities.find((a) => a.id === b.refId);
                         if (!act) return null;
@@ -537,9 +544,9 @@ export function CopilotChat({ orgId, clusterId, config }: { orgId: string; clust
         </div>
       </div>
 
-      {/* ── Inspector-Spalte (Desktop): Investigation-Graph + Inspector ── */}
+      {/* ── Inspector-Spalte (Desktop): der Ergebnis-Bereich bekommt den Platz;
+             die Hypothesen leben inline im Chat, nicht mehr hier. ── */}
       <aside className="hidden w-[360px] shrink-0 lg:flex lg:flex-col lg:gap-3 xl:w-[400px]">
-        <InvestigationGraph nodes={nodes} onFocus={focusNode} />
         <div className="min-h-0 flex-1">{inspector}</div>
         <ReasoningLog lines={session?.reasoning ?? []} />
       </aside>
@@ -559,6 +566,97 @@ export function CopilotChat({ orgId, clusterId, config }: { orgId: string; clust
           <div className="absolute inset-y-0 left-0 w-[min(300px,86vw)] p-2" style={{ animation: 'rp-drawer-in 200ms ease-out' }}>{historyRail}</div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/* ── Inline-Investigation-Knoten: Hypothese→Verdict direkt im Chat-Fluss ──── */
+type NodeVerdict = { verdict?: string; summary?: string; recommendation?: string; root_cause?: string };
+function nodeTone(node: { status: string; verdict?: unknown; kind: string }): { color: string; glyph: string; label: string; live?: boolean } {
+  const v = (node.verdict && typeof node.verdict === 'object' ? node.verdict : {}) as NodeVerdict;
+  if (node.status === 'running') return { color: 'var(--rp-ink-muted)', glyph: '◐', label: 'investigating', live: true };
+  if (node.status === 'failed') return { color: 'var(--rp-tone-red-fg)', glyph: '▲', label: 'failed' };
+  if (node.status === 'abandoned') return { color: 'var(--rp-ink-faint)', glyph: '○', label: 'abandoned' };
+  switch (v.verdict) {
+    case 'confirmed': return { color: 'var(--rp-tone-red-fg)', glyph: '▲', label: 'confirmed' };
+    case 'refuted': return { color: 'var(--rp-tone-green-fg)', glyph: '●', label: 'refuted' };
+    case 'inconclusive': return { color: 'var(--rp-tone-gold-fg)', glyph: '◆', label: 'inconclusive' };
+  }
+  if (node.kind === 'conclusion') return { color: 'var(--rp-tone-green-fg)', glyph: '●', label: 'conclusion' };
+  return { color: 'var(--rp-ink-muted)', glyph: '●', label: node.status };
+}
+function InlineNode({ node, toolCount, onOpen }: { node: import('./copilot-store').GraphNode; toolCount: number; onOpen: () => void }) {
+  const t = nodeTone(node);
+  const v = (node.verdict && typeof node.verdict === 'object' ? node.verdict : {}) as NodeVerdict;
+  const summary = v.summary || v.root_cause || '';
+  const isConclusion = node.kind === 'conclusion';
+  return (
+    <div
+      className="overflow-hidden rounded-skin border"
+      style={{ borderColor: isConclusion ? 'color-mix(in oklab, var(--rp-tone-green-fg) 32%, var(--rp-line))' : 'var(--rp-line)', background: 'var(--rp-bg-inset)' }}
+    >
+      <button type="button" onClick={onOpen} className="flex w-full items-start gap-2 px-3 py-2 text-left">
+        <span className={`mt-0.5 shrink-0 ${t.live ? 'rp-breath' : ''}`} style={{ color: t.color }}>{t.glyph}</span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5">
+            <span className="rp-micro !text-[9px]" style={{ color: 'var(--rp-ink-faint)' }}>{isConclusion ? 'conclusion' : 'hypothesis'}</span>
+            <span className="font-mono text-[9px]" style={{ color: t.color }}>{t.label}</span>
+            {typeof node.confidence === 'number' && node.confidence > 0 ? <span className="font-mono text-[9px] tabular-nums text-faint">{Math.round(node.confidence * 100)}%</span> : null}
+            {toolCount > 0 ? <span className="ml-auto shrink-0 font-mono text-[9px] text-faint">{toolCount} read{toolCount > 1 ? 's' : ''} ›</span> : <span className="ml-auto shrink-0 font-mono text-[9px] text-faint">›</span>}
+          </span>
+          <span className="mt-0.5 block font-mono text-[11.5px] leading-snug text-ink">{node.hypothesis}</span>
+        </span>
+      </button>
+      {summary ? (
+        <div className="border-t border-line px-3 py-1.5" style={{ paddingLeft: '2rem' }}>
+          <p className="font-mono text-[10.5px] leading-relaxed text-mid">{summary}</p>
+          {v.recommendation ? <p className="mt-1 font-mono text-[10px] leading-relaxed text-muted">→ {v.recommendation}</p> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ── Changes-Zusammenfassung: alle Actions eines Chats gruppiert, einklappbar ── */
+function ChangesSummary({ activities, onOpen }: { activities: Activity[]; onOpen: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const actions = activities.filter((a) => a.isAction);
+  if (actions.length === 0) return null;
+  const done = actions.filter((a) => a.status === 'succeeded').length;
+  const failed = actions.filter((a) => a.status === 'failed').length;
+  const pending = actions.filter((a) => a.status === 'awaiting' || a.status === 'starting' || (!a.terminal && a.status !== 'rejected' && a.status !== 'blocked')).length;
+  const dismissed = actions.filter((a) => a.status === 'rejected' || a.status === 'blocked').length;
+  return (
+    <div className="shrink-0 border-b border-line" style={{ background: 'var(--rp-bg-inset)' }}>
+      <div className="mx-auto max-w-[720px] px-4 sm:px-6">
+        <button type="button" onClick={() => setOpen((o) => !o)} className="rp-focus flex w-full items-center gap-2 py-1.5 text-left font-mono text-[10.5px]">
+          <span className="rp-micro !text-[9.5px]">changes this investigation</span>
+          <span className="tabular-nums text-muted">{actions.length}</span>
+          <span className="ml-2 flex items-center gap-2 tabular-nums">
+            {done > 0 ? <span style={{ color: 'var(--rp-tone-green-fg)' }}>● {done}</span> : null}
+            {pending > 0 ? <span className="rp-breath" style={{ color: 'var(--rp-accent)' }}>◆ {pending}</span> : null}
+            {failed > 0 ? <span style={{ color: 'var(--rp-tone-red-fg)' }}>▲ {failed}</span> : null}
+            {dismissed > 0 ? <span className="text-faint">○ {dismissed}</span> : null}
+          </span>
+          <span className="ml-auto text-faint">{open ? '▾' : '▸'}</span>
+        </button>
+        {open ? (
+          <div className="space-y-0.5 pb-2">
+            {actions.map((a) => {
+              const st = statusTone(a.status);
+              return (
+                <button key={a.id} type="button" onClick={() => onOpen(a.id)} className="rp-focus flex w-full items-center gap-2 rounded-skin-sm px-1.5 py-1 text-left font-mono text-[10px] transition-colors hover:bg-hover">
+                  <span className={st.live ? 'rp-breath' : ''} style={{ color: st.color }}>{st.glyph}</span>
+                  <span className="shrink-0 text-ink">{(a.kind ?? '').replace(/_/g, ' ')}</span>
+                  <span className="min-w-0 flex-1 truncate text-muted">{a.target}</span>
+                  <span className="shrink-0 text-[9px] uppercase tracking-[0.05em]" style={{ color: levelColor(a.klass) }}>{a.klass}</span>
+                  <span className="shrink-0 text-faint">›</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -646,6 +744,10 @@ function ActionCard({ act, selected, onOpen, onDecide }: { act: Activity; select
   const needsConfirm = act.approvalMode === 'confirm';
   const params = (act.args?.params as Record<string, unknown>) ?? {};
   const paramStr = JSON.stringify(params) !== '{}' ? JSON.stringify(params) : '';
+  const isRead = actionCategoryOf(act.kind ?? '') === 'diagnose';
+  // Erste sinnvolle Ergebnis-Zeile für die Read-Vorschau (Banner wie
+  // "[current, last N lines]" überspringen).
+  const resultPreview = (act.result ?? '').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('['))[0] ?? '';
   return (
     <div className={`overflow-hidden rounded-skin border ${selected ? 'border-line-strong' : 'border-line'}`} style={{ background: 'var(--rp-bg-inset)', boxShadow: act.status === 'awaiting' ? '0 0 0 1px color-mix(in oklab, var(--rp-accent) 40%, transparent)' : undefined }}>
       <button type="button" onClick={onOpen} className="flex w-full items-center gap-2 border-b border-line px-3 py-2 text-left">
@@ -680,8 +782,16 @@ function ActionCard({ act, selected, onOpen, onDecide }: { act: Activity; select
               <span className="ml-auto font-mono text-[9px] text-faint">details in the inspector →</span>
             </>
           )
-        ) : act.terminal && act.status === 'succeeded' ? (
-          <span className="font-mono text-[11px]" style={{ color: 'var(--rp-tone-green-fg)' }}>● {act.progress || 'done'} — see Runs for the audit trail</span>
+        ) : (act.terminal || (isRead && act.result)) && act.status !== 'failed' && act.status !== 'rejected' && act.status !== 'blocked' ? (
+          isRead ? (
+            <button type="button" onClick={onOpen} className="flex min-w-0 items-center gap-1.5 text-left">
+              <span className="shrink-0 font-mono text-[11px]" style={{ color: 'var(--rp-tone-green-fg)' }}>●</span>
+              <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-mid">{resultPreview || 'read complete'}</span>
+              <span className="shrink-0 font-mono text-[9px] text-faint">view ›</span>
+            </button>
+          ) : (
+            <span className="font-mono text-[11px]" style={{ color: 'var(--rp-tone-green-fg)' }}>● {act.progress || 'done'} — see Runs for the audit trail</span>
+          )
         ) : act.terminal && act.status === 'failed' ? (
           <span className="font-mono text-[11px]" style={{ color: 'var(--rp-tone-red-fg)' }}>▲ failed — {act.result || 'see inspector'}</span>
         ) : act.status === 'rejected' ? (
@@ -874,57 +984,76 @@ function ActionInspector({ act, onDecide }: { act: Activity; onDecide: (a: Activ
   if (Array.isArray(act.steps)) steps = act.steps as Step[];
   else if (typeof act.steps === 'string') { try { const p = JSON.parse(act.steps); if (Array.isArray(p)) steps = p; } catch { /* none */ } }
 
+  // Read-Actions (Diagnose): das RESULT ist die Antwort — es führt, die Pipeline
+  // ist Nebensache. Mutationen: die verifizierende Step-Kette ist der Wert.
+  const isRead = actionCategoryOf(act.kind ?? '') === 'diagnose';
+  const hasResult = !!act.result && (act.terminal || isRead);
+  const failed = steps.some((s) => s.status === 'failed') || act.status === 'failed';
+
+  const resultBlock = hasResult ? (
+    <div>
+      <p className="rp-micro !text-[10px] mb-1.5">result</p>
+      <ToolResultView name={act.kind ?? ''} result={act.result} status={act.status === 'awaiting' ? 'running' : act.status === 'succeeded' ? 'ok' : act.status} />
+    </div>
+  ) : null;
+
+  const stepsBlock = steps.length > 0 && (!isRead || steps.length > 2 || failed) ? (
+    <div>
+      <p className="rp-micro !text-[10px] mb-1">{isRead ? 'steps' : `pipeline · ${steps.filter((s) => s.status === 'ok').length}/${steps.length}`}</p>
+      <ol className="space-y-1">
+        {steps.map((s, i) => {
+          const ss = statusTone(s.status ?? '');
+          return (
+            <li key={i} className="flex items-start gap-2 font-mono text-[10.5px]">
+              <span className={ss.live ? 'rp-breath mt-px' : 'mt-px'} style={{ color: ss.color }}>{ss.glyph}</span>
+              <span className="min-w-0"><span className="text-ink">{s.name}</span>{s.detail ? <span className="text-faint"> — {s.detail}</span> : null}</span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  ) : null;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        <div className="mb-2 flex items-center gap-1.5 font-mono text-[10px]">
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
+        <div className="flex items-center gap-1.5 font-mono text-[10px]">
           <span className={st.live ? 'rp-breath' : ''} style={{ color: st.color }}>{st.glyph}</span>
-          <span style={{ color: st.color }}>{act.status}</span>
+          <span style={{ color: st.color }}>{act.status === 'ok' ? 'read complete' : act.status}</span>
           <span className="ml-auto uppercase tracking-[0.05em]" style={{ color: levelColor(act.klass) }}>{k.glyph} {k.label}</span>
         </div>
 
-        <p className="rp-micro !text-[10px] mb-1">action</p>
-        <pre className="mb-3 overflow-x-auto rounded-skin-sm border border-line bg-inset p-2 font-mono text-[10.5px] leading-relaxed text-mid">{pretty(act.args)}</pre>
+        {act.reason ? <p className="font-mono text-[10.5px] leading-relaxed text-muted">“{act.reason}”</p> : null}
 
-        {act.source ? (
+        {/* Read: Ergebnis führt. Mutation: erst Aktion + Pipeline, dann Ergebnis. */}
+        {isRead ? (
           <>
-            <p className="rp-micro !text-[10px] mb-1" style={{ color: 'var(--rp-node-crit)' }}>script source — read before you arm</p>
-            <pre className="mb-3 max-h-[280px] overflow-auto rounded-skin-sm border p-2 font-mono text-[10.5px] leading-relaxed text-ink" style={{ borderColor: 'color-mix(in oklab, var(--rp-node-crit) 40%, var(--rp-line))', background: 'var(--rp-bg-inset)' }}>{act.source}</pre>
+            {resultBlock}
+            {act.progress && !hasResult ? <div className="rounded-skin-sm border border-line bg-inset px-2 py-1.5 font-mono text-[11px] text-ink">{act.progress}</div> : null}
+            {stepsBlock}
           </>
-        ) : null}
-
-        {act.reason ? <p className="mb-3 font-mono text-[10.5px] leading-relaxed text-muted">“{act.reason}”</p> : null}
-
-        {act.progress ? (
+        ) : (
           <>
-            <p className="rp-micro !text-[10px] mb-1">progress</p>
-            <div className="mb-3 rounded-skin-sm border border-line bg-inset px-2 py-1.5 font-mono text-[11px] text-ink">{act.progress}</div>
+            <div>
+              <p className="rp-micro !text-[10px] mb-1">action</p>
+              <pre className="overflow-x-auto rounded-skin-sm border border-line bg-inset p-2 font-mono text-[10.5px] leading-relaxed text-mid">{pretty(act.args)}</pre>
+            </div>
+            {act.source ? (
+              <div>
+                <p className="rp-micro !text-[10px] mb-1" style={{ color: 'var(--rp-node-crit)' }}>script source — read before you arm</p>
+                <pre className="max-h-[280px] overflow-auto rounded-skin-sm border p-2 font-mono text-[10.5px] leading-relaxed text-ink" style={{ borderColor: 'color-mix(in oklab, var(--rp-node-crit) 40%, var(--rp-line))', background: 'var(--rp-bg-inset)' }}>{act.source}</pre>
+              </div>
+            ) : null}
+            {act.progress ? (
+              <div>
+                <p className="rp-micro !text-[10px] mb-1">progress</p>
+                <div className="rounded-skin-sm border border-line bg-inset px-2 py-1.5 font-mono text-[11px] text-ink">{act.progress}</div>
+              </div>
+            ) : null}
+            {stepsBlock}
+            {resultBlock}
           </>
-        ) : null}
-
-        {steps.length > 0 ? (
-          <>
-            <p className="rp-micro !text-[10px] mb-1">steps</p>
-            <ol className="mb-3 space-y-1">
-              {steps.map((s, i) => {
-                const ss = statusTone(s.status ?? '');
-                return (
-                  <li key={i} className="flex items-start gap-2 font-mono text-[10.5px]">
-                    <span className={ss.live ? 'rp-breath mt-px' : 'mt-px'} style={{ color: ss.color }}>{ss.glyph}</span>
-                    <span className="min-w-0"><span className="text-ink">{s.name}</span>{s.detail ? <span className="text-faint"> — {s.detail}</span> : null}</span>
-                  </li>
-                );
-              })}
-            </ol>
-          </>
-        ) : null}
-
-        {act.result && act.terminal ? (
-          <>
-            <p className="rp-micro !text-[10px] mb-1">result</p>
-            <pre className="overflow-x-auto whitespace-pre-wrap rounded-skin-sm border border-line bg-inset p-2 font-mono text-[10.5px] leading-relaxed text-mid">{act.result}</pre>
-          </>
-        ) : null}
+        )}
       </div>
 
       {/* Freigabe — sofortiger full-stop bis wir antworten */}

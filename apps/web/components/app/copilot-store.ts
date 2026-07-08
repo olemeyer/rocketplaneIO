@@ -51,7 +51,8 @@ export type Block =
   | { type: 'text'; text: string }
   | { type: 'tool'; refId: string; name: string }
   | { type: 'action'; refId: string }
-  | { type: 'question'; refId: string };
+  | { type: 'question'; refId: string }
+  | { type: 'node'; nodeId: string }; // Investigation-Knoten (Hypothese/Fazit) inline im Chat
 export type Item =
   | { role: 'user'; text: string }
   | { role: 'assistant'; blocks: Block[] }
@@ -465,15 +466,22 @@ export const copilotStore = {
         }
         case 'node_started': {
           const nid = String(data.nodeId ?? '');
+          const kind = String(data.kind ?? 'hypothesis');
           upsertNode(id, nid, {
             parentId: data.parentId != null ? String(data.parentId) : null,
             seq: Number(data.seq ?? 0),
-            kind: String(data.kind ?? 'hypothesis'),
+            kind,
             hypothesis: String(data.hypothesis ?? ''),
             task: data.task,
             status: 'running',
           });
-          copilotStore.scheduleSave(id);
+          // Hypothesen + Fazit erscheinen INLINE im Chat (Investigation ist Teil
+          // des Gesprächs, nicht ein Panel rechts). Actions/Fragen haben eigene
+          // Blöcke; der reine hypothesis/conclusion-Knoten kriegt hier seinen.
+          if (kind === 'hypothesis' || kind === 'conclusion') {
+            blocks.push({ type: 'node', nodeId: nid });
+            flush();
+          }
           break;
         }
         case 'verdict': {
