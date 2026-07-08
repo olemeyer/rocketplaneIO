@@ -525,6 +525,50 @@ export function linkInvestigation(
   });
 }
 
+/* ── Escalation policies ───────────────────────────────────────────────── */
+
+type EscalationPolicyT = import('./types').EscalationPolicy;
+type EscalationStepT = import('./types').EscalationStep;
+
+export function getEscalationPolicies(orgId: string): Promise<{ policies: EscalationPolicyT[] }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/escalation-policies`);
+}
+export function createEscalationPolicy(
+  orgId: string,
+  body: { name: string; steps: EscalationStepT[] },
+): Promise<EscalationPolicyT> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/escalation-policies`, { method: 'POST', body: JSON.stringify(body) });
+}
+export function updateEscalationPolicy(
+  orgId: string,
+  policyId: string,
+  body: { name: string; steps: EscalationStepT[] },
+): Promise<EscalationPolicyT> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/escalation-policies/${enc(policyId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+export function deleteEscalationPolicy(orgId: string, policyId: string): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/escalation-policies/${enc(policyId)}`, { method: 'DELETE' });
+}
+export function getClusterEscalation(
+  orgId: string,
+  clusterId: string,
+): Promise<{ policyId: string | null }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/escalation`);
+}
+export function setClusterEscalation(
+  orgId: string,
+  clusterId: string,
+  policyId: string | null,
+): Promise<{ policyId: string | null }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/escalation`, {
+    method: 'PUT',
+    body: JSON.stringify({ policyId }),
+  });
+}
+
 /* ── Derived Metrics ──────────────────────────────────────────────────────── */
 
 export function getMetricDefinitions(

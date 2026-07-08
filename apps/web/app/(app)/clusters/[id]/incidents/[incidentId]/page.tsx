@@ -58,6 +58,8 @@ function eventStyle(kind: IncidentEvent['kind']): { glyph: string; fg: string } 
       return { glyph: '✦', fg: 'var(--rp-tone-blue-fg)' };
     case 'action':
       return { glyph: '⚙', fg: 'var(--rp-tone-blue-fg)' };
+    case 'escalated':
+      return { glyph: '↑', fg: 'var(--rp-tone-red-fg)' };
     case 'postmortem':
       return { glyph: '▤', fg: 'var(--rp-ink-mid)' };
     default:
@@ -453,6 +455,8 @@ function MetaCard({
         </span>
       </div>
 
+      <EscalationLine incident={incident} />
+
       <Row label="Severity">
         <select
           value={incident.severity}
@@ -513,6 +517,37 @@ function MetaCard({
         </span>
         Investigate with Copilot
       </button>
+    </div>
+  );
+}
+
+// EscalationLine zeigt den Eskalationszustand: aktiv (nächster Schritt in Xm),
+// gestoppt (nach acknowledge), oder keine Policy.
+function EscalationLine({ incident }: { incident: Incident }) {
+  if (!incident.escalationPolicyId) return null;
+  const active = incident.status === 'open' && !!incident.nextEscalationAt;
+  let text: string;
+  let fg = 'var(--rp-ink-muted)';
+  if (active) {
+    const secs = (Date.parse(incident.nextEscalationAt!) - Date.now()) / 1000;
+    text = secs <= 0 ? `escalating now (step ${incident.escalationStep + 1})` : `escalates in ${fmtDuration(secs)}`;
+    fg = 'var(--rp-tone-red-fg)';
+  } else if (incident.status === 'open') {
+    text = 'escalation complete';
+  } else {
+    text = 'escalation stopped';
+  }
+  return (
+    <div className="mt-2 flex items-center gap-1.5 rounded-skin-sm px-2 py-1.5" style={{ background: 'var(--rp-inset)' }}>
+      <span aria-hidden style={{ color: fg }}>
+        ↑
+      </span>
+      <span className="font-mono text-[10px] tabular-nums" style={{ color: fg }}>
+        {text}
+      </span>
+      {incident.escalationStep > 0 ? (
+        <span className="ml-auto font-mono text-[9px] text-faint">{incident.escalationStep} paged</span>
+      ) : null}
     </div>
   );
 }

@@ -537,7 +537,24 @@ export interface Incident {
   postmortem: string;
   createdAt: string;
   updatedAt: string;
+  escalationPolicyId?: string;
+  escalationStep: number;
+  nextEscalationAt?: string;
   eventCount?: number;
+}
+
+/** Eskalations-Policy: geordnete Notification-Kette (org-weit). */
+export interface EscalationStep {
+  afterMinutes: number;
+  providerIds: string[];
+}
+export interface EscalationPolicy {
+  id: string;
+  orgId: string;
+  name: string;
+  steps: EscalationStep[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 /** Ein Eintrag der Incident-Timeline. */
@@ -555,6 +572,7 @@ export interface IncidentEvent {
     | 'alert_cleared'
     | 'investigation'
     | 'action'
+    | 'escalated'
     | 'postmortem';
   actorId?: string;
   actorEmail?: string;

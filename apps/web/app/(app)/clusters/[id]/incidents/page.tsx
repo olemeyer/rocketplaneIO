@@ -11,6 +11,7 @@ import { createIncident, getIncidents, getIncidentStats } from '@/lib/api/contro
 import type { Incident, IncidentStats, IncidentStatus } from '@/lib/api/types';
 import { SEVERITY, STATUS, SEVERITY_ORDER, incidentRank, fmtDuration } from '@/lib/incidents';
 import { timeAgo } from '@/lib/format';
+import { EscalationManager } from '@/components/app/escalation-manager';
 
 // Incidents — die Response-Zentrale: erstklassige Vorfälle, die Alerts, Copilot-
 // Investigations und Actions über einen Lebenszyklus (open→acknowledged→
@@ -51,6 +52,7 @@ export default function IncidentsPage() {
   const [stats, setStats] = useState<IncidentStats | null>(null);
   const [filter, setFilter] = useState<Filter>('open');
   const [declaring, setDeclaring] = useState(false);
+  const [escalation, setEscalation] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -109,6 +111,13 @@ export default function IncidentsPage() {
             />
             {live ? 'live' : 'poll'}
           </span>
+          <button
+            type="button"
+            onClick={() => setEscalation(true)}
+            className="rp-focus h-8 rounded-skin-sm border border-line px-3 font-mono text-[11.5px] text-mid transition-colors hover:bg-hover hover:text-ink"
+          >
+            Escalation ↑
+          </button>
           <button
             type="button"
             onClick={() => setDeclaring(true)}
@@ -191,6 +200,10 @@ export default function IncidentsPage() {
           }}
           err={err}
         />
+      ) : null}
+
+      {escalation && orgId ? (
+        <EscalationManager orgId={orgId} clusterId={clusterId} onClose={() => setEscalation(false)} />
       ) : null}
     </div>
   );
