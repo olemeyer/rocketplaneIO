@@ -22,25 +22,34 @@ import (
 // Bei Approve führt der Loop die Action aus, streamt ihren Status live und speist
 // das Ergebnis zurück ins Modell. Bei Reject/Timeout läuft er ohne Ausführung weiter.
 
+// gateMsg trägt die menschliche Entscheidung: Approve/Reject für Actions ODER
+// eine strukturierte Antwort (ask_user). Answer läuft NUR über diesen In-Memory-
+// Kanal — sie wird nie per SSE geechot und nie serverseitig persistiert.
+type gateMsg struct {
+	Approve  bool
+	Answered bool
+	Answer   json.RawMessage
+}
+
 // copilotGate hält je (runId/callId) einen Freigabe-Kanal. Der Chat-Handler
 // (eine Goroutine) blockiert darauf; der Decision-Handler (andere Goroutine)
 // sendet die Entscheidung. Nur der Kanal wird geteilt — der ResponseWriter nie.
 var copilotGate = struct {
 	mu sync.Mutex
-	m  map[string]chan bool
-}{m: map[string]chan bool{}}
+	m  map[string]chan gateMsg
+}{m: map[string]chan gateMsg{}}
 
 func gateKey(runID, callID string) string { return runID + "/" + callID }
 
-func copilotRegister(key string) chan bool {
-	ch := make(chan bool, 1)
+func copilotRegister(key string) chan gateMsg {
+	ch := make(chan gateMsg, 1)
 	copilotGate.mu.Lock()
 	copilotGate.m[key] = ch
 	copilotGate.mu.Unlock()
 	return ch
 }
 
-func copilotResolve(key string, approve bool) bool {
+func copilotResolve(key string, msg gateMsg) bool {
 	copilotGate.mu.Lock()
 	ch, ok := copilotGate.m[key]
 	copilotGate.mu.Unlock()
@@ -48,7 +57,7 @@ func copilotResolve(key string, approve bool) bool {
 		return false
 	}
 	select {
-	case ch <- approve:
+	case ch <- msg:
 	default:
 	}
 	return true
@@ -60,21 +69,32 @@ func copilotUnregister(key string) {
 	copilotGate.mu.Unlock()
 }
 
-// handleCopilotActionDecision — POST …/copilot/action  {runId, callId, decision}.
-// Gibt die pausierte Action frei (approve) oder lehnt sie ab (reject).
+// handleCopilotActionDecision — POST …/copilot/action
+// {runId, callId, decision: approve|reject|answer, answer?}.
+// Gibt die pausierte Action frei, lehnt sie ab, oder beantwortet eine
+// ask_user-Frage (answer wird nur in-memory an den wartenden Loop gereicht).
 func (s *Server) handleCopilotActionDecision(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.resolveOrg(w, r); !ok {
 		return
 	}
 	var req struct {
-		RunID    string `json:"runId"`
-		CallID   string `json:"callId"`
-		Decision string `json:"decision"` // approve | reject
+		RunID    string          `json:"runId"`
+		CallID   string          `json:"callId"`
+		Decision string          `json:"decision"` // approve | reject | answer
+		Answer   json.RawMessage `json:"answer,omitempty"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	if !copilotResolve(gateKey(req.RunID, req.CallID), req.Decision == "approve") {
+	msg := gateMsg{Approve: req.Decision == "approve"}
+	if req.Decision == "answer" {
+		if len(req.Answer) == 0 {
+			writeErr(w, http.StatusBadRequest, "decision=answer requires an answer payload")
+			return
+		}
+		msg = gateMsg{Answered: true, Answer: req.Answer}
+	}
+	if !copilotResolve(gateKey(req.RunID, req.CallID), msg) {
 		writeErr(w, http.StatusNotFound, "no pending action for this run")
 		return
 	}
@@ -96,24 +116,36 @@ func (s *Server) awaitAndRunAction(ctx context.Context, runID, callID, scope, or
 	defer copilotUnregister(key)
 
 	// Auf Entscheidung warten; währenddessen Keepalive-Pings gegen Proxy-Idle-Timeouts.
-	approve, decided := s.waitDecision(ctx, ch, emit)
+	msg, decided := s.waitDecision(ctx, ch, emit)
 	if !decided {
 		emit("action_status", map[string]any{"id": callID, "status": "cancelled", "terminal": true})
 		return "No decision was received (cancelled or timed out); the action was NOT run."
 	}
-	if !approve {
+	if !msg.Approve {
 		emit("action_status", map[string]any{"id": callID, "status": "rejected", "terminal": true})
 		return "The human DECLINED to run this action. Do not run it. Acknowledge briefly and, if useful, suggest a safer alternative."
 	}
 
 	// Action anlegen (self-HTTP → Auth/Validierung/User-Auflösung wie in der UI).
-	body, _ := json.Marshal(map[string]any{
+	// Secret-Platzhalter ({{secret:…}}) werden erst NACH der Freigabe und nur
+	// hier serverseitig aufgelöst — das LLM sieht nie Klartext.
+	createBody := map[string]any{
 		"kind":            strOf(input["kind"]),
 		"targetNamespace": orDefStr(strOf(input["targetNamespace"]), "-"),
 		"targetKind":      strOf(input["targetKind"]),
 		"targetName":      strOf(input["targetName"]),
 		"params":          input["params"],
-	})
+	}
+	if strOf(input["kind"]) == "script" {
+		// Ad-hoc-Script (propose_script): Source + Args gehen als eigene Felder
+		// an den Create-Endpoint, der sie validiert und snapshottet.
+		createBody["source"] = strOf(input["source"])
+		createBody["title"] = strOf(input["title"])
+		createBody["timeoutSeconds"] = input["timeoutSeconds"]
+		createBody["scriptArgs"] = input["scriptArgs"]
+	}
+	body, _ := json.Marshal(createBody)
+	body = []byte(vaultResolve(runID, string(body)))
 	base := fmt.Sprintf("%s/api/orgs/%s/clusters/%s", copilotSelfURL(), org, cluster)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/actions", bytes.NewReader(body))
 	req.Header.Set("Cookie", cookie)
@@ -138,19 +170,19 @@ func (s *Server) awaitAndRunAction(ctx context.Context, runID, callID, scope, or
 	return s.pollAction(ctx, cluster, callID, created.ID, input, emit)
 }
 
-func (s *Server) waitDecision(ctx context.Context, ch chan bool, emit emitFn) (approve, decided bool) {
+func (s *Server) waitDecision(ctx context.Context, ch chan gateMsg, emit emitFn) (gateMsg, bool) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	deadline := time.NewTimer(10 * time.Minute)
 	defer deadline.Stop()
 	for {
 		select {
-		case approve = <-ch:
-			return approve, true
+		case msg := <-ch:
+			return msg, true
 		case <-ctx.Done():
-			return false, false
+			return gateMsg{}, false
 		case <-deadline.C:
-			return false, false
+			return gateMsg{}, false
 		case <-ticker.C:
 			emit("ping", map[string]any{})
 		}
