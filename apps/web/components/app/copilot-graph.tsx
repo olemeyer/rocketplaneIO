@@ -37,7 +37,7 @@ function nodeTone(n: GraphNode): { color: string; glyph: string; label: string; 
     case 'refuted':
       return { color: 'var(--rp-tone-green-fg)', glyph: '●', label: 'refuted' };
     case 'inconclusive':
-      return { color: 'var(--rp-tone-gold-fg)', glyph: '◆', label: 'inconclusive' };
+      return { color: 'var(--rp-tone-yellow-fg)', glyph: '◆', label: 'inconclusive' };
   }
   if (n.kind === 'conclusion') return { color: 'var(--rp-tone-green-fg)', glyph: '●', label: 'conclusion' };
   return { color: 'var(--rp-ink-muted)', glyph: '●', label: n.status };

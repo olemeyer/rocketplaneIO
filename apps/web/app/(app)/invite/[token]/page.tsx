@@ -59,7 +59,7 @@ export default function InviteAcceptPage() {
               <span className="font-semibold" style={{ color: preview.role === 'owner' ? 'var(--rp-accent)' : 'var(--rp-ink)' }}>{preview.role}</span>.
             </p>
             {me && me.user.email.toLowerCase() !== preview.email.toLowerCase() ? (
-              <p className="mt-2 rounded-skin-sm px-2.5 py-1.5 font-mono text-[10.5px] leading-relaxed" style={{ color: 'var(--rp-tone-gold-fg)', background: 'var(--rp-tone-gold-bg)' }}>
+              <p className="mt-2 rounded-skin-sm px-2.5 py-1.5 font-mono text-[10.5px] leading-relaxed" style={{ color: 'var(--rp-tone-yellow-fg)', background: 'var(--rp-tone-yellow-bg)' }}>
                 This invite was addressed to {preview.email}, but you&apos;re signed in as {me.user.email}. Accepting will add <span className="font-semibold">your</span> account to the org.
               </p>
             ) : null}
