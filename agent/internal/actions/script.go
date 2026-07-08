@@ -27,6 +27,8 @@ package actions
 //   k8s.taint(node, key, value="", effect="NoSchedule") — Undo: untaint
 //   k8s.untaint(node, key)
 //   k8s.events(ns, name) → [{type,reason,message,count,object}]
+//   k8s.raw_get/raw_list/raw_apply/raw_patch/raw_delete — generisch (script_raw.go):
+//     kubectl-Äquivalenz mit Auto-Snapshot + Undo, Denylist + Mutations-Budget.
 //   wait_rollout(ns, kind, name, timeout=120)    — bis neue Generation komplett
 //   wait_ready(ns, kind, name, timeout=120)      — bis Pods == desired, alle ready
 //   → geben True/False zurück (False = Timeout; das Script entscheidet, z.B. Rollback)
@@ -537,6 +539,16 @@ func (r *Runner) executeScript(ctx context.Context, a Action) {
 		return starlark.NewList(out), nil
 	})
 
+	// Generische raw_*-Builtins (kubectl-Äquivalenz, Auto-Snapshot + Undo-LIFO).
+	rawMembers := r.rawBuiltins(ctx,
+		func(e undoEntry) { undoStack = append(undoStack, e) },
+		func(line string) {
+			if cur >= 0 {
+				states[cur].Detail = line
+			}
+			push(line, false)
+		})
+
 	// Echtes Modul (kein Dict!): k8s.get muss MEIN Builtin treffen, nicht die
 	// eingebaute dict-Methode get(key, default).
 	k8sModule := &starlarkstruct.Module{
@@ -561,6 +573,9 @@ func (r *Runner) executeScript(ctx context.Context, a Action) {
 			"untaint":         k8sUntaint,
 			"events":          k8sEvents,
 		},
+	}
+	for name, fn := range rawMembers {
+		k8sModule.Members[name] = fn
 	}
 
 	argsDict := starlark.NewDict(len(p.Args))
