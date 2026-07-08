@@ -222,6 +222,48 @@ func (a *Auth) WithSession(next http.Handler) http.Handler {
 	})
 }
 
+// WithSessionOrToken accepts EITHER a browser session cookie OR an API bearer
+// token (`rp_…`). For a token it loads the token's creating user as the actor
+// (created_by is NOT NULL / ON DELETE CASCADE, so it always exists) and attaches
+// a TokenPrincipal scoped to the token's org + role. Authz code (resolveOrg,
+// resolveOrgRole, requirePlatformAdmin) inspects that principal to scope strictly
+// to the token's org and to refuse platform-admin / owner / token-management.
+func (a *Auth) WithSessionOrToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 1) Session cookie (interactive).
+		if sess, err := a.ParseSession(r); err == nil {
+			user, err := a.store.GetUser(r.Context(), sess.UserID)
+			if err != nil || user.SuspendedAt != nil {
+				a.unauthorized(w, r)
+				return
+			}
+			ctx := context.WithValue(r.Context(), ctxUser, user)
+			ctx = context.WithValue(ctx, ctxOrgID, sess.OrgID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+		// 2) API bearer token.
+		if tok := bearerToken(r); strings.HasPrefix(tok, "rp_") {
+			princ, err := a.store.ResolveAPIToken(r.Context(), tok)
+			if err != nil {
+				writeErr(w, http.StatusUnauthorized, "invalid or expired api token")
+				return
+			}
+			user, err := a.store.GetUser(r.Context(), princ.CreatedBy)
+			if err != nil || user.SuspendedAt != nil {
+				writeErr(w, http.StatusUnauthorized, "api token owner is not active")
+				return
+			}
+			ctx := context.WithValue(r.Context(), ctxUser, user)
+			ctx = context.WithValue(ctx, ctxOrgID, princ.OrgID)
+			ctx = WithTokenPrincipal(ctx, &TokenPrincipal{TokenID: princ.TokenID, OrgID: princ.OrgID, Role: princ.Role})
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+		a.unauthorized(w, r)
+	})
+}
+
 // unauthorized clears any stale session cookie and returns 401. Clearing the
 // cookie is what breaks the /login ⇄ / redirect loop the browser hits when a
 // signed-but-invalid cookie is present (expired session, or user/DB gone): once

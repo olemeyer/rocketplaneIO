@@ -35,6 +35,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 
 // handleCreateOrg creates a new org owned by the caller.
 func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
+	if _, isToken := auth.TokenFrom(r.Context()); isToken {
+		writeErr(w, http.StatusForbidden, "creating orgs requires an interactive session")
+		return
+	}
 	user, _ := auth.UserFrom(r.Context())
 	var body struct {
 		Name string `json:"name"`
@@ -56,6 +60,10 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 
 // handleSetOrg switches the active org (updates the session cookie).
 func (s *Server) handleSetOrg(w http.ResponseWriter, r *http.Request) {
+	if _, isToken := auth.TokenFrom(r.Context()); isToken {
+		writeErr(w, http.StatusForbidden, "switching the active org requires an interactive session")
+		return
+	}
 	user, _ := auth.UserFrom(r.Context())
 	var body struct {
 		OrgID string `json:"orgId"`
@@ -296,6 +304,16 @@ func (s *Server) resolveOrg(w http.ResponseWriter, r *http.Request) (uuid.UUID, 
 		}
 		writeErr(w, http.StatusInternalServerError, "failed to resolve org")
 		return uuid.Nil, false
+	}
+
+	// API-Token: strikt auf das Token-Org begrenzt — die Mitgliedschaft des
+	// erstellenden Nutzers darf NICHT als Zugang zu einem anderen Org dienen.
+	if tp, ok := auth.TokenFrom(r.Context()); ok {
+		if tp.OrgID != org.ID {
+			writeErr(w, http.StatusForbidden, "token is not scoped to this org")
+			return uuid.Nil, false
+		}
+		return org.ID, true
 	}
 
 	member, err := s.store.IsMember(r.Context(), user.ID, org.ID)

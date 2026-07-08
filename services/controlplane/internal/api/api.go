@@ -69,10 +69,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /auth/dev/login", s.auth.DevLogin)
 
 	// Session-protected browser API.
-	sess := s.auth.WithSession
+	// sess accepts a browser session cookie OR an API bearer token (rp_…). The
+	// authz layer (resolveOrg/resolveOrgRole/requirePlatformAdmin) scopes a token
+	// strictly to its org+role and refuses platform-admin/owner/token-management.
+	sess := s.auth.WithSessionOrToken
 	mux.Handle("GET /api/me", sess(http.HandlerFunc(s.handleMe)))
 	mux.Handle("POST /api/orgs", sess(http.HandlerFunc(s.handleCreateOrg)))
 	mux.Handle("POST /api/session/org", sess(http.HandlerFunc(s.handleSetOrg)))
+
+	// ── API tokens / service accounts (Round 4) — session-only management ──
+	mux.Handle("GET /api/orgs/{org}/api-tokens", sess(http.HandlerFunc(s.handleListAPITokens)))
+	mux.Handle("POST /api/orgs/{org}/api-tokens", sess(http.HandlerFunc(s.handleCreateAPIToken)))
+	mux.Handle("POST /api/orgs/{org}/api-tokens/{token}/revoke", sess(http.HandlerFunc(s.handleRevokeAPIToken)))
+	mux.Handle("DELETE /api/orgs/{org}/api-tokens/{token}", sess(http.HandlerFunc(s.handleDeleteAPIToken)))
 
 	// ── Tenancy: members, invitations, org lifecycle, audit ──
 	mux.Handle("GET /api/orgs/{org}/members", sess(http.HandlerFunc(s.handleListMembers)))

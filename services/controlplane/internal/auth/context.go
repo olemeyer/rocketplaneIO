@@ -14,7 +14,30 @@ const (
 	ctxUser ctxKey = iota
 	ctxOrgID
 	ctxClusterID
+	ctxToken
 )
+
+// TokenPrincipal is the authenticated identity behind an API bearer token: it is
+// bound to exactly one org and carries the token's effective role. It is set
+// ALONGSIDE ctxUser (the token's creating user, used for actor attribution/FKs).
+// Its presence signals authz code to scope strictly to OrgID and to refuse
+// platform-admin + token-management operations.
+type TokenPrincipal struct {
+	TokenID uuid.UUID
+	OrgID   uuid.UUID
+	Role    string
+}
+
+// WithTokenPrincipal attaches an API-token principal to the context.
+func WithTokenPrincipal(ctx context.Context, tp *TokenPrincipal) context.Context {
+	return context.WithValue(ctx, ctxToken, tp)
+}
+
+// TokenFrom returns the API-token principal, if the request was token-authed.
+func TokenFrom(ctx context.Context) (*TokenPrincipal, bool) {
+	tp, ok := ctx.Value(ctxToken).(*TokenPrincipal)
+	return tp, ok && tp != nil
+}
 
 // UserFrom returns the authenticated user attached by the session middleware.
 func UserFrom(ctx context.Context) (*model.User, bool) {

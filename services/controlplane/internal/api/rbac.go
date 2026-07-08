@@ -60,6 +60,15 @@ func (s *Server) resolveOrgRole(w http.ResponseWriter, r *http.Request) (uuid.UU
 		}
 		return uuid.Nil, "", false
 	}
+	// API-Token: strikt auf das Token-Org begrenzt, Rolle kommt vom Token (nie
+	// platform-admin/owner). Muss VOR dem User-/Platform-Admin-Pfad greifen.
+	if tp, ok := auth.TokenFrom(r.Context()); ok {
+		if tp.OrgID != orgID {
+			writeErr(w, http.StatusForbidden, "token is not scoped to this org")
+			return uuid.Nil, "", false
+		}
+		return orgID, tp.Role, true
+	}
 	// Platform admins can act on any org (support / operations).
 	if user != nil && user.IsPlatformAdmin {
 		role, rerr := s.store.RoleInOrg(r.Context(), user.ID, orgID)
@@ -123,8 +132,14 @@ func (s *Server) requireClusterRole(w http.ResponseWriter, r *http.Request, minR
 	return orgID, clusterID, true
 }
 
-// requirePlatformAdmin gates the /api/admin/* console.
+// requirePlatformAdmin gates the /api/admin/* console. API tokens are refused
+// outright — the platform-admin console is interactive-session-only, even if the
+// token's creating user happens to be a platform admin.
 func (s *Server) requirePlatformAdmin(w http.ResponseWriter, r *http.Request) (*model.User, bool) {
+	if _, isToken := auth.TokenFrom(r.Context()); isToken {
+		writeErr(w, http.StatusForbidden, "the platform-admin console requires an interactive session")
+		return nil, false
+	}
 	user, ok := auth.UserFrom(r.Context())
 	if !ok || user == nil || !user.IsPlatformAdmin {
 		writeErr(w, http.StatusForbidden, "platform admin only")

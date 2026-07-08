@@ -119,6 +119,13 @@ func (s *Store) RemoveMember(ctx context.Context, orgID, userID uuid.UUID) error
 	if _, err := tx.Exec(ctx, `DELETE FROM memberships WHERE org_id=$1 AND user_id=$2`, orgID, userID); err != nil {
 		return fmt.Errorf("remove member: %w", err)
 	}
+	// Sicherheit: API-Tokens, die dieser Nutzer für dieses Org erstellt hat,
+	// widerrufen — ein Ex-Mitglied darf über sein Token nicht weiter zugreifen.
+	if _, err := tx.Exec(ctx, `
+		UPDATE api_tokens SET revoked_at=COALESCE(revoked_at, now())
+		WHERE org_id=$1 AND created_by=$2 AND revoked_at IS NULL`, orgID, userID); err != nil {
+		return fmt.Errorf("revoke member tokens: %w", err)
+	}
 	return tx.Commit(ctx)
 }
 

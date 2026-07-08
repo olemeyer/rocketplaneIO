@@ -479,6 +479,24 @@ type Incident struct {
 	EventCount int `json:"eventCount,omitempty"`
 }
 
+// APIToken ist ein programmatischer Zugang (Service-Account) zu einem Org.
+// Secret wird nur bei Erstellung zurückgegeben (danach nur der Prefix).
+type APIToken struct {
+	ID            uuid.UUID  `json:"id"`
+	OrgID         uuid.UUID  `json:"orgId"`
+	Name          string     `json:"name"`
+	Role          string     `json:"role"`
+	Prefix        string     `json:"prefix"`
+	CreatedBy     *uuid.UUID `json:"createdBy,omitempty"`
+	CreatedByName string     `json:"createdByName,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	LastUsedAt    *time.Time `json:"lastUsedAt,omitempty"`
+	ExpiresAt     *time.Time `json:"expiresAt,omitempty"`
+	RevokedAt     *time.Time `json:"revokedAt,omitempty"`
+	Status        string     `json:"status"` // active | expired | revoked
+	Secret        string     `json:"secret,omitempty"`
+}
+
 // EscalationPolicy ist eine geordnete Notification-Kette (org-weit).
 type EscalationPolicy struct {
 	ID        uuid.UUID        `json:"id"`
