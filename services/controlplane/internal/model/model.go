@@ -217,7 +217,10 @@ type Action struct {
 	Steps           json.RawMessage `json:"steps"`
 	// Revert: die inverse Katalog-Action (vom Agenten mit Before-Snapshot
 	// befüllt, nur bei succeeded) — Grundlage des "Revert"-Buttons der Runs-Seite.
-	Revert          json.RawMessage `json:"revert,omitempty"`
+	Revert json.RawMessage `json:"revert,omitempty"`
+	// Snapshot: das gestrippte Zielobjekt VOR der Mutation (generischer
+	// Before-Snapshot) — Audit-Trail + restore_resource-Grundlage.
+	Snapshot        json.RawMessage `json:"snapshot,omitempty"`
 	CancelRequested bool            `json:"cancelRequested"`
 	CreatedAt       time.Time       `json:"createdAt"`
 	UpdatedAt       time.Time       `json:"updatedAt"`

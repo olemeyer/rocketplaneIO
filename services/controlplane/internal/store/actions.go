@@ -39,12 +39,13 @@ func (s *Store) CreateAction(ctx context.Context, clusterID, userID uuid.UUID, k
 // ListActions liefert die jüngsten Aktionen eines Clusters (optional nur für
 // ein Target), neueste zuerst — der Feed im Workload-Panel.
 func (s *Store) ListActions(ctx context.Context, clusterID uuid.UUID, ns, targetName string, limit int) ([]model.Action, error) {
-	if limit <= 0 || limit > 100 {
+	// 200 = Runs-Seite (Audit-Trail); außerhalb des Rahmens fällt auf 30 zurück.
+	if limit <= 0 || limit > 200 {
 		limit = 30
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT a.id, a.cluster_id, COALESCE(u.email, ''), a.kind, a.target_namespace, a.target_kind, a.target_name,
-		       a.params, a.status, a.result, a.progress, a.steps, a.revert, a.cancel_requested, a.created_at, a.updated_at
+		       a.params, a.status, a.result, a.progress, a.steps, a.revert, a.snapshot, a.cancel_requested, a.created_at, a.updated_at
 		FROM cluster_actions a
 		LEFT JOIN users u ON u.id = a.requested_by
 		WHERE a.cluster_id = $1
@@ -60,7 +61,7 @@ func (s *Store) ListActions(ctx context.Context, clusterID uuid.UUID, ns, target
 	for rows.Next() {
 		var a model.Action
 		if err := rows.Scan(&a.ID, &a.ClusterID, &a.RequestedBy, &a.Kind, &a.TargetNamespace, &a.TargetKind, &a.TargetName,
-			&a.Params, &a.Status, &a.Result, &a.Progress, &a.Steps, &a.Revert, &a.CancelRequested, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			&a.Params, &a.Status, &a.Result, &a.Progress, &a.Steps, &a.Revert, &a.Snapshot, &a.CancelRequested, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan action: %w", err)
 		}
 		out = append(out, a)

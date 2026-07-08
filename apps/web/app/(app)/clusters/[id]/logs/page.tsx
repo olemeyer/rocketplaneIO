@@ -53,6 +53,7 @@ export default function LogsPage() {
   const [range, setRange] = useState<string>('15m');
   const [minSev, setMinSev] = useState<number>(0);
   const [search, setSearch] = useState('');
+  const [rx, setRx] = useState(false); // Regex-Modus (RE2) für den Hauptterm
   const [debounced, setDebounced] = useState('');
   const [lines, setLines] = useState<LogLine[] | null>(null);
   const [histogram, setHistogram] = useState<LogBucket[]>([]);
@@ -72,13 +73,16 @@ export default function LogsPage() {
   const load = useCallback(async () => {
     if (!orgId) return;
     try {
+      // Prompt-Syntax: `-token` schließt aus (NOT), `~token` sucht fuzzy
+      // (tippfehlertolerant), der Rest ist Substring — oder RE2 bei aktivem .*
+      const q = parseLogQuery(debounced, rx);
       const res = await getLogs(orgId, clusterId, {
         since: brush?.since ?? range,
         until: brush?.until,
         namespace: namespace ?? undefined,
         workload: workload ?? undefined,
         minSeverity: minSev || undefined,
-        search: debounced || undefined,
+        ...q,
         limit: 300,
       });
       setLines(res.lines);
@@ -89,7 +93,7 @@ export default function LogsPage() {
     } finally {
       firstLoad.current = false;
     }
-  }, [orgId, clusterId, range, brush, namespace, workload, minSev, debounced]);
+  }, [orgId, clusterId, range, brush, namespace, workload, minSev, debounced, rx]);
 
   useEffect(() => {
     firstLoad.current = true;
@@ -137,9 +141,23 @@ export default function LogsPage() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="search log bodies…"
+            spellCheck={false}
+            placeholder="search log bodies…   -exclude   ~fuzzy"
+            title="plain = substring · -token excludes · ~token is typo-tolerant · .* switches the main term to RE2 regex"
             className="h-full w-full bg-transparent font-mono text-[12.5px] text-ink outline-none placeholder:text-faint"
           />
+          <button
+            type="button"
+            onClick={() => setRx((v) => !v)}
+            title={rx ? 'regex mode ON (RE2) — click for plain substring' : 'plain substring — click for RE2 regex mode'}
+            aria-pressed={rx}
+            className={cn(
+              'shrink-0 rounded-skin-chip border px-1.5 py-0.5 font-mono text-[10px] transition-colors',
+              rx ? 'border-line-strong bg-hover text-ink' : 'border-line text-faint hover:text-mid',
+            )}
+          >
+            .*
+          </button>
           {search ? (
             <button
               type="button"
@@ -333,4 +351,24 @@ function Segmented({
       })}
     </div>
   );
+}
+
+// parseLogQuery zerlegt die Prompt-Eingabe: `-token` → exclude (NOT),
+// `~token` → fuzzy (ngram), Rest = Hauptterm (Substring oder RE2 bei rx).
+function parseLogQuery(input: string, rx: boolean): { search?: string; regexes?: string[]; exclude?: string[]; fuzzy?: string } {
+  const exclude: string[] = [];
+  let fuzzy = '';
+  const rest: string[] = [];
+  for (const tok of input.split(/\s+/)) {
+    if (!tok) continue;
+    if (tok.startsWith('-') && tok.length > 1) exclude.push(tok.slice(1));
+    else if (tok.startsWith('~') && tok.length > 1) fuzzy = tok.slice(1);
+    else rest.push(tok);
+  }
+  const main = rest.join(' ').trim();
+  return {
+    ...(main ? (rx ? { regexes: [main] } : { search: main }) : {}),
+    ...(exclude.length ? { exclude: exclude.slice(0, 5) } : {}),
+    ...(fuzzy ? { fuzzy } : {}),
+  };
 }

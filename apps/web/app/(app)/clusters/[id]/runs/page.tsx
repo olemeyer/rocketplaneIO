@@ -8,7 +8,7 @@ import { useMe } from '@/components/app/me-context';
 import { PageHeader } from '@/components/app/page-header';
 import { useClusterEvents } from '@/lib/hooks/use-cluster-events';
 import { cancelAction, createAction, getActions } from '@/lib/api/controlplane';
-import { LEVEL_META, RISK_LEVELS, actionLevelOf, levelColor, type RiskLevel } from '@/lib/approval';
+import { CATEGORY_LABEL, LEVEL_META, RISK_LEVELS, actionCategoryOf, actionLevelOf, levelColor, type ActionCategory, type RiskLevel } from '@/lib/approval';
 import type { ClusterAction } from '@/lib/api/types';
 
 // Runs — der Audit-Trail aller Action-Ausführungen. Trace-Stil: eine Zeile pro
@@ -117,8 +117,9 @@ function RunRow({ a, open, onToggle, onCancel, onForceCancel, onRevert }: { a: C
           <span className={running ? 'rp-breath' : ''} style={{ color: tone.fg }}>{tone.glyph}</span>
           <span className="text-[9px] uppercase tracking-[0.06em]" style={{ color: tone.fg }}>{a.status}</span>
         </span>
-        <span className="w-[150px] shrink-0 truncate font-semibold text-ink">
-          {isScript ? 'workflow' : a.kind.replace(/_/g, ' ')}
+        <span className="w-[150px] shrink-0">
+          <span className="block truncate font-semibold text-ink">{isScript ? 'workflow' : a.kind.replace(/_/g, ' ')}</span>
+          <span className="block truncate text-[9px] text-faint">{CATEGORY_LABEL[actionCategoryOf(a.kind)]}</span>
         </span>
         <span className="min-w-0 flex-1 truncate text-mid">
           {a.targetNamespace !== '-' && a.targetNamespace ? <span className="text-faint">{a.targetNamespace} / </span> : null}
@@ -205,6 +206,12 @@ function RunRow({ a, open, onToggle, onCancel, onForceCancel, onRevert }: { a: C
                 </button>
               )
             ) : null}
+            {a.snapshot && Object.keys(a.snapshot).length ? (
+              <details className="rounded-skin-sm border border-line bg-inset p-2">
+                <summary className="rp-micro !text-[9.5px] cursor-pointer select-none">before-snapshot — the object as it was</summary>
+                <pre className="mt-1.5 max-h-[220px] overflow-auto whitespace-pre-wrap break-all font-mono text-[9.5px] leading-relaxed text-muted">{JSON.stringify(a.snapshot, null, 2)}</pre>
+              </details>
+            ) : null}
             {a.status === 'succeeded' && a.revert ? (
               <div className="rounded-skin-sm border border-line bg-inset p-2">
                 <p className="rp-micro !text-[9.5px] mb-1">revert</p>
@@ -234,6 +241,7 @@ export default function RunsPage() {
   const [runs, setRuns] = useState<ClusterAction[] | null>(null);
   const [statusF, setStatusF] = useState<(typeof STATUS_FILTERS)[number]>('all');
   const [levelF, setLevelF] = useState<RiskLevel | 'all'>('all');
+  const [catF, setCatF] = useState<ActionCategory | 'all'>('all');
   const [q, setQ] = useState('');
   const [open, setOpen] = useState<Set<string>>(new Set());
 
@@ -265,10 +273,22 @@ export default function RunsPage() {
     return (runs ?? []).filter((r) => {
       if (statusF !== 'all' && (r.status === 'pending' ? 'running' : r.status) !== statusF) return false;
       if (levelF !== 'all' && levelOf(r) !== levelF) return false;
+      if (catF !== 'all' && actionCategoryOf(r.kind) !== catF) return false;
       if (needle && !`${r.kind} ${r.targetName} ${r.targetNamespace} ${r.requestedBy}`.toLowerCase().includes(needle)) return false;
       return true;
     });
-  }, [runs, statusF, levelF, q]);
+  }, [runs, statusF, levelF, catF, q]);
+
+  // Kategorie-Chips nur für Kategorien zeigen, die im Feed vorkommen — bei ~45
+  // Kinds bleibt die Leiste sonst nicht lesbar.
+  const presentCats = useMemo(() => {
+    const c = new Map<ActionCategory, number>();
+    for (const r of runs ?? []) {
+      const k = actionCategoryOf(r.kind);
+      c.set(k, (c.get(k) ?? 0) + 1);
+    }
+    return [...c.entries()].sort((x, y) => y[1] - x[1]);
+  }, [runs]);
 
   const toggle = (id: string) => setOpen((cur) => { const n = new Set(cur); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
@@ -310,6 +330,19 @@ export default function RunsPage() {
             })}
             <input value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false} placeholder="filter kind / target / user…" className="rp-focus ml-auto h-7 w-56 rounded-skin-sm border border-line bg-inset px-2 font-mono text-[10.5px] text-ink placeholder:text-faint" />
           </div>
+          {presentCats.length > 1 ? (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <button type="button" onClick={() => setCatF('all')} className={cn('rp-focus rounded-skin-chip border px-2 py-0.5 font-mono text-[10px] transition-colors', catF === 'all' ? 'border-line-strong bg-hover text-ink' : 'border-line text-muted hover:text-ink')}>
+                any category
+              </button>
+              {presentCats.map(([c, n]) => (
+                <button key={c} type="button" onClick={() => setCatF(c)} className={cn('rp-focus flex items-center gap-1 rounded-skin-chip border px-2 py-0.5 font-mono text-[10px] transition-colors', catF === c ? 'border-line-strong bg-hover text-ink' : 'border-line text-muted hover:text-ink')}>
+                  {CATEGORY_LABEL[c]}
+                  <span className="text-[9px] text-faint tnum">{n}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         {/* Zeilen */}

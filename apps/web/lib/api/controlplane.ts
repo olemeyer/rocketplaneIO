@@ -142,6 +142,10 @@ export function getLogs(
   if (params.pod) q.set('pod', params.pod);
   if (params.minSeverity) q.set('minSeverity', String(params.minSeverity));
   if (params.search) q.set('search', params.search);
+  for (const rx of params.regexes ?? []) q.append('regex', rx);
+  if (params.regexMode) q.set('regexMode', params.regexMode);
+  for (const ex of params.exclude ?? []) q.append('exclude', ex);
+  if (params.fuzzy) q.set('fuzzy', params.fuzzy);
   if (params.limit) q.set('limit', String(params.limit));
   const qs = q.toString();
   return apiFetch<LogsResponse>(

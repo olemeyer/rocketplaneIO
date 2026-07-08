@@ -108,6 +108,54 @@ export function actionLevelOf(kind: string, params?: Record<string, unknown>): R
   }
 }
 
+// actionCategoryOf spiegelt copilot_policy.go:actionCategory — die EINE
+// Kategorie-Taxonomie für Katalog, Runs-Filter und Copilot.
+export type ActionCategory = 'diagnose' | 'workloads' | 'scaling' | 'config' | 'network' | 'storage' | 'nodes' | 'batch' | 'cleanup' | 'workflows' | 'other';
+
+export const CATEGORY_LABEL: Record<ActionCategory, string> = {
+  diagnose: 'diagnose',
+  workloads: 'workloads',
+  scaling: 'scaling',
+  config: 'config & secrets',
+  network: 'network',
+  storage: 'storage',
+  nodes: 'nodes',
+  batch: 'batch',
+  cleanup: 'cleanup',
+  workflows: 'workflows',
+  other: 'other',
+};
+
+export function actionCategoryOf(kind: string): ActionCategory {
+  switch (kind) {
+    case 'debug_bundle': case 'pod_events': case 'rollout_history': case 'drain_preview':
+    case 'get_resource': case 'describe_resource': case 'get_secret': case 'helm_releases': case 'exec_readonly':
+      return 'diagnose';
+    case 'rollout_restart': case 'rollout_undo': case 'rollout_pause': case 'rollout_resume':
+    case 'rollout_to_revision': case 'set_image': case 'statefulset_partition': case 'delete_pod': case 'evict_pod':
+      return 'workloads';
+    case 'scale': case 'hpa_set': case 'hpa_toggle':
+      return 'scaling';
+    case 'patch_configmap': case 'patch_secret': case 'create_configmap': case 'delete_configmap':
+    case 'set_env': case 'set_resources': case 'annotate': case 'set_label':
+      return 'config';
+    case 'pdb_set': case 'patch_resource':
+      return 'network';
+    case 'pvc_expand':
+      return 'storage';
+    case 'cordon': case 'uncordon': case 'drain': case 'node_taint': case 'node_untaint':
+      return 'nodes';
+    case 'cronjob_trigger': case 'cronjob_suspend': case 'cronjob_resume': case 'delete_job':
+      return 'batch';
+    case 'cleanup_pods': case 'cleanup_jobs':
+      return 'cleanup';
+    case 'script': case 'restore_resource':
+      return 'workflows';
+    default:
+      return 'other';
+  }
+}
+
 export function levelColor(level?: string): string {
   switch (level) {
     case 'destructive':

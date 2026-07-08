@@ -157,6 +157,10 @@ export interface LogsParams {
   pod?: string;
   minSeverity?: number;
   search?: string;
+  regexes?: string[]; // RE2-Pattern (max 5); regexMode kombiniert sie
+  regexMode?: 'any' | 'all';
+  exclude?: string[]; // NOT-Substrings (max 5)
+  fuzzy?: string; // tippfehlertolerante ngram-Suche
   limit?: number;
 }
 
@@ -276,6 +280,8 @@ export interface ClusterAction {
   steps: ActionStep[];
   /** Inverse Katalog-Action mit Before-Snapshot (nur bei succeeded) — Revert-Button. */
   revert?: { kind: string; targetNamespace: string; targetKind: string; targetName: string; params: Record<string, unknown> };
+  /** Gestripptes Zielobjekt VOR der Mutation (generischer Before-Snapshot). */
+  snapshot?: Record<string, unknown>;
   /** User hat Abbruch angefordert; Engine rollt zurück → cancelled. */
   cancelRequested: boolean;
   createdAt: string;

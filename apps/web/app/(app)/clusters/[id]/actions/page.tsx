@@ -17,9 +17,11 @@ import {
   deleteActionDefinition,
   getActionDefinitions,
   getActions,
+  getInventory,
   getServiceMap,
   runScriptAction,
   updateActionDefinition,
+  type InventoryKind,
 } from '@/lib/api/controlplane';
 import type { ActionDefParam, ActionDefinition, ActionKind, ClusterAction, ServiceMap } from '@/lib/api/types';
 import { BUILTIN_STARLARK } from '@/lib/action-templates';
@@ -34,8 +36,14 @@ import Link from 'next/link';
 
 const POLL_MS = 2500;
 
+// BuiltinField erweitert ActionDefParam um Client-only-Picker: resourceKind
+// bindet ein Feld an das Cluster-Inventar (ConfigMap-/Secret-/PDB-Namen …),
+// multiline rendert eine Textarea (Patches, Kommandos, Daten).
+type BuiltinField = ActionDefParam & { resourceKind?: string; multiline?: boolean };
+type Builtin = { kind: string; name: string; description: string; fields: BuiltinField[] };
+
 // Eingebaute Pipelines — dieselben, die das Workload-Panel anbietet.
-const BUILTINS: { kind: string; name: string; description: string; fields: ActionDefParam[] }[] = [
+const BUILTINS: Builtin[] = [
   {
     kind: 'rollout_restart',
     name: 'rollout restart',
@@ -129,7 +137,7 @@ const BUILTINS: { kind: string; name: string; description: string; fields: Actio
     description: 'Set a HorizontalPodAutoscaler min/max (the honest scaling in HPA clusters). Cancel restores the old bounds.',
     fields: [
       { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
-      { name: 'name', type: 'string', required: true, description: 'HPA name' },
+      { name: 'name', type: 'string', required: true, resourceKind: 'HorizontalPodAutoscaler', description: 'HPA name' },
       { name: 'minReplicas', type: 'int', min: 1, max: 200, default: '1' },
       { name: 'maxReplicas', type: 'int', min: 1, max: 200, default: '5', required: true },
     ],
@@ -140,7 +148,7 @@ const BUILTINS: { kind: string; name: string; description: string; fields: Actio
     description: 'Run a CronJob now as a one-off Job (kubectl create job --from) and watch it start.',
     fields: [
       { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
-      { name: 'name', type: 'string', required: true, description: 'CronJob name' },
+      { name: 'name', type: 'string', required: true, resourceKind: 'CronJob', description: 'CronJob name' },
     ],
   },
   {
@@ -149,7 +157,7 @@ const BUILTINS: { kind: string; name: string; description: string; fields: Actio
     description: 'Pause a CronJob (maintenance window). Cancel resumes it.',
     fields: [
       { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
-      { name: 'name', type: 'string', required: true, description: 'CronJob name' },
+      { name: 'name', type: 'string', required: true, resourceKind: 'CronJob', description: 'CronJob name' },
     ],
   },
   {
@@ -158,7 +166,7 @@ const BUILTINS: { kind: string; name: string; description: string; fields: Actio
     description: 'Resume a suspended CronJob.',
     fields: [
       { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
-      { name: 'name', type: 'string', required: true, description: 'CronJob name' },
+      { name: 'name', type: 'string', required: true, resourceKind: 'CronJob', description: 'CronJob name' },
     ],
   },
   {
@@ -282,7 +290,7 @@ const BUILTINS: { kind: string; name: string; description: string; fields: Actio
     description: 'Set or remove a single key in a ConfigMap. NOTE: running pods pick it up only after a rollout restart. Cancel restores the prior value.',
     fields: [
       { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
-      { name: 'name', type: 'string', required: true, description: 'configmap name' },
+      { name: 'name', type: 'string', required: true, resourceKind: 'ConfigMap', description: 'configmap name' },
       { name: 'key', type: 'string', required: true },
       { name: 'value', type: 'string', description: 'ignored when remove=true' },
       { name: 'remove', type: 'bool' },
@@ -337,6 +345,128 @@ const BUILTINS: { kind: string; name: string; description: string; fields: Actio
     name: 'drain preview',
     description: 'Read-only blast radius before a drain: evictable pods, per-workload loss, blocking PDBs.',
     fields: [{ name: 'node', type: 'node', required: true }],
+  },
+  // ── Katalog Batch 2 — Diagnose ──────────────────────────────────────────
+  {
+    kind: 'get_resource',
+    name: 'get resource (yaml)',
+    description: 'Read the FULL live spec of any object as YAML (kubectl get -o yaml, noise stripped). ConfigMaps show their full data; Secrets only keys + hashes.',
+    fields: [
+      { name: 'kind', type: 'enum', options: ['ConfigMap', 'Deployment', 'StatefulSet', 'DaemonSet', 'Pod', 'Secret', 'Service', 'Ingress', 'NetworkPolicy', 'PodDisruptionBudget', 'HorizontalPodAutoscaler', 'CronJob', 'Job', 'PersistentVolumeClaim', 'Node', 'Namespace', 'ServiceAccount', 'ResourceQuota', 'LimitRange'], default: 'ConfigMap', required: true },
+      { name: 'namespace', type: 'namespace', default: 'shop', description: 'blank for Node/Namespace' },
+      { name: 'name', type: 'string', required: true, description: 'object name' },
+    ],
+  },
+  {
+    kind: 'describe_resource',
+    name: 'describe resource',
+    description: 'kubectl-describe-like view: status, conditions and the recent events of one object — the current state and WHY.',
+    fields: [
+      { name: 'kind', type: 'enum', options: ['Deployment', 'StatefulSet', 'DaemonSet', 'Pod', 'Service', 'Ingress', 'PodDisruptionBudget', 'HorizontalPodAutoscaler', 'CronJob', 'Job', 'PersistentVolumeClaim', 'Node', 'Namespace'], default: 'Deployment', required: true },
+      { name: 'namespace', type: 'namespace', default: 'shop', description: 'blank for Node/Namespace' },
+      { name: 'name', type: 'string', required: true },
+    ],
+  },
+  {
+    kind: 'get_secret',
+    name: 'inspect secret',
+    description: 'Read-only: keys, value lengths and sha256 hashes of a Secret — compare hashes to spot changed values. Plaintext never leaves the cluster.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'name', type: 'string', required: true, resourceKind: 'Secret', description: 'secret name' },
+    ],
+  },
+  {
+    kind: 'helm_releases',
+    name: 'helm releases',
+    description: 'Read-only: every Helm release (from sh.helm.release.v1 secrets) with revision and status — see what Helm manages.',
+    fields: [{ name: 'namespace', type: 'namespace', description: 'blank = all namespaces' }],
+  },
+  {
+    kind: 'exec_readonly',
+    name: 'exec (read-only)',
+    description: 'Run ONE whitelisted diagnostic command in a container (cat, ls, head, tail, df, du, stat, wc, env, id, uname, find — argv, no shell). THE way to read in-container file logs.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'pod', type: 'string', required: true, description: 'exact pod name' },
+      { name: 'container', type: 'string', description: 'blank = first container' },
+      { name: 'command', type: 'string', required: true, multiline: true, description: 'one argument per line, e.g.\ncat\n/var/log/app/error.log' },
+    ],
+  },
+  // ── Katalog Batch 2 — Config & Secrets ──────────────────────────────────
+  {
+    kind: 'patch_secret',
+    name: 'patch secret',
+    description: 'Set or remove a single key in a Secret (value plain or base64). Cancel restores the prior value; consumers need a rollout restart.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'name', type: 'string', required: true, resourceKind: 'Secret', description: 'secret name' },
+      { name: 'key', type: 'string', required: true },
+      { name: 'value', type: 'string', description: 'plain or base64 — ignored when remove=true' },
+      { name: 'remove', type: 'bool' },
+    ],
+  },
+  {
+    kind: 'create_configmap',
+    name: 'create configmap',
+    description: 'Create a new ConfigMap from key=value lines. Cancel deletes it again; Revert stays available on the run.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'name', type: 'string', required: true, description: 'new configmap name' },
+      { name: 'data', type: 'string', required: true, multiline: true, description: 'one key=value per line' },
+    ],
+  },
+  {
+    kind: 'delete_configmap',
+    name: 'delete configmap',
+    description: 'Delete a ConfigMap — the before-state is kept as a snapshot, so the run offers a full restore.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'name', type: 'string', required: true, resourceKind: 'ConfigMap', description: 'configmap name' },
+    ],
+  },
+  // ── Katalog Batch 2 — Netzwerk & Policies ───────────────────────────────
+  {
+    kind: 'pdb_set',
+    name: 'set pdb bounds',
+    description: 'Set minAvailable OR maxUnavailable (int or percentage) on a PodDisruptionBudget — unblock a stuck drain honestly. Cancel restores the prior bounds.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'name', type: 'string', required: true, resourceKind: 'PodDisruptionBudget', description: 'PDB name' },
+      { name: 'mode', type: 'enum', options: ['minAvailable', 'maxUnavailable'], default: 'minAvailable', required: true },
+      { name: 'value', type: 'string', required: true, description: 'e.g. 1 or 50%' },
+    ],
+  },
+  {
+    kind: 'patch_resource',
+    name: 'patch resource (merge)',
+    description: 'Generic JSON merge patch on a Service, Ingress, NetworkPolicy or PDB. The before-object is snapshotted and fully restorable.',
+    fields: [
+      { name: 'kind', type: 'enum', options: ['Service', 'Ingress', 'NetworkPolicy', 'PodDisruptionBudget'], default: 'Service', required: true },
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'name', type: 'string', required: true, description: 'object name' },
+      { name: 'patch', type: 'string', required: true, multiline: true, description: 'JSON merge patch, e.g.\n{"spec":{"sessionAffinity":"ClientIP"}}' },
+    ],
+  },
+  // ── Katalog Batch 2 — Storage & Batch ───────────────────────────────────
+  {
+    kind: 'pvc_expand',
+    name: 'expand pvc',
+    description: 'Grow a PersistentVolumeClaim (shrinking is impossible in Kubernetes — the agent enforces grow-only). Storage class must support expansion.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'name', type: 'string', required: true, resourceKind: 'PersistentVolumeClaim', description: 'PVC name' },
+      { name: 'size', type: 'string', required: true, description: 'new size, e.g. 20Gi' },
+    ],
+  },
+  {
+    kind: 'delete_job',
+    name: 'delete job',
+    description: 'Delete one Job and its pods (background propagation) — clear a stuck or failed run so the next schedule can fire.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'name', type: 'string', required: true, resourceKind: 'Job', description: 'job name' },
+    ],
   },
 ];
 
@@ -408,6 +538,28 @@ function buildActionBody(kind: string, values: Record<string, string>) {
     if (targetKind === 'Node' || targetKind === 'Namespace') targetNamespace = '-';
   } else if (CRON_KINDS.includes(kind)) {
     targetKind = 'CronJob';
+  } else if (kind === 'get_resource' || kind === 'describe_resource') {
+    targetKind = values.kind ?? 'ConfigMap';
+    if (targetKind === 'Node' || targetKind === 'Namespace') targetNamespace = '-';
+  } else if (kind === 'get_secret' || kind === 'patch_secret') {
+    targetKind = 'Secret';
+  } else if (kind === 'helm_releases') {
+    targetKind = 'Namespace';
+    targetName = values.namespace || '-';
+    targetNamespace = '-';
+  } else if (kind === 'exec_readonly') {
+    targetKind = 'Pod';
+    targetName = values.pod ?? '';
+  } else if (kind === 'create_configmap' || kind === 'delete_configmap') {
+    targetKind = 'ConfigMap';
+  } else if (kind === 'pdb_set') {
+    targetKind = 'PodDisruptionBudget';
+  } else if (kind === 'patch_resource') {
+    targetKind = values.kind ?? 'Service';
+  } else if (kind === 'pvc_expand') {
+    targetKind = 'PersistentVolumeClaim';
+  } else if (kind === 'delete_job') {
+    targetKind = 'Job';
   }
 
   if (kind === 'scale') params = { replicas: Number(values.replicas ?? 1) };
@@ -436,20 +588,48 @@ function buildActionBody(kind: string, values: Record<string, string>) {
     params = { key: values.key ?? '', value: values.value ?? '', remove: isTrue(values.remove) };
   else if (kind === 'evict_pod') params = values.gracePeriodSeconds ? { gracePeriodSeconds: Number(values.gracePeriodSeconds) } : {};
   else if (kind === 'cleanup_jobs') params = values.olderThanHours ? { olderThanHours: Number(values.olderThanHours) } : {};
+  else if (kind === 'patch_secret')
+    params = { key: values.key ?? '', value: values.value ?? '', remove: isTrue(values.remove) };
+  else if (kind === 'create_configmap') {
+    // Textarea: eine key=value-Zeile je Eintrag → data-Map.
+    const data: Record<string, string> = {};
+    for (const line of (values.data ?? '').split('\n')) {
+      const i = line.indexOf('=');
+      if (i > 0) data[line.slice(0, i).trim()] = line.slice(i + 1);
+    }
+    params = { data };
+  } else if (kind === 'pdb_set')
+    params = values.mode === 'maxUnavailable' ? { maxUnavailable: values.value ?? '' } : { minAvailable: values.value ?? '' };
+  else if (kind === 'patch_resource') {
+    let patch: unknown = {};
+    try { patch = JSON.parse(values.patch ?? '{}'); } catch { patch = { __invalid: values.patch } }
+    params = { patch };
+  } else if (kind === 'pvc_expand') params = { size: values.size ?? '' };
+  else if (kind === 'exec_readonly') {
+    const argv = (values.command ?? '').split('\n').map((s) => s.trim()).filter(Boolean);
+    params = { command: argv, ...(values.container ? { container: values.container } : {}) };
+  }
+
+  // Generisch: optionaler Ablauf-Timeout (10–1800s) — gilt für jede Action.
+  if (values.timeoutSeconds && Number(values.timeoutSeconds) > 0) {
+    params = { ...params, timeoutSeconds: Number(values.timeoutSeconds) };
+  }
 
   return { kind: kind as ActionKind, targetNamespace, targetKind, targetName, params };
 }
 
 /* ── Library-Katalog: Kategorien, Sicherheitsklassen, Icons (App-Store) ──── */
 
-type Category = 'deploy' | 'scale' | 'config' | 'batch' | 'pods' | 'node' | 'investigate';
+type Category = 'deploy' | 'scale' | 'config' | 'network' | 'storage' | 'batch' | 'pods' | 'node' | 'investigate';
 type ActionClass = RiskLevel; // dieselbe 4er-Skala wie die Guardrails (lib/approval)
 
 const CATEGORY_ORDER: { key: Category; label: string }[] = [
   { key: 'investigate', label: 'Investigate' },
   { key: 'deploy', label: 'Deploy & Release' },
   { key: 'scale', label: 'Scaling' },
-  { key: 'config', label: 'Config & Tuning' },
+  { key: 'config', label: 'Config & Secrets' },
+  { key: 'network', label: 'Network & Policies' },
+  { key: 'storage', label: 'Storage' },
   { key: 'batch', label: 'Batch' },
   { key: 'pods', label: 'Pods & Housekeeping' },
   { key: 'node', label: 'Node ops' },
@@ -462,6 +642,8 @@ const LIB_TABS: { key: string; label: string }[] = [
   { key: 'deploy', label: 'Deploy' },
   { key: 'scale', label: 'Scaling' },
   { key: 'config', label: 'Config' },
+  { key: 'network', label: 'Network' },
+  { key: 'storage', label: 'Storage' },
   { key: 'batch', label: 'Batch' },
   { key: 'pods', label: 'Pods' },
   { key: 'node', label: 'Node ops' },
@@ -503,6 +685,39 @@ const ACTION_META: Record<string, { category: Category; klass: ActionClass }> = 
   hpa_toggle: { category: 'scale', klass: 'reversible' },
   evict_pod: { category: 'pods', klass: 'disruptive' },
   cleanup_jobs: { category: 'batch', klass: 'disruptive' },
+  // Erweiterter Katalog (Batch 2) — Levels spiegeln copilot_policy.go
+  get_resource: { category: 'investigate', klass: 'read' },
+  describe_resource: { category: 'investigate', klass: 'read' },
+  get_secret: { category: 'investigate', klass: 'read' },
+  helm_releases: { category: 'investigate', klass: 'read' },
+  exec_readonly: { category: 'investigate', klass: 'disruptive' },
+  patch_secret: { category: 'config', klass: 'reversible' },
+  create_configmap: { category: 'config', klass: 'destructive' },
+  delete_configmap: { category: 'config', klass: 'destructive' },
+  pdb_set: { category: 'network', klass: 'reversible' },
+  patch_resource: { category: 'network', klass: 'destructive' },
+  pvc_expand: { category: 'storage', klass: 'destructive' },
+  delete_job: { category: 'batch', klass: 'disruptive' },
+};
+
+// TARGET_LABEL: worauf eine Action wirkt — als Chip auf der Karte, damit man
+// bei ~45 Actions auf einen Blick das Ziel-Objekt sieht.
+const TARGET_LABEL: Record<string, string> = {
+  rollout_restart: 'workload', rollout_undo: 'deployment', rollout_pause: 'deployment',
+  rollout_resume: 'deployment', rollout_history: 'deployment', rollout_to_revision: 'deployment',
+  set_image: 'workload', scale: 'workload', statefulset_partition: 'statefulset',
+  set_resources: 'workload', set_env: 'workload', debug_bundle: 'workload', pod_events: 'workload',
+  hpa_set: 'hpa', hpa_toggle: 'hpa',
+  delete_pod: 'pod', evict_pod: 'pod', exec_readonly: 'pod',
+  cleanup_pods: 'namespace', cleanup_jobs: 'namespace', helm_releases: 'namespace',
+  cordon: 'node', uncordon: 'node', drain: 'node', drain_preview: 'node',
+  node_taint: 'node', node_untaint: 'node', set_label: 'node · ns',
+  patch_configmap: 'configmap', create_configmap: 'configmap', delete_configmap: 'configmap',
+  get_secret: 'secret', patch_secret: 'secret',
+  pdb_set: 'pdb', patch_resource: 'svc · ing · netpol · pdb',
+  pvc_expand: 'pvc', delete_job: 'job',
+  cronjob_trigger: 'cronjob', cronjob_suspend: 'cronjob', cronjob_resume: 'cronjob',
+  get_resource: 'any object', describe_resource: 'any object', annotate: 'any object',
 };
 
 // Level-Labels/Glyphs kommen aus lib/approval (LEVEL_META) — eine Quelle für
@@ -542,6 +757,18 @@ function ActionIcon({ kind }: { kind: string }) {
     evict_pod: (<><circle cx="12" cy="9" r="4" /><path d="M6 20a6 6 0 0 1 12 0" /><path d="M19 4l2 2-2 2" /></>),
     cleanup_jobs: (<><path d="M5 7h14M10 7V5h4v2M6.5 7l1 12h9l1-12" /><path d="M10 11v5M14 11v5" /></>),
     drain_preview: (<><path d="M12 3s6.5 7.2 6.5 11.5a6.5 6.5 0 0 1-13 0C5.5 10.2 12 3 12 3z" /><circle cx="12" cy="13" r="2.2" /></>),
+    get_resource: (<><path d="M6 3.5h9l3.5 3.5v13.5H6z" /><path d="M15 3.5V7h3.5M9 12h6M9 15.5h4" /></>),
+    describe_resource: (<><path d="M6 3.5h9l3.5 3.5v13.5H6z" /><path d="M15 3.5V7h3.5" /><circle cx="11" cy="13" r="2.6" /><path d="M13 15l2.5 2.5" /></>),
+    get_secret: (<><rect x="5" y="10.5" width="14" height="9" rx="1.5" /><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" /><circle cx="12" cy="15" r="1.4" /></>),
+    helm_releases: (<><circle cx="12" cy="12" r="8" /><path d="M12 4v16M5.5 7.5l13 9M5.5 16.5l13-9" /></>),
+    exec_readonly: (<><rect x="3.5" y="5" width="17" height="14" rx="1.5" /><path d="M7 9.5l3 2.5-3 2.5M12.5 15H17" /></>),
+    patch_secret: (<><rect x="5" y="10.5" width="14" height="9" rx="1.5" /><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" /><path d="M10.5 15h3" /></>),
+    create_configmap: (<><rect x="4" y="4" width="16" height="16" rx="1.5" /><path d="M12 9v6M9 12h6" /></>),
+    delete_configmap: (<><rect x="4" y="4" width="16" height="16" rx="1.5" /><path d="M9 12h6" /></>),
+    pdb_set: (<><path d="M12 3l7.5 3.5v5c0 4.6-3 8-7.5 9.5C7.5 19.5 4.5 16.1 4.5 11.5v-5z" /><path d="M9 12h6" /></>),
+    patch_resource: (<><path d="M4 20l4.5-1L20 7.5 16.5 4 5 15.5z" /><path d="M14 6.5L17.5 10" /></>),
+    pvc_expand: (<><ellipse cx="12" cy="6" rx="7" ry="2.6" /><path d="M5 6v12c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V6" /><path d="M12 10.5v5M9.8 13.3L12 15.5l2.2-2.2" /></>),
+    delete_job: (<><circle cx="12" cy="12" r="8" /><path d="M9 9l6 6M15 9l-6 6" /></>),
   };
   return (
     <svg
@@ -614,6 +841,27 @@ export default function ActionsPage() {
     if (!orgId) return;
     getServiceMap(orgId, clusterId).then(setMap).catch(() => {});
   }, [orgId, clusterId]);
+
+  // Inventar für typed Pickers (ConfigMap/Secret/PDB/Job/… Namen).
+  const [inventory, setInventory] = useState<InventoryKind[]>([]);
+  useEffect(() => {
+    if (!orgId) return;
+    getInventory(orgId, clusterId).then((r) => setInventory(r.kinds ?? [])).catch(() => {});
+  }, [orgId, clusterId]);
+
+  // "/" fokussiert die Katalog-Suche (keyboard-first, wie überall im Produkt).
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
 
   // Runs: SSE-getrieben (actions-Signal → refetch), Poll nur als Fallback.
   const pollRef = useRef<() => void>(() => {});
@@ -724,10 +972,11 @@ export default function ActionsPage() {
         <div className="shrink-0">
           <div className="flex flex-wrap items-center gap-2">
             <input
+              ref={searchRef}
               value={libQ}
               onChange={(e) => setLibQ(e.target.value)}
               spellCheck={false}
-              placeholder={`search ${BUILTINS.length} actions…`}
+              placeholder={`search ${BUILTINS.length} actions…  ( / )`}
               className="rp-focus h-9 min-w-[220px] flex-1 rounded-skin-sm border border-line bg-inset px-3 font-mono text-[12px] text-ink placeholder:text-faint"
             />
             <div className="flex items-center gap-1">
@@ -924,6 +1173,11 @@ export default function ActionsPage() {
                               >
                                 {'</>'}
                               </button>
+                              {TARGET_LABEL[b.kind] ? (
+                                <span className="ml-auto shrink-0 truncate rounded-skin-chip bg-inset px-1.5 py-0.5 font-mono text-[9px] text-faint" title={`acts on: ${TARGET_LABEL[b.kind]}`}>
+                                  {TARGET_LABEL[b.kind]}
+                                </span>
+                              ) : null}
                             </div>
                           </div>
                         </div>
@@ -963,6 +1217,7 @@ export default function ActionsPage() {
         <RunDialog
           dialog={runDialog}
           map={map}
+          inventory={inventory}
           nodeNames={(infraNodes ?? []).map((n) => n.name)}
           onClose={() => setRunDialog(null)}
           onRun={async (values) => {
@@ -1220,6 +1475,7 @@ function WorkflowEditor({
 function RunDialog({
   dialog,
   map,
+  inventory,
   nodeNames,
   onClose,
   onRun,
@@ -1228,11 +1484,12 @@ function RunDialog({
     | { type: 'builtin'; builtin: (typeof BUILTINS)[number] }
     | { type: 'script'; def: ActionDefinition };
   map: ServiceMap | null;
+  inventory: InventoryKind[];
   nodeNames: string[];
   onClose: () => void;
   onRun: (values: Record<string, string>) => Promise<void>;
 }) {
-  const fields: ActionDefParam[] =
+  const fields: BuiltinField[] =
     dialog.type === 'script' ? (dialog.def.params ?? []) : dialog.builtin.fields;
   const [values, setValues] = useState<Record<string, string>>(
     Object.fromEntries(fields.map((f) => [f.name, f.default ?? ''])),
@@ -1297,11 +1554,27 @@ function RunDialog({
               spec={f}
               value={values[f.name] ?? ''}
               map={map}
+              inventory={inventory}
               nodeNames={nodeNames}
               namespace={values['namespace'] ?? ''}
               onChange={(v) => setValues((prev) => ({ ...prev, [f.name]: v }))}
             />
           ))}
+          {dialog.type === 'builtin' ? (
+            <label className="flex items-center gap-2 pt-1">
+              <span className="rp-micro !text-[10px]">timeout</span>
+              <input
+                type="number"
+                min={10}
+                max={1800}
+                value={values.timeoutSeconds ?? ''}
+                onChange={(e) => setValues((prev) => ({ ...prev, timeoutSeconds: e.target.value }))}
+                placeholder="180"
+                className="rp-focus h-8 w-20 rounded-skin-sm border border-line bg-inset px-2 font-mono text-[11px] text-ink placeholder:text-faint tnum"
+              />
+              <span className="font-mono text-[9.5px] text-faint">seconds (10–1800, blank = 180) · on timeout the engine rolls back</span>
+            </label>
+          ) : null}
           {err ? (
             <div className="rounded-skin-sm bg-tone-red-bg px-2.5 py-1.5 font-mono text-[11px] leading-snug" style={{ color: 'var(--rp-tone-red-fg)' }}>
               {err}
@@ -1349,15 +1622,17 @@ function TypedField({
   spec,
   value,
   map,
+  inventory = [],
   nodeNames = [],
   namespace,
   onChange,
 }: {
-  spec: ActionDefParam;
+  spec: BuiltinField;
   value: string;
   map: ServiceMap | null;
+  inventory?: InventoryKind[];
   nodeNames?: string[];
-  /** aktueller namespace-Wert — filtert die Workload-Vorschläge. */
+  /** aktueller namespace-Wert — filtert die Workload-/Inventar-Vorschläge. */
   namespace: string;
   onChange: (v: string) => void;
 }) {
@@ -1366,6 +1641,43 @@ function TypedField({
     'rp-focus mt-1 h-9 w-full rounded-skin-sm border border-line bg-inset px-2.5 font-mono text-[12px] text-ink';
 
   let control: React.ReactNode;
+  // Client-only-Picker: Inventar-gebundene Namen (ConfigMap/Secret/PDB/Job/…)
+  // mit Freitext-Fallback (datalist), Textareas für Patches/Kommandos/Daten.
+  if (spec.multiline) {
+    control = (
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        spellCheck={false}
+        rows={4}
+        placeholder={spec.description}
+        className="rp-focus mt-1 w-full rounded-skin-sm border border-line bg-inset px-2.5 py-2 font-mono text-[12px] leading-relaxed text-ink placeholder:text-faint"
+      />
+    );
+  } else if (spec.resourceKind) {
+    const items = (inventory.find((k) => k.kind === spec.resourceKind)?.items ?? [])
+      .filter((it) => !namespace || !it.namespace || it.namespace === namespace);
+    const listId = `inv-${spec.resourceKind}-${spec.name}`;
+    control = (
+      <div className="mt-1">
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          list={listId}
+          spellCheck={false}
+          placeholder={items.length ? `${items.length} in cluster…` : undefined}
+          className="rp-focus h-9 w-full rounded-skin-sm border border-line bg-inset px-2.5 font-mono text-[12px] text-ink placeholder:text-faint"
+        />
+        <datalist id={listId}>
+          {items.slice(0, 200).map((it) => (
+            <option key={`${it.namespace ?? ''}/${it.name}`} value={it.name}>
+              {it.namespace ? `${it.namespace}/${it.name}` : it.name}
+            </option>
+          ))}
+        </datalist>
+      </div>
+    );
+  } else
   switch (spec.type) {
     case 'int':
       control = (
