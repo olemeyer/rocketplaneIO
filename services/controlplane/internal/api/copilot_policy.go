@@ -16,8 +16,19 @@ import (
 // Admin es einschätzt.
 func actionLevel(kind string, params map[string]any) string {
 	switch kind {
-	case "debug_bundle", "pod_events", "rollout_history", "drain_preview":
+	case "debug_bundle", "pod_events", "rollout_history", "drain_preview",
+		"get_resource", "describe_resource", "get_secret", "helm_releases":
 		return "read"
+	case "exec_readonly":
+		// liest nur (Whitelist-Kommandos), betritt aber einen laufenden Container —
+		// das ist ein Eingriff in die Blackbox, kein stiller Read.
+		return "disruptive"
+	case "patch_secret", "pdb_set":
+		return "reversible"
+	case "delete_job":
+		return "disruptive"
+	case "patch_resource", "create_configmap", "delete_configmap", "pvc_expand", "restore_resource", "script":
+		return "destructive"
 	case "scale":
 		// Fail-closed: replicas nicht als >0-Int parsebar (z.B. String "0",
 		// fehlend) → destructive, damit ein scale-to-0 nie unter ein weicheres
@@ -45,6 +56,37 @@ func actionLevel(kind string, params map[string]any) string {
 	// Fail-closed default: ein neuer, noch nicht klassifizierter Kind läuft nie
 	// still unter dem schwächsten Gate — er verlangt die strengste Freigabe.
 	return "destructive"
+}
+
+// actionCategory ordnet jeden Kind einer Katalog-Kategorie zu (UI-Gruppierung,
+// Doku). Eine Quelle der Wahrheit — neue Kinds hier MIT eintragen.
+func actionCategory(kind string) string {
+	switch kind {
+	case "debug_bundle", "pod_events", "rollout_history", "drain_preview",
+		"get_resource", "describe_resource", "get_secret", "helm_releases", "exec_readonly":
+		return "diagnose"
+	case "rollout_restart", "rollout_undo", "rollout_pause", "rollout_resume",
+		"rollout_to_revision", "set_image", "statefulset_partition", "delete_pod", "evict_pod":
+		return "workloads"
+	case "scale", "hpa_set", "hpa_toggle":
+		return "scaling"
+	case "patch_configmap", "patch_secret", "create_configmap", "delete_configmap",
+		"set_env", "set_resources", "annotate", "set_label":
+		return "config"
+	case "pdb_set", "patch_resource":
+		return "network-policy"
+	case "pvc_expand":
+		return "storage"
+	case "cordon", "uncordon", "drain", "node_taint", "node_untaint":
+		return "nodes"
+	case "cronjob_trigger", "cronjob_suspend", "cronjob_resume", "delete_job":
+		return "batch"
+	case "cleanup_pods", "cleanup_jobs":
+		return "cleanup"
+	case "script", "restore_resource":
+		return "workflows"
+	}
+	return "other"
 }
 
 // toIntVal akzeptiert float64/int UND numerische Strings ("0") — sonst würde ein

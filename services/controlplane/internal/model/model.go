@@ -275,6 +275,26 @@ type CopilotChat struct {
 	UpdatedAt time.Time       `json:"updatedAt"`
 }
 
+// InvestigationNode ist ein Knoten im Investigation-Graph des Copilot-
+// Orchestrators: eine Hypothese (Task-JSON für den Investigator) und ihr
+// Verdict. Branching = parent_id zeigt auf einen älteren Knoten.
+type InvestigationNode struct {
+	ID              uuid.UUID       `json:"id"`
+	InvestigationID uuid.UUID       `json:"investigationId"`
+	ParentID        *uuid.UUID      `json:"parentId,omitempty"`
+	Seq             int             `json:"seq"`
+	Kind            string          `json:"kind"` // hypothesis | action | question | conclusion
+	Hypothesis      string          `json:"hypothesis"`
+	Task            json.RawMessage `json:"task,omitempty"`
+	Verdict         json.RawMessage `json:"verdict,omitempty"`
+	Status          string          `json:"status"` // pending|running|done|failed|abandoned
+	Confidence      *float32        `json:"confidence,omitempty"`
+	TokensIn        int             `json:"tokensIn"`
+	TokensOut       int             `json:"tokensOut"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	FinishedAt      *time.Time      `json:"finishedAt,omitempty"`
+}
+
 // ── Infrastruktur (Nodes + PVCs) ───────────────────────────────────────────
 
 // NodeSync ist ein vom Agent gesyncter Cluster-Node inkl. kubelet-Stats.

@@ -114,6 +114,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/copilot/action", sess(http.HandlerFunc(s.handleCopilotActionDecision)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/copilot/chats", sess(http.HandlerFunc(s.handleListCopilotChats)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/copilot/chats/{chat}", sess(http.HandlerFunc(s.handleGetCopilotChat)))
+	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/copilot/chats/{chat}/graph", sess(http.HandlerFunc(s.handleGetInvestigationGraph)))
 	mux.Handle("PUT /api/orgs/{org}/clusters/{cluster}/copilot/chats/{chat}", sess(http.HandlerFunc(s.handleUpsertCopilotChat)))
 	mux.Handle("DELETE /api/orgs/{org}/clusters/{cluster}/copilot/chats/{chat}", sess(http.HandlerFunc(s.handleDeleteCopilotChat)))
 	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/actions", sess(http.HandlerFunc(s.handleCreateAction)))
@@ -196,6 +197,10 @@ func (s *Server) StartBackground(ctx context.Context) {
 	// Workload-Spalten). Der OTel-Collector darf otel_logs NICHT anlegen.
 	if err := s.tele.EnsureLogsSchema(ctx); err != nil {
 		log.Printf("logs schema: %v", err)
+	}
+	// Skip-Indizes für Regex-/Token-/Fuzzy-Suche auf Body (idempotent).
+	if err := s.tele.EnsureLogsIndexes(ctx); err != nil {
+		log.Printf("logs indexes: %v", err)
 	}
 
 	// Cross-Replica-Eventverteilung: der LISTEN-Loop stellt NOTIFYs an die

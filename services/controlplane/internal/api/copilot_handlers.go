@@ -11,132 +11,21 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/auth"
 )
 
-// copilot_handlers.go — das ECHTE LLM-Backend des Copilots. Der Endpoint fährt
-// einen Tool-Calling-Loop: das (BYO-)LLM bekommt die Tools (dieselben wie der
-// MCP-Server: logs/traces/metrics/topology/infra lesen + SAFE ACTIONS) und
-// entscheidet selbst, welche es nutzt. Read-Tools laufen automatisch;
-// `run_safe_action` wird NIE still ausgeführt — es kommt als Vorschlag zurück
-// (der „Approve & run"-Flow der UI). Anthropic- UND OpenAI-kompatibel.
+// copilot_handlers.go — Tool-Katalog + Tool-Ausführung + Chat-Endpoint des
+// Copilots. Die Orchestrierung (Master + Investigator-Subagenten, Verdicts,
+// Investigation-Graph) lebt in copilot_master.go / copilot_investigator.go.
+// Read-Tools laufen automatisch (execCopilotTool proxied auf die eigene REST-
+// API); Mutationen sind IMMER Vorschläge über das Approval-Gate
+// (copilot_action.go). Anthropic- UND OpenAI-kompatibel (copilot_provider.go).
 
-const copilotSystem = `You are the rocketplaneIO Copilot: an expert Site Reliability Engineer embedded in ONE Kubernetes cluster. You investigate problems with read tools and you FIX them, but exclusively through a fixed catalog of safe, reversible, verified actions. You are precise, evidence-driven and calm. Healthy is quiet — surface only what actually matters.
-
-# Autonomy — you RUN the investigation, you do not narrate intentions
-You operate an agentic loop: plan → call a tool → read the REAL result → decide the next call, and you keep going ON YOUR OWN until you can name a root cause with evidence (and, if warranted, propose one fix), or until you have genuinely exhausted the read tools. You are working, not chatting.
-- NEVER end a turn with a promise to investigate. "Next step: check the debug bundle", "I'll now look at the logs", "Let me pull the traces" are FORBIDDEN as a stopping point. If the next step is a read tool, CALL IT in this same turn. Naming a tool you did not call is a bug, not an answer.
-- A turn that ends with neither (a) a tool call nor (b) a completed, evidence-backed diagnosis is a failure. If anything is still unknown and a read tool could reveal it, call that tool NOW.
-- Chain reads without returning to the human: get_service_map → debug_bundle → query_logs → query_traces → get_trace/trace_logs → query_metrics, following the evidence. Fire INDEPENDENT reads in PARALLEL (several tool calls in one turn).
-- Read tools NEVER need permission. Never ask "should I check the logs?" or "want me to look deeper?" — just look. Only run_safe_action (a cluster mutation) waits for a human.
-- The ONLY legitimate ways to end a turn: (1) you proposed exactly one run_safe_action and must wait for approval; (2) an approved action is running and only verifying it remains; (3) you have a complete, evidence-backed answer (root cause + fix, or "all healthy"); (4) you truly cannot progress with the available tools — then say precisely what signal is missing.
-
-# For every tool call: predict, then verify
-On EVERY read tool call, set the "expect" argument to one line: your GOAL for this call + what you EXPECT to find (it is shown to the human in the inspector, above the result). After the result returns, state the LEARNING in one line — did it match your expectation? If it matched, say so briefly and move on; if it did NOT match, that surprise IS the lead — chase it with the next tool now. A read is not "done" until you have interpreted it against your expectation. This goal → assumption → result → learning loop is how you think out loud; keep it tight, then take the next step.
-Example: "Expect debug_bundle on checkout-api to show OOMKilled (restarts high, memory near limit)." → [call debug_bundle] → "Confirmed: lastState OOMKilled, exit 137 — not a bad image. → reading logs in the crash window."
-For a run_safe_action, your expectation IS the success criterion: state, concretely and re-checkably, what "fixed" looks like (e.g. "restarts stop climbing and checkout 5xx drop below 1% within 60s"). After the action result returns, VERIFY by RE-READING the relevant tool — never declare success from the action status alone.
-
-# How you work
-1. Investigate before you conclude. Never answer infrastructure questions from assumptions — call the read tools and ground every statement in what they return. If you have not looked, look.
-2. Form a hypothesis, then confirm it with a second signal (a CrashLoop in the service map -> confirm with logs + debug_bundle before blaming an image).
-3. Diagnose in terms of evidence: cite concrete pod names, error strings, status codes, counts, latencies, restart counts, resource pressure. No hand-waving.
-4. Propose the LEAST invasive fix that addresses the root cause, and only when the evidence supports it. Reversible over disruptive.
-5. Only MUTATIONS pause. Finish ALL read investigation first, then propose ONE run_safe_action and stop for approval. "Stop" applies to run_safe_action alone — NEVER to read tools. Never batch mutations. Gather every piece of read-evidence that bears on the fix BEFORE you propose, so the human sees one well-justified proposal, not a trickle of half-investigated guesses.
-
-# What you can DO (the ONLY ways to change the cluster)
-You change the cluster solely by calling run_safe_action with a kind from this catalog. There is NOTHING else — you have no shell, no kubectl, no apply/edit/patch, no helm/kustomize, no exec, no file access.
-
-Workload lifecycle:
-- scale (Deployment, StatefulSet) — params {replicas: 0..50}. Set replica count.
-- rollout_restart (Deployment, StatefulSet, DaemonSet) — no params. Rolling restart of all pods.
-- rollout_undo (Deployment) — no params. Roll back to the previous revision (undo a bad deploy).
-- rollout_pause / rollout_resume (Deployment) — no params. Freeze / unfreeze a rollout.
-- set_image (Deployment, StatefulSet, DaemonSet) — params {image: "repo:tag"}. Change the container image. Reversible via rollout_undo.
-- delete_pod (Pod) — no params. Delete one pod; its controller recreates it. Use to clear a wedged pod.
-
-Autoscaling:
-- hpa_set (HorizontalPodAutoscaler) — params {minReplicas?: >=1, maxReplicas: 1..200} with min <= max. Adjust HPA bounds.
-
-Batch:
-- cronjob_trigger (CronJob) — no params. Run a job now.
-- cronjob_suspend / cronjob_resume (CronJob) — no params.
-
-Housekeeping:
-- cleanup_pods (Namespace; set targetName = the namespace) — no params. Delete Failed/Succeeded pods in a namespace.
-
-Node maintenance (cluster-scoped: set targetNamespace = "-"):
-- cordon / uncordon (Node) — no params. Mark a node un/schedulable.
-- drain (Node) — no params. Evict pods off a node. DISRUPTIVE.
-- drain_preview (Node) — no params. READ-ONLY blast radius before a drain (evictable pods, per-workload loss, blocking PDBs).
-- node_taint (Node) — params {key, effect: NoSchedule|PreferNoSchedule|NoExecute}. node_untaint (Node) — {key}.
-
-Config & tuning:
-- set_resources (Deployment/StatefulSet/DaemonSet) — {container?, requestsCpu?, requestsMemory?, limitsCpu?, limitsMemory?}. The OOMKilled/CPU-throttle fix. Rolls out; auto-rollback.
-- set_env (Deployment/StatefulSet/DaemonSet) — {container?, name, value, remove?}. Set/unset a plaintext env var (log level, feature flag). Rolls out; auto-rollback.
-- rollout_to_revision (Deployment) — {revision}. Roll to a specific historical revision (get it from rollout_history).
-- rollout_history (Deployment/StatefulSet) — {limit?}. READ-ONLY revision list (revision, image, change-cause, age).
-- statefulset_partition (StatefulSet) — {partition}. Stage a canary — only ordinals >= partition update.
-- hpa_toggle (HorizontalPodAutoscaler) — {enabled}. Freeze (pin min=max at current) or unfreeze so the autoscaler stops fighting a manual fix.
-- patch_configmap (ConfigMap) — {key, value, remove?}. Set/remove a key. NOTE: needs a rollout_restart of consumers to take effect.
-
-Metadata & pods:
-- annotate (most kinds) — {key, value, remove?}. Set/remove an object annotation (pause an operator, tag for triage).
-- set_label (Node/Namespace) — {key, value, remove?}. Steer scheduling / namespace admission.
-- evict_pod (Pod) — {gracePeriodSeconds?}. The SAFE delete_pod: graceful, PDB-aware Eviction API (never force).
-- cleanup_jobs (Namespace; targetName = namespace) — {states?, olderThanHours?}. Delete finished (Complete/Failed) Jobs + their pods.
-
-Every action is trigger -> observe -> verify with automatic rollback on failure. If a remedy is not in this list, it is NOT something you can do.
-
-# Read / investigation tools
-- query_logs — recent container logs; filter namespace/workload/search/since. First stop for errors, crashes, stack traces.
-- query_traces — recent request traces (service, span, duration, status) for latency / error-rate questions.
-- query_metrics — a PromQL range query against the embedded engine (RED metrics, CPU/mem, node & workload infra). Write real PromQL.
-- get_service_map — topology: every workload with health, pods ready/total, restarts, image, plus traffic edges. Your overview.
-- get_infra — nodes (CPU/mem/disk/pod pressure) and PVCs. For capacity / pressure / storage questions.
-- debug_bundle — read-only triage snapshot of a workload or pod: rollout state + container statuses (OOMKilled / CrashLoopBackOff / ImagePullBackOff) + recent events. Use before proposing a workload fix.
-Read tools run automatically and are cheap — use them liberally and in parallel. Their full output is shown to the human in the inspector, so you do not need to paste raw dumps back.
-
-# How a pro investigates (chain the read tools — do not stop at one)
-Real diagnosis is iterative. Follow the evidence across tools; a single query is rarely enough.
-- Latency / slow service: query_traces (service, since, sort by the slow ones) to find candidate traces -> get_trace on the worst traceId to see the waterfall and pinpoint WHICH span/service burns the time or errors -> span_stats on that service+span to check p95/p99 over the window (outlier vs regression) -> query_metrics for the underlying resource (CPU throttle, saturation) if needed.
-- Errors / 5xx: query_traces onlyError=true to get failing traces -> get_trace to find the span where the error originates and read its attributes/http status -> query_logs for that span's workload in a tight window (since/until around the trace time, minSeverity 17) to read the actual exception -> debug_bundle if it is a pod-level failure (OOM/CrashLoop).
-- Crash / restart loop: get_service_map to spot restarts -> debug_bundle for container statuses + events -> query_logs (minSeverity 17) for the crash reason.
-- Capacity: get_infra for node/PVC pressure -> query_metrics for the trend over time -> correlate with the workloads on the hot node.
-- Correlate across services: pass several workloads to query_logs with one time window to line up what each service logged during the same incident.
-Use list_metrics to discover metric names before writing PromQL. Keep pulling threads across tools in the SAME turn-loop until you can name the root cause with evidence or have ruled every obvious cause out. One query is never a conclusion. If a result raises a new question, answer it with the next tool immediately — do not hand the question back to the human.
-
-# The approval model (critical)
-run_safe_action is a PROPOSAL, never an execution. Calling it pauses the loop; the human sees an approve/dismiss card; NOTHING happens until they decide. Only after approval does the action run, and you then receive its real status and result. Therefore:
-- NEVER say you "ran", "executed", "applied", "restarted", "scaled" or "fixed" anything before a tool result confirms it. State what you PROPOSE, not what you did.
-- After the result returns, report the ACTUAL outcome (succeeded / failed + what changed). Do not assume success.
-- If the human dismisses an action, do NOT re-propose the same thing — acknowledge it and offer an alternative or stop.
-- If an approved action does not finish in a few seconds it keeps RUNNING IN THE BACKGROUND and its result carries the actionId. If your NEXT step depends on the outcome, do NOT stop — call wait_for_action with that actionId to wait until it finishes, then verify (re-read logs/service-map/traces) and continue in the SAME turn. Only if you have nothing else to do meanwhile should you say it is running and stop; the chat is then re-activated automatically on completion. Never claim an action succeeded before a result (from wait_for_action or a re-read) confirms it.
-
-# Naming the investigation — keep it current
-Right after you understand the request, call set_title with a concise 3-6 word title and a one-line summary. Then UPDATE it with set_title again as the investigation evolves — at least: (1) when you identify the root cause (summary should now state it), (2) when you propose or run a fix (summary reflects the action + expected outcome), (3) when the focus shifts materially (e.g. "checkout latency" → "redis OOM"). The summary is a live one-line status of where this investigation stands — keep it accurate. It is cheap and does not touch the cluster; do it in the same turn as your work.
-
-# NEVER do this
-- NEVER hand back a YAML / manifest snippet, a kubectl / helm / kustomize command, or "edit the Deployment spec" as THE fix — you cannot apply any of it. If the real remedy is a manifest/config change no catalog action covers (resource limits, env vars, probes, ConfigMap/Secret contents, adding an HPA object, volumes), say plainly it is outside what you can safely apply, describe exactly what must change and where, and tell the human to make that change in their manifests / GitOps source. Only map it to a catalog action when one genuinely fits (image -> set_image, replicas -> scale, autoscaling bounds -> hpa_set).
-- NEVER invent data: no fabricated pod names, log lines, error messages, metric values or root causes. If a tool did not show it, do not assert it.
-- NEVER propose a kind, target kind or parameter outside the catalog above (no "delete namespace", no "edit configmap", no "reboot node", no replicas > 50, no invented kinds).
-- NEVER propose an action against a workload / namespace / node you have not inspected this session.
-- targetName must be an EXACT object name — NEVER a wildcard, glob or "*" (that fails). To act on many objects, discover their exact names first (get_service_map) and propose them ONE AT A TIME; tell the human up front how many you will propose and why.
-- NEVER act destructively without flagging the blast radius. drain, delete_pod, cleanup_pods, node_taint NoExecute and scale-to-0 disrupt running workloads; propose them only when justified, and be especially careful with kube-system, rocketplane and other infrastructure namespaces.
-- Be concise in WORDS, exhaustive in INVESTIGATION. Terseness means not padding your prose — it NEVER means doing fewer tool calls or stopping early. No filler, no apologies, no "as an AI", no restating the question.
-- NEVER end a turn with "Next step / I'll now / Let me check X" in place of calling X. Describe-instead-of-call is the #1 failure — call the tool.
-- NEVER ask permission to run a READ tool, or ask "want me to look deeper?". Reads are free and automatic — just do them.
-- NEVER conclude a root cause from a single tool — confirm it with a second, independent signal.
-- NEVER manufacture problems on a healthy cluster — but "healthy" is a CONCLUSION you reach after looking, not a reason to stop before looking.
-
-# Output style
-- Concise, technical markdown. Structure findings as: what is wrong -> the evidence (concrete numbers) -> the recommended action (or that all is well).
-- Use short tables and bullet lists for multi-item findings; use inline code for identifiers.
-- When everything is healthy, say so in one or two lines and stop — do not manufacture problems.
-- Answer in the user's language.
-
-You are investigation-first: deliver a correct diagnosis backed by evidence and, when warranted, the single safest reversible fix — proposed for human approval, never executed behind their back.`
 
 func copilotSelfURL() string {
 	if v := os.Getenv("RP_SELF_URL"); v != "" {
@@ -156,6 +45,22 @@ type copilotTool struct {
 	Schema map[string]any
 }
 
+// actionCatalogDesc ist der EINE Katalog-Text (run_safe_action im Legacy-/MCP-
+// Pfad und propose_action im Master teilen ihn — eine Quelle der Wahrheit).
+const actionCatalogDesc = "Catalog (kind -> target kinds, params): scale -> Deployment,StatefulSet {replicas:0..50}; rollout_restart -> Deployment,StatefulSet,DaemonSet; rollout_undo|rollout_pause|rollout_resume -> Deployment; set_image -> Deployment,StatefulSet,DaemonSet {image}; delete_pod -> Pod; hpa_set -> HorizontalPodAutoscaler {minReplicas?,maxReplicas:1..200}; cronjob_trigger|cronjob_suspend|cronjob_resume -> CronJob; cleanup_pods -> Namespace (targetName = namespace); cordon|uncordon|drain -> Node; node_taint -> Node {key,effect}; node_untaint -> Node {key}; set_resources -> Deployment,StatefulSet,DaemonSet {container?,requestsCpu?,requestsMemory?,limitsCpu?,limitsMemory?}; set_env -> Deployment,StatefulSet,DaemonSet {container?,name,value,remove?}; rollout_to_revision -> Deployment {revision}; rollout_history -> Deployment,StatefulSet (READ) {limit?}; statefulset_partition -> StatefulSet {partition}; hpa_toggle -> HorizontalPodAutoscaler {enabled}; annotate -> most kinds {key,value,remove?}; set_label -> Node,Namespace {key,value,remove?}; patch_configmap -> ConfigMap {key,value,remove?} (needs rollout_restart to take effect); evict_pod -> Pod {gracePeriodSeconds?} (PDB-aware); cleanup_jobs -> Namespace {states?,olderThanHours?}; drain_preview -> Node (READ, blast-radius); exec_readonly -> Pod {command:argv array (cat|ls|head|tail|df|du|stat|wc|env|id|uname|find, no shell), container?} — read a file INSIDE a container (e.g. an error log only written to disk); patch_secret -> Secret {key, value, remove?}; create_configmap -> ConfigMap {data:{k:v,...}}; delete_configmap -> ConfigMap (snapshot kept for restore); pdb_set -> PodDisruptionBudget {minAvailable? XOR maxUnavailable?, int or percent string}; patch_resource -> Service,Ingress,NetworkPolicy,PodDisruptionBudget {patch: JSON merge patch} (generic spec edit, snapshot + restorable); pvc_expand -> PersistentVolumeClaim {size, only GROW}; delete_job -> Job; restore_resource -> {snapshot} (re-apply a before-snapshot from a prior action). For Node/Namespace targets set targetNamespace to '-'. Propose ONE at a time; never invent a kind or param outside this list."
+
+// actionProposalProps sind die gemeinsamen Properties von run_safe_action und
+// propose_action.
+func actionProposalProps(sp func(string) map[string]any) map[string]any {
+	return map[string]any{
+		"kind":            sp("catalog action kind (see list)"),
+		"targetNamespace": sp("namespace, or '-' for Node/cluster-scoped"),
+		"targetKind":      sp("Deployment|StatefulSet|DaemonSet|Pod|HorizontalPodAutoscaler|CronJob|Namespace|Node"),
+		"targetName":      sp("object name (for cleanup_pods: the namespace)"),
+		"params":          map[string]any{"type": "object", "description": "typed params for the kind, e.g. {\"replicas\":3} or {\"image\":\"nginx:1.27\"} or {\"maxReplicas\":8}"},
+	}
+}
+
 func copilotTools() []copilotTool {
 	sp := func(d string) map[string]any { return map[string]any{"type": "string", "description": d} }
 	ip := func(d string) map[string]any { return map[string]any{"type": "integer", "description": d} }
@@ -167,8 +72,11 @@ func copilotTools() []copilotTool {
 		return m
 	}
 	bp := func(d string) map[string]any { return map[string]any{"type": "boolean", "description": d} }
+	ap := func(d string) map[string]any {
+		return map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": d}
+	}
 	tools := []copilotTool{
-		{"query_logs", "Read container logs (severity, workload, pod, body) plus a per-bucket volume histogram. Correlate across services by passing several workloads and a tight time window. since/until accept a duration like 15m/2h (relative to now); minSeverity filters by OTel number (9=INFO, 13=WARN, 17=ERROR, 21=FATAL) — use 17 for errors only.", o(map[string]any{"namespace": sp("namespace filter"), "workload": sp("single workload name filter"), "workloads": sp("comma-separated workloads to correlate across services"), "pod": sp("exact pod name filter"), "search": sp("case-insensitive substring in the log body"), "minSeverity": ip("min OTel severity (17 = errors only)"), "since": sp("start of window, duration like 15m/1h (default 15m)"), "until": sp("end of window, duration like 5m ago; omit for now"), "limit": ip("max lines (default 100, cap 1000)")})},
+		{"query_logs", "Read container logs (severity, workload, pod, body) plus a per-bucket volume histogram. Correlate across services by passing several workloads and a tight time window. since/until accept a duration like 15m/2h (relative to now); minSeverity filters by OTel number (9=INFO, 13=WARN, 17=ERROR, 21=FATAL) — use 17 for errors only. Powerful body matching: regexes (RE2, case-sensitive — prefix (?i) for insensitive) combined with regexMode any|all, exclude terms (NOT), fuzzy (typo-tolerant). Example: regexes:[\"(?i)oom|out of memory\",\"exit code 137\"] regexMode:\"any\" exclude:[\"health check\"].", o(map[string]any{"namespace": sp("namespace filter"), "workload": sp("single workload name filter"), "workloads": sp("comma-separated workloads to correlate across services"), "pod": sp("exact pod name filter"), "search": sp("case-insensitive substring in the log body"), "regexes": ap("up to 5 RE2 regex patterns matched against the log body; combine with regexMode"), "regexMode": sp("how to combine regexes: any (OR, default) | all (AND)"), "exclude": ap("up to 5 case-insensitive substrings that must NOT appear (filters noise)"), "fuzzy": sp("typo-tolerant ngram search term (finds near-matches of this string)"), "minSeverity": ip("min OTel severity (17 = errors only)"), "since": sp("start of window, duration like 15m/1h (default 15m)"), "until": sp("end of window, duration like 5m ago; omit for now"), "limit": ip("max lines (default 100, cap 1000)")})},
 		{"query_traces", "List request traces in a window (service, span, duration ms, status, http status, span/error counts) PLUS per-service RED metrics (rate, error ratio, p50/p95/p99) and a volume histogram. Filter hard: onlyError, minDurationMs (only slow traces), minHttpStatus (400=4xx+, 500=5xx). This is how you find WHICH trace to open — then call get_trace with its traceId.", o(map[string]any{"service": sp("service filter"), "namespace": sp("namespace filter"), "onlyError": bp("only traces with errors"), "minDurationMs": ip("only traces at least this slow (ms)"), "minHttpStatus": ip("only traces with http status >= this (400=4xx+, 500=5xx)"), "since": sp("window start, duration like 15m/1h (default 15m)"), "until": sp("window end, duration; omit for now")})},
 		{"get_trace", "Open ONE trace end-to-end: every span across every service with parent/child structure, service, span name, kind, duration ms, status and http status, plus span attributes. This is the waterfall — use it to see exactly where latency or an error originates across services. Get the traceId from query_traces.", o(map[string]any{"traceId": sp("32-hex OTel trace id from query_traces")}, "traceId")},
 		{"trace_logs", "Correlate logs to ONE trace: fetches the trace, derives its services and time window, and returns the container logs from exactly that window — so you can read what each service logged during this specific request. Use right after get_trace to tie a span error to its log line.", o(map[string]any{"traceId": sp("32-hex OTel trace id")}, "traceId")},
@@ -182,7 +90,11 @@ func copilotTools() []copilotTool {
 		{"get_infra", "Read node capacity and pressure (CPU/mem/disk/pods) and PersistentVolumeClaims. Use for capacity, pressure and storage questions.", o(map[string]any{})},
 		{"list_resources", "List ANY Kubernetes resource kind in the cluster (compact summaries): Service, Ingress, ConfigMap, Secret (metadata only), Job, CronJob, HorizontalPodAutoscaler, PodDisruptionBudget, NetworkPolicy, ServiceAccount, ResourceQuota, LimitRange, PersistentVolume. Omit kind to get EVERYTHING. This is your full view of the cluster beyond workloads — routing (Ingress/Service), config, batch, policies.", o(map[string]any{"kind": sp("resource kind (exact, e.g. Ingress) — omit for all kinds"), "namespace": sp("filter to one namespace")})},
 		{"debug_bundle", "Read-only triage snapshot of a workload or pod: rollout state + container statuses (OOMKilled / CrashLoopBackOff / ImagePullBackOff) + recent Events. Call this before proposing any workload fix.", o(map[string]any{"namespace": sp("namespace"), "kind": sp("Deployment|StatefulSet|DaemonSet|Pod (default Deployment)"), "name": sp("workload or pod name")}, "namespace", "name")},
-		{"run_safe_action", "PROPOSE one safe, reversible, verified action from the fixed catalog. It is NOT executed — it pauses for human approval, then runs and returns its real result. This is the ONLY way to change the cluster; there is no YAML/kubectl/helm. Catalog (kind -> target kinds, params): scale -> Deployment,StatefulSet {replicas:0..50}; rollout_restart -> Deployment,StatefulSet,DaemonSet; rollout_undo|rollout_pause|rollout_resume -> Deployment; set_image -> Deployment,StatefulSet,DaemonSet {image}; delete_pod -> Pod; hpa_set -> HorizontalPodAutoscaler {minReplicas?,maxReplicas:1..200}; cronjob_trigger|cronjob_suspend|cronjob_resume -> CronJob; cleanup_pods -> Namespace (targetName = namespace); cordon|uncordon|drain -> Node; node_taint -> Node {key,effect}; node_untaint -> Node {key}; set_resources -> Deployment,StatefulSet,DaemonSet {container?,requestsCpu?,requestsMemory?,limitsCpu?,limitsMemory?}; set_env -> Deployment,StatefulSet,DaemonSet {container?,name,value,remove?}; rollout_to_revision -> Deployment {revision}; rollout_history -> Deployment,StatefulSet (READ) {limit?}; statefulset_partition -> StatefulSet {partition}; hpa_toggle -> HorizontalPodAutoscaler {enabled}; annotate -> most kinds {key,value,remove?}; set_label -> Node,Namespace {key,value,remove?}; patch_configmap -> ConfigMap {key,value,remove?} (needs rollout_restart to take effect); evict_pod -> Pod {gracePeriodSeconds?} (PDB-aware); cleanup_jobs -> Namespace {states?,olderThanHours?}; drain_preview -> Node (READ, blast-radius). For Node/Namespace targets set targetNamespace to '-'. Propose ONE at a time; never invent a kind or param outside this list.", o(map[string]any{"kind": sp("catalog action kind (see list)"), "targetNamespace": sp("namespace, or '-' for Node/cluster-scoped"), "targetKind": sp("Deployment|StatefulSet|DaemonSet|Pod|HorizontalPodAutoscaler|CronJob|Namespace|Node"), "targetName": sp("object name (for cleanup_pods: the namespace)"), "params": map[string]any{"type": "object", "description": "typed params for the kind, e.g. {\"replicas\":3} or {\"image\":\"nginx:1.27\"} or {\"maxReplicas\":8}"}}, "kind", "targetKind", "targetName")},
+		{"get_resource", "Read the FULL live spec of one Kubernetes object as YAML (like kubectl get -o yaml, managedFields/status stripped): Deployment, StatefulSet, DaemonSet, Pod, ConfigMap (full data!), Service, Ingress, NetworkPolicy, PodDisruptionBudget, HPA, CronJob, Job, PVC, Node, Namespace, ServiceAccount, ResourceQuota, LimitRange. Secrets show keys + sha256 hashes only. THE tool to inspect configuration.", o(map[string]any{"namespace": sp("namespace ('-' for cluster-scoped)"), "kind": sp("exact resource kind, e.g. ConfigMap"), "name": sp("object name")}, "kind", "name")},
+		{"describe_resource", "kubectl-describe-like view of one object: status, conditions, and its recent events. Use when you need the CURRENT STATE + why (conditions/events), not the spec.", o(map[string]any{"namespace": sp("namespace ('-' for cluster-scoped)"), "kind": sp("exact resource kind"), "name": sp("object name")}, "kind", "name")},
+		{"get_secret", "Inspect a Secret WITHOUT revealing values: keys, value lengths and sha256 hashes (compare hashes to spot changed/identical values). Values never reach you or the database.", o(map[string]any{"namespace": sp("namespace"), "name": sp("secret name")}, "namespace", "name")},
+		{"helm_releases", "List Helm releases (from sh.helm.release.v1 secrets): name, namespace, chart version, status, revision. Use to see what Helm manages and which release a broken object belongs to.", o(map[string]any{"namespace": sp("filter to one namespace (omit for all)")})},
+		{"run_safe_action", "PROPOSE one safe, reversible, verified action from the fixed catalog. It is NOT executed — it pauses for human approval, then runs and returns its real result. This is the ONLY way to change the cluster; there is no YAML/kubectl/helm. " + actionCatalogDesc, o(actionProposalProps(sp), "kind", "targetKind", "targetName")},
 	}
 	// Jedes READ-Tool bekommt ein optionales `expect`-Feld: Ziel + Annahme dieses
 	// Aufrufs. Der Inspector zeigt es als „Ziel & Annahme" ÜBER dem Ergebnis, damit
@@ -217,6 +129,24 @@ func (s *Server) execCopilotTool(ctx context.Context, scope, org, cluster, cooki
 			}
 		}
 		return def
+	}
+	// getStrs liest ein String-Array-Argument; ein einzelner String zählt als
+	// Ein-Element-Liste (LLMs schicken gern beides).
+	getStrs := func(k string) []string {
+		var out []string
+		switch v := args[k].(type) {
+		case []any:
+			for _, e := range v {
+				if s, ok := e.(string); ok && strings.TrimSpace(s) != "" {
+					out = append(out, s)
+				}
+			}
+		case string:
+			if strings.TrimSpace(v) != "" {
+				out = append(out, v)
+			}
+		}
+		return out
 	}
 	base := fmt.Sprintf("%s/api/orgs/%s/clusters/%s", copilotSelfURL(), org, cluster)
 	get := func(path string, q url.Values) (string, error) {
@@ -269,6 +199,14 @@ func (s *Server) execCopilotTool(ctx context.Context, scope, org, cluster, cooki
 		put(q, "workloads", getStr("workloads"))
 		put(q, "pod", getStr("pod"))
 		put(q, "search", getStr("search"))
+		for _, rx := range getStrs("regexes") {
+			q.Add("regex", rx)
+		}
+		put(q, "regexMode", getStr("regexMode"))
+		for _, ex := range getStrs("exclude") {
+			q.Add("exclude", ex)
+		}
+		put(q, "fuzzy", getStr("fuzzy"))
 		if ms := getInt("minSeverity", 0); ms > 0 {
 			q.Set("minSeverity", strconv.Itoa(ms))
 		}
@@ -491,9 +429,78 @@ func (s *Server) execCopilotTool(ctx context.Context, scope, org, cluster, cooki
 		if kind == "" {
 			kind = "Deployment"
 		}
-		return post("/actions", map[string]any{"kind": "debug_bundle", "targetNamespace": scopedNS("namespace"), "targetKind": kind, "targetName": getStr("name")})
+		return s.runReadAction(ctx, post, get, map[string]any{"kind": "debug_bundle", "targetNamespace": scopedNS("namespace"), "targetKind": kind, "targetName": getStr("name")})
+	case "get_resource", "describe_resource":
+		ns := scopedNS("namespace")
+		kind := getStr("kind")
+		if kind == "Node" || kind == "Namespace" || kind == "PersistentVolume" {
+			ns = "-"
+		}
+		return s.runReadAction(ctx, post, get, map[string]any{"kind": name, "targetNamespace": ns, "targetKind": kind, "targetName": getStr("name")})
+	case "get_secret":
+		return s.runReadAction(ctx, post, get, map[string]any{"kind": "get_secret", "targetNamespace": scopedNS("namespace"), "targetKind": "Secret", "targetName": getStr("name")})
+	case "helm_releases":
+		ns := scopedNS("namespace")
+		if ns == "" {
+			ns = "-" // alle Namespaces
+		}
+		return s.runReadAction(ctx, post, get, map[string]any{"kind": "helm_releases", "targetNamespace": "-", "targetKind": "Namespace", "targetName": orDefStr(ns, "-")})
 	}
 	return "", fmt.Errorf("unknown tool %q", name)
+}
+
+// runReadAction legt eine read-only Katalog-Action an und wartet SYNCHRON auf
+// ihr Ergebnis (kurzer Poll) — Investigatoren haben ein knappes Tool-Budget und
+// sollen das Ergebnis im selben Call bekommen, nicht via wait_for_action.
+func (s *Server) runReadAction(ctx context.Context, post func(string, any) (string, error), get func(string, url.Values) (string, error), body map[string]any) (string, error) {
+	created, err := post("/actions", body)
+	if err != nil {
+		return "", err
+	}
+	var act struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal([]byte(created), &act) != nil || act.ID == "" {
+		return created, nil
+	}
+	deadline := time.Now().Add(25 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(700 * time.Millisecond):
+		}
+		res, err := get("/actions", url.Values{"limit": {"40"}})
+		if err != nil {
+			continue
+		}
+		var lst struct {
+			Actions []struct {
+				ID     string          `json:"id"`
+				Status string          `json:"status"`
+				Result string          `json:"result"`
+				Steps  json.RawMessage `json:"steps"`
+			} `json:"actions"`
+		}
+		if json.Unmarshal([]byte(res), &lst) != nil {
+			continue
+		}
+		for _, a := range lst.Actions {
+			if a.ID != act.ID {
+				continue
+			}
+			if a.Status == "succeeded" || a.Status == "failed" || a.Status == "cancelled" {
+				out := map[string]any{"status": a.Status, "result": a.Result}
+				if len(a.Steps) > 0 {
+					out["steps"] = a.Steps
+				}
+				b, _ := json.Marshal(out)
+				return string(b), nil
+			}
+			break
+		}
+	}
+	return fmt.Sprintf(`{"status":"running","actionId":%q,"note":"still running — use wait_for_action"}`, act.ID), nil
 }
 
 // filterMetricNames reduziert die Prometheus-label-values-Antwort auf die
@@ -552,15 +559,17 @@ type copilotMsg struct {
 	Text string `json:"text"`
 }
 type copilotConfig struct {
-	API     string `json:"api"` // anthropic | openai
-	BaseURL string `json:"baseUrl"`
-	Model   string `json:"model"`
-	APIKey  string `json:"apiKey"`
+	API      string `json:"api"` // anthropic | openai
+	BaseURL  string `json:"baseUrl"`
+	Model    string `json:"model"`
+	APIKey   string `json:"apiKey"`
+	SubModel string `json:"subModel"` // optionales Modell für Investigator-Subagenten ("" = Model)
 }
 type copilotReq struct {
 	Messages []copilotMsg  `json:"messages"`
 	Config   copilotConfig `json:"config"`
-	Scope    string        `json:"scope"` // aktiver Namespace ("" = alle) — hartes Gate + Prompt
+	Scope    string        `json:"scope"`  // aktiver Namespace ("" = alle) — hartes Gate + Prompt
+	ChatID   string        `json:"chatId"` // Client-seitige Chat-UUID — bindet den Investigation-Graph
 }
 
 // Ausgabe-Blöcke fürs UI: Text, ein Action-Vorschlag, oder eine Tool-Aktivität.
@@ -594,6 +603,10 @@ func (s *Server) handleCopilotChat(w http.ResponseWriter, r *http.Request) {
 	}
 	cookie := r.Header.Get("Cookie")
 	org := orgID.String()
+	userID := uuid.Nil
+	if user, ok := auth.UserFrom(r.Context()); ok {
+		userID = user.ID
+	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	// no-transform verbietet Proxies (inkl. Next dev/prod) das gzip-Komprimieren —
@@ -605,21 +618,22 @@ func (s *Server) handleCopilotChat(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
+	// emit ist Mutex-geschützt: parallele Investigator-Goroutinen streamen
+	// gleichzeitig in denselben ResponseWriter.
+	var emitMu sync.Mutex
 	emit := func(event string, data any) {
 		b, _ := json.Marshal(data)
+		emitMu.Lock()
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
 		flusher.Flush()
+		emitMu.Unlock()
 	}
 
 	// runID identifiziert diesen Stream für den Freigabe-Endpoint (Human-in-the-Loop).
 	runID := uuid.NewString()
 	emit("meta", map[string]any{"runId": runID})
 
-	if req.Config.API == "openai" {
-		s.streamOpenAI(r.Context(), runID, org, cluster, cookie, req, emit)
-		return
-	}
-	s.streamAnthropic(r.Context(), runID, org, cluster, cookie, req, emit)
+	s.runMasterLoop(r.Context(), runID, userID, org, cluster, cookie, req, emit)
 }
 
 func actionBlock(input map[string]any) copilotBlock {
