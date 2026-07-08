@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -60,6 +61,29 @@ var actionTargetKinds = map[string]map[string]bool{
 	"cleanup_jobs":          {"Namespace": true},
 	"rollout_history":       {"Deployment": true, "StatefulSet": true}, // read
 	"drain_preview":         {"Node": true},                            // read
+	// Erweiterter Katalog (Batch 2 — Profi-Abdeckung)
+	"get_resource":      generalReadKinds, // read: YAML jeder whitelisted Ressource
+	"describe_resource": generalReadKinds, // read: Status+Conditions+Events
+	"get_secret":        {"Secret": true}, // read: Keys+Hashes (nie Klartext)
+	"helm_releases":     {"Namespace": true},
+	"exec_readonly":     {"Pod": true},
+	"patch_secret":      {"Secret": true},
+	"create_configmap":  {"ConfigMap": true},
+	"delete_configmap":  {"ConfigMap": true},
+	"pdb_set":           {"PodDisruptionBudget": true},
+	"patch_resource":    {"Service": true, "Ingress": true, "NetworkPolicy": true, "PodDisruptionBudget": true},
+	"pvc_expand":        {"PersistentVolumeClaim": true},
+	"delete_job":        {"Job": true},
+	"restore_resource":  {"Service": true, "Ingress": true, "NetworkPolicy": true, "PodDisruptionBudget": true, "ConfigMap": true},
+}
+
+// generalReadKinds: alles, was get_resource/describe_resource lesen dürfen.
+var generalReadKinds = map[string]bool{
+	"Deployment": true, "StatefulSet": true, "DaemonSet": true, "Pod": true,
+	"ConfigMap": true, "Secret": true, "Service": true, "Ingress": true,
+	"NetworkPolicy": true, "PodDisruptionBudget": true, "HorizontalPodAutoscaler": true,
+	"CronJob": true, "Job": true, "PersistentVolumeClaim": true, "Node": true,
+	"Namespace": true, "ServiceAccount": true, "ResourceQuota": true, "LimitRange": true,
 }
 
 // validateActionParams prüft die typisierten Params je Kind — nichts
@@ -209,8 +233,144 @@ func validateActionParams(w http.ResponseWriter, kind string, raw json.RawMessag
 			writeErr(w, http.StatusBadRequest, "rollout_to_revision requires params.revision >= 1")
 			return false
 		}
+	case "patch_secret":
+		var p struct {
+			Key    string `json:"key"`
+			Value  string `json:"value"`
+			Remove bool   `json:"remove"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || p.Key == "" || len(p.Key) > 253 || len(p.Value) > 64*1024 {
+			writeErr(w, http.StatusBadRequest, "patch_secret requires params.key (<=253 chars, value <=64KiB)")
+			return false
+		}
+	case "create_configmap":
+		var p struct {
+			Data map[string]string `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || len(p.Data) == 0 {
+			writeErr(w, http.StatusBadRequest, "create_configmap requires params.data (non-empty map)")
+			return false
+		}
+		total := 0
+		for k, v := range p.Data {
+			if k == "" || len(k) > 253 {
+				writeErr(w, http.StatusBadRequest, "create_configmap keys must be 1..253 chars")
+				return false
+			}
+			total += len(v)
+		}
+		if total > 512*1024 {
+			writeErr(w, http.StatusBadRequest, "create_configmap data too large (max 512KiB)")
+			return false
+		}
+	case "pdb_set":
+		var p struct {
+			MinAvailable   *string `json:"minAvailable"`
+			MaxUnavailable *string `json:"maxUnavailable"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || (p.MinAvailable == nil && p.MaxUnavailable == nil) || (p.MinAvailable != nil && p.MaxUnavailable != nil) {
+			writeErr(w, http.StatusBadRequest, "pdb_set requires EXACTLY ONE of params.minAvailable / params.maxUnavailable (int or percentage string)")
+			return false
+		}
+	case "patch_resource":
+		if len(raw) > 64*1024 {
+			writeErr(w, http.StatusBadRequest, "patch_resource params too large (max 64KiB)")
+			return false
+		}
+		var p struct {
+			Patch map[string]any `json:"patch"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || len(p.Patch) == 0 {
+			writeErr(w, http.StatusBadRequest, "patch_resource requires params.patch (JSON merge patch object)")
+			return false
+		}
+		// Identität/Typ dürfen nie umgeschrieben werden.
+		for _, forbidden := range []string{"kind", "apiVersion"} {
+			if _, ok := p.Patch[forbidden]; ok {
+				writeErr(w, http.StatusBadRequest, "patch_resource must not change "+forbidden)
+				return false
+			}
+		}
+		if md, ok := p.Patch["metadata"].(map[string]any); ok {
+			for _, forbidden := range []string{"name", "namespace", "uid"} {
+				if _, bad := md[forbidden]; bad {
+					writeErr(w, http.StatusBadRequest, "patch_resource must not change metadata."+forbidden)
+					return false
+				}
+			}
+		}
+	case "pvc_expand":
+		var p struct {
+			Size string `json:"size"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || p.Size == "" || len(p.Size) > 32 {
+			writeErr(w, http.StatusBadRequest, "pvc_expand requires params.size (e.g. \"20Gi\")")
+			return false
+		}
+	case "exec_readonly":
+		var p struct {
+			Command   []string `json:"command"`
+			Container string   `json:"container"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || len(p.Command) == 0 {
+			writeErr(w, http.StatusBadRequest, "exec_readonly requires params.command (argv array)")
+			return false
+		}
+		if err := validateExecCommand(p.Command); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return false
+		}
+	case "restore_resource":
+		if len(raw) > 300*1024 {
+			writeErr(w, http.StatusBadRequest, "restore_resource snapshot too large")
+			return false
+		}
+		var p struct {
+			Snapshot map[string]any `json:"snapshot"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || len(p.Snapshot) == 0 {
+			writeErr(w, http.StatusBadRequest, "restore_resource requires params.snapshot (the before-object)")
+			return false
+		}
+	case "get_secret":
+		// keine Params nötig; reveal ist bewusst NICHT implementiert (v1) —
+		// Secret-Werte erreichen weder LLM noch DB.
 	}
 	return true
+}
+
+// execAllowedCommands: read-only Diagnose-Kommandos, argv-basiert (keine Shell).
+var execAllowedCommands = map[string]bool{
+	"cat": true, "ls": true, "head": true, "tail": true, "df": true, "du": true,
+	"stat": true, "wc": true, "env": true, "id": true, "uname": true, "find": true,
+}
+
+// validateExecCommand erzwingt Whitelist + verbietet Shell-Metazeichen — es gibt
+// keine Shell, aber Defense-in-Depth gegen busybox-Wrapper und Log-Injection.
+func validateExecCommand(argv []string) error {
+	if !execAllowedCommands[argv[0]] {
+		return fmt.Errorf("exec_readonly: command %q is not in the read-only whitelist", argv[0])
+	}
+	if len(argv) > 12 {
+		return errors.New("exec_readonly: too many arguments (max 12)")
+	}
+	for _, a := range argv {
+		if len(a) > 512 {
+			return errors.New("exec_readonly: argument too long")
+		}
+		if strings.ContainsAny(a, "|;&$><`\n\r") {
+			return fmt.Errorf("exec_readonly: argument %q contains shell metacharacters", a)
+		}
+	}
+	// find darf nicht in -exec/-delete eskalieren.
+	if argv[0] == "find" {
+		for _, a := range argv[1:] {
+			if a == "-exec" || a == "-execdir" || a == "-delete" || a == "-ok" || a == "-okdir" {
+				return errors.New("exec_readonly: find must not use -exec/-delete")
+			}
+		}
+	}
+	return nil
 }
 
 type createActionReq struct {
@@ -223,6 +383,12 @@ type createActionReq struct {
 	// Dispatch GESNAPSHOTTET — der Audit-Trail zeigt exakt, was lief.
 	DefinitionID string            `json:"definitionId"`
 	Args         map[string]string `json:"args"`
+	// Ad-hoc-Script (Copilot propose_script): Source direkt statt Definition.
+	// Wird wie im Editor kompiliert (checkScriptSource) — nichts Kaputtes läuft.
+	Source         string            `json:"source"`
+	Title          string            `json:"title"`
+	TimeoutSeconds int               `json:"timeoutSeconds"`
+	ScriptArgs     map[string]string `json:"scriptArgs"`
 }
 
 // handleCreateAction — POST /api/orgs/{org}/clusters/{cluster}/actions
@@ -248,7 +414,40 @@ func (s *Server) handleCreateAction(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.Kind == "script" {
+	if req.Kind == "script" && req.DefinitionID == "" && req.Source != "" {
+		// Ad-hoc-Script vom Copilot (propose_script): kompilieren wie im Editor,
+		// dann als normale Script-Action (destructive, arm-to-fire) einreihen.
+		if len(req.Source) > 64*1024 {
+			writeErr(w, http.StatusBadRequest, "script source too large (max 64KiB)")
+			return
+		}
+		title := req.Title
+		if title == "" {
+			title = "adhoc-script"
+		}
+		if err := checkScriptSource(title, req.Source); err != nil {
+			writeErr(w, http.StatusBadRequest, "script does not compile: "+err.Error())
+			return
+		}
+		timeout := req.TimeoutSeconds
+		if timeout < 30 || timeout > 1800 {
+			timeout = 600
+		}
+		if req.ScriptArgs == nil {
+			req.ScriptArgs = map[string]string{}
+		}
+		params, _ := json.Marshal(map[string]any{
+			"source":         req.Source,
+			"args":           req.ScriptArgs,
+			"timeoutSeconds": timeout,
+		})
+		req.Params = params
+		req.TargetKind = "Script"
+		req.TargetName = title
+		if req.TargetNamespace == "" {
+			req.TargetNamespace = "-"
+		}
+	} else if req.Kind == "script" {
 		defID, err := uuid.Parse(req.DefinitionID)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, "script actions require a definitionId")
@@ -397,22 +596,27 @@ func (s *Server) handleAgentActionResult(w http.ResponseWriter, r *http.Request)
 		Steps    json.RawMessage `json:"steps"`
 		// Revert: inverse Katalog-Action mit Before-Snapshot (nur bei succeeded).
 		Revert json.RawMessage `json:"revert"`
+		// Snapshot: das VOR der Mutation gestrippte Zielobjekt (generisch).
+		Snapshot json.RawMessage `json:"snapshot"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	if len(req.Result) > 4000 {
-		req.Result = req.Result[:4000]
+	if len(req.Result) > 32_000 {
+		req.Result = req.Result[:32_000]
 	}
 	if len(req.Progress) > 500 {
 		req.Progress = req.Progress[:500]
 	}
-	if len(req.Steps) > 16_000 {
+	if len(req.Steps) > 64_000 {
 		writeErr(w, http.StatusBadRequest, "steps too large")
 		return
 	}
-	if len(req.Revert) > 8_000 {
+	if len(req.Revert) > 300_000 {
 		req.Revert = nil // Revert ist optional — zu groß heisst schlicht: keiner
+	}
+	if len(req.Snapshot) > 300_000 {
+		req.Snapshot = nil
 	}
 	var err2 error
 	cancel := false
@@ -423,6 +627,9 @@ func (s *Server) handleAgentActionResult(w http.ResponseWriter, r *http.Request)
 		cancel, err2 = s.store.UpdateActionProgress(r.Context(), clusterID, actionID, req.Progress, req.Steps)
 	case "succeeded", "failed", "cancelled":
 		err2 = s.store.CompleteAction(r.Context(), clusterID, actionID, req.Status, req.Result, req.Steps, req.Revert)
+		if err2 == nil && len(req.Snapshot) > 0 {
+			_ = s.store.SetActionSnapshot(r.Context(), clusterID, actionID, req.Snapshot)
+		}
 	default:
 		writeErr(w, http.StatusBadRequest, "status must be running, succeeded, failed or cancelled")
 		return

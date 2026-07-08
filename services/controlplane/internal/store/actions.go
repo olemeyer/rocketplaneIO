@@ -226,6 +226,18 @@ func (s *Store) CompleteAction(ctx context.Context, clusterID, actionID uuid.UUI
 	return nil
 }
 
+// SetActionSnapshot persistiert den generischen Before-Snapshot (gestripptes
+// Zielobjekt) einer abgeschlossenen Mutation — Audit + restore_resource-Basis.
+func (s *Store) SetActionSnapshot(ctx context.Context, clusterID, actionID uuid.UUID, snapshot json.RawMessage) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE cluster_actions SET snapshot = $3, updated_at = now()
+		WHERE id = $2 AND cluster_id = $1`, clusterID, actionID, snapshot)
+	if err != nil {
+		return fmt.Errorf("set action snapshot: %w", err)
+	}
+	return nil
+}
+
 // ListWorkloadPods liefert die Pods eines Workloads (für Panel + delete_pod).
 func (s *Store) ListWorkloadPods(ctx context.Context, clusterID uuid.UUID, ns, workloadKind, workloadName string) ([]model.WorkloadPod, error) {
 	rows, err := s.pool.Query(ctx, `

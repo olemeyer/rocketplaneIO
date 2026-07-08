@@ -27,7 +27,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 const (
@@ -77,7 +79,12 @@ type Runner struct {
 	baseURL   string
 	token     string
 	clientset kubernetes.Interface
-	http      *http.Client
+	// restCfg + dyn: generischer Zugriff (get_resource, patch_resource,
+	// restore_resource, Starlark raw_*, exec_readonly). Optional — ohne Config
+	// (Unit-Tests mit fake clientset) verweigern die generischen Kinds sauber.
+	restCfg *rest.Config
+	dyn     dynamic.Interface
+	http    *http.Client
 	// streamHTTP hat KEIN Client-Timeout — das würde den SSE-Stream nach
 	// requestTimeout kappen; tote Verbindungen erkennt der Watchdog (stream.go).
 	streamHTTP *http.Client
@@ -95,11 +102,21 @@ type Runner struct {
 	cancels    map[string]func()
 }
 
-func New(baseURL, token string, clientset kubernetes.Interface, onExecuted func()) *Runner {
+func New(baseURL, token string, clientset kubernetes.Interface, restCfg *rest.Config, onExecuted func()) *Runner {
+	var dyn dynamic.Interface
+	if restCfg != nil {
+		if d, err := dynamic.NewForConfig(restCfg); err == nil {
+			dyn = d
+		} else {
+			log.Printf("actions: dynamic client unavailable: %v (generic kinds disabled)", err)
+		}
+	}
 	return &Runner{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		token:      token,
 		clientset:  clientset,
+		restCfg:    restCfg,
+		dyn:        dyn,
 		http:       &http.Client{Timeout: requestTimeout},
 		streamHTTP: &http.Client{},
 		sem:        make(chan struct{}, maxConcurrent),
@@ -201,7 +218,8 @@ func (r *Runner) execute(ctx context.Context, a Action) {
 	r.registerCancel(a.ID, requestCancel)
 	defer r.unregisterCancel(a.ID)
 	undoDesc, undoFn := r.prepareUndo(ctx, a)
-	revertSpec := r.prepareRevert(ctx, a) // inverse Action mit VOR-Zustand (für Revert-später)
+	revertSpec := r.prepareRevert(ctx, a)  // inverse Action mit VOR-Zustand (für Revert-später)
+	snapshot := r.prepareSnapshot(ctx, a) // generischer Before-Snapshot (Audit + restore)
 
 	steps := r.plan(a)
 	states := make([]stepState, len(steps))
@@ -229,7 +247,7 @@ func (r *Runner) execute(ctx context.Context, a Action) {
 		if status == "succeeded" {
 			rev = revertSpec // nur ein ERFOLG hat einen sinnvollen Revert
 		}
-		r.reportWithRevert(ctx, a.ID, status, result, "", states, rev)
+		r.reportFull(ctx, a.ID, status, result, "", states, rev, snapshot)
 		if r.onExecuted != nil {
 			r.onExecuted()
 		}
@@ -414,6 +432,32 @@ func (r *Runner) plan(a Action) []step {
 		return r.planRolloutHistory(a)
 	case "drain_preview":
 		return r.planDrainPreview(a)
+	case "get_resource":
+		return r.planGetResource(a)
+	case "describe_resource":
+		return r.planDescribeResource(a)
+	case "get_secret":
+		return r.planGetSecret(a)
+	case "helm_releases":
+		return r.planHelmReleases(a)
+	case "exec_readonly":
+		return r.planExecReadonly(a)
+	case "patch_secret":
+		return r.planPatchSecret(a)
+	case "create_configmap":
+		return r.planCreateConfigmap(a)
+	case "delete_configmap":
+		return r.planDeleteConfigmap(a)
+	case "pdb_set":
+		return r.planPDBSet(a)
+	case "patch_resource":
+		return r.planPatchResource(a)
+	case "pvc_expand":
+		return r.planPVCExpand(a)
+	case "delete_job":
+		return r.planDeleteJob(a)
+	case "restore_resource":
+		return r.planRestoreResource(a)
 	case "delete_pod":
 		return []step{
 			{name: "delete", run: func(ctx context.Context, _ func(string)) (string, error) {
@@ -513,8 +557,101 @@ func (r *Runner) prepareUndo(ctx context.Context, a Action) (string, func(contex
 		return r.undoPartition(ctx, a)
 	case "rollout_to_revision":
 		return r.undoTemplateReplace(ctx, a)
+	case "patch_secret":
+		return r.undoPatchSecret(ctx, a)
+	case "create_configmap":
+		return "created configmap deleted again", func(rctx context.Context) error {
+			return r.clientset.CoreV1().ConfigMaps(a.TargetNamespace).Delete(rctx, a.TargetName, metav1.DeleteOptions{})
+		}
+	case "delete_configmap":
+		cm, err := r.clientset.CoreV1().ConfigMaps(a.TargetNamespace).Get(ctx, a.TargetName, metav1.GetOptions{})
+		if err != nil {
+			return "", nil
+		}
+		saved := cm.DeepCopy()
+		saved.ObjectMeta = metav1.ObjectMeta{Name: cm.Name, Namespace: cm.Namespace, Labels: cm.Labels, Annotations: cm.Annotations}
+		return "configmap recreated from before-state", func(rctx context.Context) error {
+			_, err := r.clientset.CoreV1().ConfigMaps(a.TargetNamespace).Create(rctx, saved, metav1.CreateOptions{FieldManager: "rocketplane-agent"})
+			return err
+		}
+	case "pdb_set":
+		return r.undoPDBSet(ctx, a)
+	case "patch_resource", "restore_resource":
+		// Generisch: Before-Objekt sichern und bei Fehlschlag per SSA re-applyen.
+		return r.undoGenericApply(ctx, a)
 	}
 	return "", nil
+}
+
+// undoPatchSecret sichert den Vorher-Wert des EINEN Keys (Key-Level-Inverse).
+func (r *Runner) undoPatchSecret(ctx context.Context, a Action) (string, func(context.Context) error) {
+	var p patchSecretParams
+	if err := json.Unmarshal(a.Params, &p); err != nil || p.Key == "" {
+		return "", nil
+	}
+	sec, err := r.clientset.CoreV1().Secrets(a.TargetNamespace).Get(ctx, a.TargetName, metav1.GetOptions{})
+	if err != nil {
+		return "", nil
+	}
+	prev, existed := sec.Data[p.Key]
+	prevCopy := append([]byte(nil), prev...)
+	return fmt.Sprintf("restored previous state of key %q", p.Key), func(rctx context.Context) error {
+		cur, err := r.clientset.CoreV1().Secrets(a.TargetNamespace).Get(rctx, a.TargetName, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if cur.Data == nil {
+			cur.Data = map[string][]byte{}
+		}
+		if existed {
+			cur.Data[p.Key] = prevCopy
+		} else {
+			delete(cur.Data, p.Key)
+		}
+		_, err = r.clientset.CoreV1().Secrets(a.TargetNamespace).Update(rctx, cur, metav1.UpdateOptions{FieldManager: "rocketplane-agent"})
+		return err
+	}
+}
+
+// undoPDBSet sichert die Vorher-Grenzen des PDB.
+func (r *Runner) undoPDBSet(ctx context.Context, a Action) (string, func(context.Context) error) {
+	pdb, err := r.clientset.PolicyV1().PodDisruptionBudgets(a.TargetNamespace).Get(ctx, a.TargetName, metav1.GetOptions{})
+	if err != nil {
+		return "", nil
+	}
+	prevMin := pdb.Spec.MinAvailable
+	prevMax := pdb.Spec.MaxUnavailable
+	return "restored previous PDB bounds", func(rctx context.Context) error {
+		cur, err := r.clientset.PolicyV1().PodDisruptionBudgets(a.TargetNamespace).Get(rctx, a.TargetName, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		cur.Spec.MinAvailable = prevMin
+		cur.Spec.MaxUnavailable = prevMax
+		_, err = r.clientset.PolicyV1().PodDisruptionBudgets(a.TargetNamespace).Update(rctx, cur, metav1.UpdateOptions{FieldManager: "rocketplane-agent"})
+		return err
+	}
+}
+
+// undoGenericApply sichert das Before-Objekt generisch und stellt es per
+// Server-Side-Apply wieder her (patch_resource/restore_resource-Rollback).
+func (r *Runner) undoGenericApply(ctx context.Context, a Action) (string, func(context.Context) error) {
+	if r.dyn == nil {
+		return "", nil
+	}
+	u, err := r.getUnstructured(ctx, a.TargetKind, a.TargetNamespace, a.TargetName)
+	if err != nil {
+		return "", nil
+	}
+	before, err := json.Marshal(stripForSnapshot(u))
+	if err != nil {
+		return "", nil
+	}
+	gvr := kindGVR[a.TargetKind]
+	return "before-state re-applied", func(rctx context.Context) error {
+		_, err := r.dyn.Resource(gvr).Namespace(a.TargetNamespace).Patch(rctx, a.TargetName, types.ApplyPatchType, before, metav1.PatchOptions{FieldManager: "rocketplane-agent", Force: boolPtr(true)})
+		return err
+	}
 }
 
 /* ── Trigger ────────────────────────────────────────────────────────────── */
@@ -953,6 +1090,10 @@ func (r *Runner) report(ctx context.Context, actionID, status, result, progress 
 // reportWithRevert: wie report, liefert bei Endergebnissen zusätzlich die
 // inverse Katalog-Action (Before-Snapshot) für den Revert-Button der Runs-Seite.
 func (r *Runner) reportWithRevert(ctx context.Context, actionID, status, result, progress string, steps []stepState, revert json.RawMessage) bool {
+	return r.reportFull(ctx, actionID, status, result, progress, steps, revert, nil)
+}
+
+func (r *Runner) reportFull(ctx context.Context, actionID, status, result, progress string, steps []stepState, revert, snapshot json.RawMessage) bool {
 	body := map[string]any{
 		"status":   status,
 		"result":   result,
@@ -961,6 +1102,9 @@ func (r *Runner) reportWithRevert(ctx context.Context, actionID, status, result,
 	}
 	if len(revert) > 0 {
 		body["revert"] = revert
+	}
+	if len(snapshot) > 0 {
+		body["snapshot"] = snapshot
 	}
 	payload, _ := json.Marshal(body)
 	attempts := 1

@@ -262,6 +262,54 @@ func (r *Runner) prepareRevert(ctx context.Context, a Action) json.RawMessage {
 			prev = *ru.Partition
 		}
 		return revertSpecJSON("statefulset_partition", ns, tk, tn, map[string]any{"partition": prev})
+
+	case "patch_secret":
+		// Key-Level-Inverse wie patch_configmap. WICHTIG: der Vorher-Wert wandert
+		// in die Revert-Params (DB) — bewusste v1-Entscheidung, dokumentiert:
+		// wer patch_secret revertieren will, braucht den Wert.
+		var p patchSecretParams
+		_ = json.Unmarshal(a.Params, &p)
+		sec, err := r.clientset.CoreV1().Secrets(ns).Get(ctx, tn, metav1.GetOptions{})
+		if err != nil || p.Key == "" {
+			return nil
+		}
+		if prev, had := sec.Data[p.Key]; had {
+			return revertSpecJSON("patch_secret", ns, tk, tn, map[string]any{"key": p.Key, "value": string(prev)})
+		}
+		return revertSpecJSON("patch_secret", ns, tk, tn, map[string]any{"key": p.Key, "remove": true})
+
+	case "create_configmap":
+		return revertSpecJSON("delete_configmap", ns, tk, tn, nil)
+
+	case "delete_configmap":
+		// Revert = restore_resource mit dem Before-Snapshot.
+		u, err := r.getUnstructured(ctx, "ConfigMap", ns, tn)
+		if err != nil {
+			return nil
+		}
+		return revertSpecJSON("restore_resource", ns, "ConfigMap", tn, map[string]any{"snapshot": stripForSnapshot(u)})
+
+	case "pdb_set":
+		pdb, err := r.clientset.PolicyV1().PodDisruptionBudgets(ns).Get(ctx, tn, metav1.GetOptions{})
+		if err != nil {
+			return nil
+		}
+		if pdb.Spec.MinAvailable != nil {
+			return revertSpecJSON("pdb_set", ns, tk, tn, map[string]any{"minAvailable": pdb.Spec.MinAvailable.String()})
+		}
+		if pdb.Spec.MaxUnavailable != nil {
+			return revertSpecJSON("pdb_set", ns, tk, tn, map[string]any{"maxUnavailable": pdb.Spec.MaxUnavailable.String()})
+		}
+		return nil
+
+	case "patch_resource", "restore_resource":
+		// Revert = restore_resource mit dem VOR diesem Lauf gültigen Objekt —
+		// auch ein Restore ist damit selbst wieder revertierbar (Kette).
+		u, err := r.getUnstructured(ctx, tk, ns, tn)
+		if err != nil {
+			return nil
+		}
+		return revertSpecJSON("restore_resource", ns, tk, tn, map[string]any{"snapshot": stripForSnapshot(u)})
 	}
 	return nil
 }

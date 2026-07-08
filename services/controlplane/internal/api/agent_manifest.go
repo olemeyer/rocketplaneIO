@@ -94,6 +94,35 @@ rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "delete"]
+  # Katalog Batch 2 — get_resource/describe_resource (Config lesen), patch_secret,
+  # patch_configmap, create/delete_configmap, Helm-Release-Einblick (Secrets lesen)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts", "resourcequotas", "limitranges"]
+    verbs: ["get", "list"]
+  # exec_readonly: EIN whitelisted Diagnose-Kommando (cat/ls/…) im Container
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  # patch_resource/restore_resource: Service/Ingress/NetworkPolicy/PDB editieren
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["patch", "update"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  # pvc_expand: Storage-Requests vergrößern (nur wachsen — Guard im Agenten)
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

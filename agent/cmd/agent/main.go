@@ -137,7 +137,7 @@ func main() {
 		// (Fallback: seltener Poll), ausgeführt wird im Cluster — outbound-only.
 		// Nach jeder Aktion Topologie-Burst — die UI sieht den Rollout live.
 		go func() {
-			runner := actions.New(controlplaneURL, resp.AgentToken, clientset, syncer.TriggerTopologySync)
+			runner := actions.New(controlplaneURL, resp.AgentToken, clientset, cfg, syncer.TriggerTopologySync)
 			if err := runner.Run(runCtx); err != nil && runCtx.Err() == nil {
 				log.Printf("actions: %v", err)
 			}
