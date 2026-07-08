@@ -8,6 +8,64 @@ export interface User {
   email: string;
   name: string;
   avatarUrl?: string;
+  isPlatformAdmin?: boolean;
+  suspendedAt?: string | null;
+  createdAt?: string;
+}
+
+/** A member of an org (Settings > Members). */
+export interface Member {
+  userId: string;
+  email: string;
+  name: string;
+  avatarUrl?: string;
+  role: OrgRole;
+  joinedAt: string;
+  isYou?: boolean;
+}
+
+/** A pending (or accepted) org invitation. */
+export interface Invitation {
+  id: string;
+  orgId: string;
+  email: string;
+  role: OrgRole;
+  invitedBy?: string;
+  createdAt: string;
+  expiresAt: string;
+  acceptedAt?: string | null;
+  orgName?: string;
+  token?: string; // only returned once, at creation
+  acceptUrl?: string;
+}
+
+/** One audit-log entry (Settings > Audit / admin console). */
+export interface AuditEntry {
+  id: string;
+  orgId?: string | null;
+  actorEmail: string;
+  action: string;
+  targetType: string;
+  targetId?: string;
+  targetName?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+}
+
+/** Platform-admin user directory row. */
+export interface AdminUser extends User {
+  orgCount: number;
+}
+
+/** Platform-admin org directory row. */
+export interface AdminOrg {
+  id: string;
+  name: string;
+  slug: string;
+  isPersonal: boolean;
+  createdAt: string;
+  memberCount: number;
+  clusterCount: number;
 }
 
 /** Org wie sie in /api/me zurückkommt (inkl. Rolle des aktuellen Users). */

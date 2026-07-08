@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/cn';
 import { initials } from '@/lib/format';
 import { Skeleton } from '@/components/ui';
@@ -8,10 +9,11 @@ import { logout } from '@/lib/api/controlplane';
 import { useMe } from './me-context';
 import { Popover, MenuItem } from './popover';
 
-// User-Menu: Identität + Logout (POST /auth/logout → /login). Skin-agnostisch:
-// ink-Monogramm als Avatar, Radius token-getrieben (Swiss eckig, Aurora dezent weich).
+// User-Menu: Identität + Org-Settings + (Platform-Admin) + Logout.
+// Skin-agnostisch: ink-Monogramm als Avatar, Radius token-getrieben.
 export function UserMenu() {
   const { me, loading } = useMe();
+  const router = useRouter();
   const [busy, setBusy] = useState(false);
 
   if (loading && !me) {
@@ -83,6 +85,25 @@ export function UserMenu() {
               ) : null}
             </div>
           </div>
+
+          <div className="my-1 h-px bg-line" />
+
+          <MenuItem onClick={() => { close(); router.push('/settings'); }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="square" />
+            </svg>
+            <span className="rp-label">Organization settings</span>
+          </MenuItem>
+
+          {user.isPlatformAdmin ? (
+            <MenuItem onClick={() => { close(); router.push('/admin'); }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path d="M12 3l7 3.5v5c0 4.6-3 8-7 9.5-4-1.5-7-4.9-7-9.5v-5z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="miter" />
+                <path d="M9 12l2 2 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="square" strokeLinejoin="miter" />
+              </svg>
+              <span className="rp-label">Admin console</span>
+            </MenuItem>
+          ) : null}
 
           <div className="my-1 h-px bg-line" />
 

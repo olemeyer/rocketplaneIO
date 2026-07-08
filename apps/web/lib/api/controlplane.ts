@@ -1,12 +1,18 @@
 // Typisierte Contract-Funktionen (docs/architecture.md §5). Dünne Hülle um apiFetch.
 import { apiFetch } from './client';
 import type {
+  AdminOrg,
+  AdminUser,
+  AuditEntry,
   Cluster,
   ClusterDetail,
   ConnectClusterResponse,
+  Invitation,
   LogsParams,
   LogsResponse,
   Me,
+  Member,
+  OrgRole,
   OrgSummary,
   ReconnectResponse,
   ServiceMap,
@@ -48,6 +54,61 @@ export function switchOrg(orgId: string): Promise<unknown> {
     method: 'POST',
     body: JSON.stringify({ orgId }),
   });
+}
+
+export function renameOrg(orgId: string, name: string): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+}
+export function deleteOrg(orgId: string): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}`, { method: 'DELETE' });
+}
+export function transferOwnership(orgId: string, userId: string): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/transfer`, { method: 'POST', body: JSON.stringify({ userId }) });
+}
+
+/* ── Members & invitations ──────────────────────────────────────────────── */
+
+export function listMembers(orgId: string): Promise<{ members: Member[] }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/members`);
+}
+export function updateMemberRole(orgId: string, userId: string, role: OrgRole): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/members/${enc(userId)}`, { method: 'PATCH', body: JSON.stringify({ role }) });
+}
+export function removeMember(orgId: string, userId: string): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/members/${enc(userId)}`, { method: 'DELETE' });
+}
+export function listInvitations(orgId: string): Promise<{ invitations: Invitation[] }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/invitations`);
+}
+export function createInvitation(orgId: string, email: string, role: OrgRole): Promise<{ invitation: Invitation }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/invitations`, { method: 'POST', body: JSON.stringify({ email, role }) });
+}
+export function revokeInvitation(orgId: string, inviteId: string): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/invitations/${enc(inviteId)}`, { method: 'DELETE' });
+}
+export function previewInvitation(token: string): Promise<{ orgName: string; email: string; role: OrgRole; expiresAt: string }> {
+  return apiFetch(`/api/invitations/${enc(token)}`);
+}
+export function acceptInvitation(token: string): Promise<{ orgId: string }> {
+  return apiFetch(`/api/invitations/${enc(token)}/accept`, { method: 'POST' });
+}
+export function listAudit(orgId: string, limit = 100): Promise<{ entries: AuditEntry[] }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/audit?limit=${limit}`);
+}
+
+/* ── Platform admin (super admin) ───────────────────────────────────────── */
+
+export function adminStats(): Promise<{ stats: Record<string, number> }> {
+  return apiFetch(`/api/admin/stats`);
+}
+export function adminListUsers(search = '', limit = 200): Promise<{ users: AdminUser[] }> {
+  return apiFetch(`/api/admin/users?search=${enc(search)}&limit=${limit}`);
+}
+export function adminListOrgs(search = '', limit = 200): Promise<{ orgs: AdminOrg[] }> {
+  return apiFetch(`/api/admin/orgs?search=${enc(search)}&limit=${limit}`);
+}
+export function adminSetUserFlags(userId: string, flags: { suspended?: boolean; platformAdmin?: boolean }): Promise<unknown> {
+  return apiFetch(`/api/admin/users/${enc(userId)}`, { method: 'PATCH', body: JSON.stringify(flags) });
 }
 
 /* ── Clusters ───────────────────────────────────────────────────────────── */
