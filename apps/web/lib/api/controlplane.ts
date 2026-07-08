@@ -412,6 +412,119 @@ export function getAlertEvents(
   return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/alert-events?limit=${limit}`);
 }
 
+/* ── Incidents ─────────────────────────────────────────────────────────── */
+
+type IncidentT = import('./types').Incident;
+type IncidentEventT = import('./types').IncidentEvent;
+
+function incBase(orgId: string, clusterId: string): string {
+  return `/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/incidents`;
+}
+
+export function getIncidents(
+  orgId: string,
+  clusterId: string,
+  status = '',
+  limit = 100,
+): Promise<{ incidents: IncidentT[] }> {
+  const q = new URLSearchParams();
+  if (status) q.set('status', status);
+  q.set('limit', String(limit));
+  return apiFetch(`${incBase(orgId, clusterId)}?${q.toString()}`);
+}
+
+export function getIncidentStats(
+  orgId: string,
+  clusterId: string,
+): Promise<{ stats: import('./types').IncidentStats }> {
+  return apiFetch(`${incBase(orgId, clusterId)}/stats`);
+}
+
+export function getIncident(
+  orgId: string,
+  clusterId: string,
+  id: string,
+): Promise<{ incident: IncidentT; timeline: IncidentEventT[] }> {
+  return apiFetch(`${incBase(orgId, clusterId)}/${enc(id)}`);
+}
+
+export function createIncident(
+  orgId: string,
+  clusterId: string,
+  body: { title: string; summary?: string; severity?: string },
+): Promise<IncidentT> {
+  return apiFetch(incBase(orgId, clusterId), { method: 'POST', body: JSON.stringify(body) });
+}
+
+export function updateIncident(
+  orgId: string,
+  clusterId: string,
+  id: string,
+  body: { title?: string; summary?: string; severity?: string },
+): Promise<IncidentT> {
+  return apiFetch(`${incBase(orgId, clusterId)}/${enc(id)}`, { method: 'PATCH', body: JSON.stringify(body) });
+}
+
+export function setIncidentStatus(
+  orgId: string,
+  clusterId: string,
+  id: string,
+  status: string,
+): Promise<IncidentT> {
+  return apiFetch(`${incBase(orgId, clusterId)}/${enc(id)}/status`, {
+    method: 'POST',
+    body: JSON.stringify({ status }),
+  });
+}
+
+export function assignIncident(
+  orgId: string,
+  clusterId: string,
+  id: string,
+  userId: string | null,
+): Promise<IncidentT> {
+  return apiFetch(`${incBase(orgId, clusterId)}/${enc(id)}/assign`, {
+    method: 'POST',
+    body: JSON.stringify({ userId }),
+  });
+}
+
+export function addIncidentNote(
+  orgId: string,
+  clusterId: string,
+  id: string,
+  note: string,
+): Promise<{ timeline: IncidentEventT[] }> {
+  return apiFetch(`${incBase(orgId, clusterId)}/${enc(id)}/notes`, {
+    method: 'POST',
+    body: JSON.stringify({ note }),
+  });
+}
+
+export function setIncidentPostmortem(
+  orgId: string,
+  clusterId: string,
+  id: string,
+  text: string,
+): Promise<IncidentT> {
+  return apiFetch(`${incBase(orgId, clusterId)}/${enc(id)}/postmortem`, {
+    method: 'PUT',
+    body: JSON.stringify({ text }),
+  });
+}
+
+export function linkInvestigation(
+  orgId: string,
+  clusterId: string,
+  id: string,
+  chatId: string,
+): Promise<{ timeline: IncidentEventT[] }> {
+  return apiFetch(`${incBase(orgId, clusterId)}/${enc(id)}/link-investigation`, {
+    method: 'POST',
+    body: JSON.stringify({ chatId }),
+  });
+}
+
 /* ── Derived Metrics ──────────────────────────────────────────────────────── */
 
 export function getMetricDefinitions(

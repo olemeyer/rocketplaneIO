@@ -509,6 +509,69 @@ export interface AlertEvent {
   message: string;
 }
 
+/* ── Incidents ─────────────────────────────────────────────────────────── */
+
+export type IncidentSeverity = 'critical' | 'high' | 'medium' | 'low';
+export type IncidentStatus = 'open' | 'acknowledged' | 'mitigated' | 'resolved';
+export type IncidentSource = 'manual' | 'alert' | 'copilot';
+
+/** Incident — die Klammer über einen Vorfall (Alerts + Investigations + Actions). */
+export interface Incident {
+  id: string;
+  orgId: string;
+  clusterId: string;
+  number: number;
+  title: string;
+  summary: string;
+  severity: IncidentSeverity;
+  status: IncidentStatus;
+  source: IncidentSource;
+  assigneeId?: string;
+  assigneeName?: string;
+  assigneeEmail?: string;
+  createdBy?: string;
+  createdByName?: string;
+  acknowledgedAt?: string;
+  mitigatedAt?: string;
+  resolvedAt?: string;
+  postmortem: string;
+  createdAt: string;
+  updatedAt: string;
+  eventCount?: number;
+}
+
+/** Ein Eintrag der Incident-Timeline. */
+export interface IncidentEvent {
+  id: string;
+  incidentId: string;
+  at: string;
+  kind:
+    | 'declared'
+    | 'status'
+    | 'severity'
+    | 'assigned'
+    | 'note'
+    | 'alert'
+    | 'alert_cleared'
+    | 'investigation'
+    | 'action'
+    | 'postmortem';
+  actorId?: string;
+  actorEmail?: string;
+  message: string;
+  refType?: string;
+  refId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface IncidentStats {
+  open: number;
+  unacknowledged: number;
+  critical: number;
+  mttaSeconds: number;
+  mttrSeconds: number;
+}
+
 /** Derived Metric: Logs/Spans → benannte Zeitreihe (Better-Stack-Muster). */
 export interface MetricDefinition {
   id: string;

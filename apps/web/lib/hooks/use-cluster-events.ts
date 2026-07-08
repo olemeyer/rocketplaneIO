@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from 'react';
 // seltenen FALLBACK (Robustheit bei Proxy-Problemen); EventSource selbst
 // reconnected automatisch.
 
-export type ClusterEventType = 'topology' | 'actions' | 'logs' | 'namespaces' | 'alerts';
+export type ClusterEventType = 'topology' | 'actions' | 'logs' | 'namespaces' | 'alerts' | 'incidents';
 
 export function useClusterEvents(
   orgId: string | undefined,
@@ -38,6 +38,7 @@ export function useClusterEvents(
       ['logs', on('logs')],
       ['namespaces', on('namespaces')],
       ['alerts', on('alerts')],
+      ['incidents', on('incidents')],
     ];
     for (const [type, fn] of listeners) es.addEventListener(type, fn);
     es.onerror = () => setLive(false); // EventSource reconnected selbst

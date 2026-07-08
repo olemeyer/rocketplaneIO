@@ -74,6 +74,15 @@ function AlertsIcon() {
   );
 }
 
+function IncidentsIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path d="M8 1.8 2 4.5v3.7c0 3.4 2.4 5.6 6 6.5 3.6-.9 6-3.1 6-6.5V4.5L8 1.8Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M8 5.3v3.1M8 10.5v.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function TracesIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
@@ -209,8 +218,9 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
       ],
     },
     {
-      label: 'Act',
+      label: 'Respond',
       items: [
+        { label: 'Incidents', href: `${base}/incidents`, icon: <IncidentsIcon /> },
         { label: 'Actions', href: `${base}/actions`, icon: <ActionsIcon /> },
         { label: 'Runs', href: `${base}/runs`, icon: <RunsIcon /> },
       ],
