@@ -114,11 +114,14 @@ func tools() []tool {
 	return []tool{
 		{
 			name: "query_logs",
-			desc: "Read recent container logs (severity, workload, body). Use to investigate errors. Filter by namespace/workload and a full-text search.",
+			desc: "Read recent container logs (severity, workload, body). Use to investigate errors. Filter by namespace/workload; body matching supports substring (search), RE2 regex (regex, prefix (?i) for case-insensitive), NOT-substrings (exclude) and a typo-tolerant fuzzy term.",
 			schema: obj(map[string]any{
 				"namespace": str("namespace filter (optional)"),
 				"workload":  str("workload/service name filter (optional)"),
-				"search":    str("full-text search in the log body (optional)"),
+				"search":    str("case-insensitive substring in the log body (optional)"),
+				"regex":     str("RE2 regex on the log body, e.g. (?i)oom|exit code 137 (optional)"),
+				"exclude":   str("comma-separated substrings that must NOT appear (optional)"),
+				"fuzzy":     str("typo-tolerant search term (optional)"),
 				"since":     str("lookback window, e.g. 15m, 1h, 6h (default 15m)"),
 				"limit":     intp("max lines (default 50)"),
 			}),
@@ -127,6 +130,13 @@ func tools() []tool {
 				put(q, "namespace", s(a, "namespace"))
 				put(q, "workload", s(a, "workload"))
 				put(q, "search", s(a, "search"))
+				put(q, "regex", s(a, "regex"))
+				for _, ex := range strings.Split(s(a, "exclude"), ",") {
+					if ex = strings.TrimSpace(ex); ex != "" {
+						q.Add("exclude", ex)
+					}
+				}
+				put(q, "fuzzy", s(a, "fuzzy"))
 				q.Set("since", orDef(s(a, "since"), "15m"))
 				q.Set("limit", strconv.Itoa(i(a, "limit", 50)))
 				return apiGet("/logs", q)
@@ -208,14 +218,71 @@ func tools() []tool {
 			},
 		},
 		{
-			name: "run_safe_action",
-			desc: "Execute a SAFE, reversible action from the catalog (scale, rollout_restart, rollout_undo, set_image, hpa_set, cordon, drain, cleanup_pods, …). Verified on the pod, auto-rolled-back on failure. Only ever offer this after investigating; destructive kinds should be confirmed by a human.",
+			name: "get_resource",
+			desc: "Read the FULL live spec of one Kubernetes object as YAML (like kubectl get -o yaml, noise stripped): ConfigMap (full data!), Deployment/StatefulSet/DaemonSet, Pod, Service, Ingress, NetworkPolicy, PodDisruptionBudget, HPA, CronJob, Job, PVC, Node, Namespace. Secrets show keys + sha256 hashes only.",
 			schema: obj(map[string]any{
-				"kind":            str("action kind, e.g. scale | rollout_restart | set_image | hpa_set | cordon | cleanup_pods"),
+				"kind":      str("exact resource kind, e.g. ConfigMap"),
+				"namespace": str("namespace ('-' for Node/Namespace)"),
+				"name":      str("object name"),
+			}, "kind", "name"),
+			call: func(a map[string]any) (string, error) {
+				return apiPost("/actions", map[string]any{
+					"kind": "get_resource", "targetNamespace": orDef(s(a, "namespace"), "-"),
+					"targetKind": s(a, "kind"), "targetName": s(a, "name"),
+				})
+			},
+		},
+		{
+			name: "describe_resource",
+			desc: "kubectl-describe-like view of one object: status, conditions and its recent events — the current state and why.",
+			schema: obj(map[string]any{
+				"kind":      str("exact resource kind"),
+				"namespace": str("namespace ('-' for Node/Namespace)"),
+				"name":      str("object name"),
+			}, "kind", "name"),
+			call: func(a map[string]any) (string, error) {
+				return apiPost("/actions", map[string]any{
+					"kind": "describe_resource", "targetNamespace": orDef(s(a, "namespace"), "-"),
+					"targetKind": s(a, "kind"), "targetName": s(a, "name"),
+				})
+			},
+		},
+		{
+			name: "get_secret",
+			desc: "Inspect a Secret WITHOUT revealing values: keys, value lengths and sha256 hashes. Plaintext never leaves the cluster.",
+			schema: obj(map[string]any{
+				"namespace": str("namespace"),
+				"name":      str("secret name"),
+			}, "namespace", "name"),
+			call: func(a map[string]any) (string, error) {
+				return apiPost("/actions", map[string]any{
+					"kind": "get_secret", "targetNamespace": s(a, "namespace"),
+					"targetKind": "Secret", "targetName": s(a, "name"),
+				})
+			},
+		},
+		{
+			name: "helm_releases",
+			desc: "List Helm releases (from sh.helm.release.v1 secrets): name, namespace, revision, status.",
+			schema: obj(map[string]any{
+				"namespace": str("filter to one namespace (omit for all)"),
+			}),
+			call: func(a map[string]any) (string, error) {
+				return apiPost("/actions", map[string]any{
+					"kind": "helm_releases", "targetNamespace": "-",
+					"targetKind": "Namespace", "targetName": orDef(s(a, "namespace"), "-"),
+				})
+			},
+		},
+		{
+			name: "run_safe_action",
+			desc: "Execute a SAFE, verified action from the catalog: scale, rollout_restart/undo/pause/resume/to_revision, set_image, set_env, set_resources, delete_pod, evict_pod, hpa_set, hpa_toggle, statefulset_partition, cordon/uncordon/drain, node_taint/untaint, patch_configmap, patch_secret, create/delete_configmap, pdb_set, patch_resource (Service/Ingress/NetworkPolicy/PDB merge patch), pvc_expand (grow only), delete_job, exec_readonly (whitelisted argv diagnostic command in a container), cronjob_trigger/suspend/resume, cleanup_pods/jobs, annotate, set_label. Verified on the pod, auto-rolled-back on failure, before-snapshot kept. Only ever offer this after investigating; destructive kinds should be confirmed by a human.",
+			schema: obj(map[string]any{
+				"kind":            str("action kind from the catalog above"),
 				"targetNamespace": str("target namespace (or '-' for Node/Namespace-scoped)"),
-				"targetKind":      str("Deployment | StatefulSet | DaemonSet | Pod | Node | Namespace | HorizontalPodAutoscaler | CronJob"),
+				"targetKind":      str("Deployment | StatefulSet | DaemonSet | Pod | Node | Namespace | HorizontalPodAutoscaler | CronJob | Job | ConfigMap | Secret | Service | Ingress | NetworkPolicy | PodDisruptionBudget | PersistentVolumeClaim"),
 				"targetName":      str("target object name"),
-				"params":          map[string]any{"type": "object", "description": "typed params, e.g. {\"replicas\":3} or {\"image\":\"repo:tag\"}"},
+				"params":          map[string]any{"type": "object", "description": "typed params, e.g. {\"replicas\":3}, {\"image\":\"repo:tag\"}, {\"key\":\"k\",\"value\":\"v\"}, {\"command\":[\"cat\",\"/var/log/app.log\"]}"},
 			}, "kind", "targetKind", "targetName"),
 			call: func(a map[string]any) (string, error) {
 				body := map[string]any{
