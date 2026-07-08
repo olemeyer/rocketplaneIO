@@ -182,11 +182,14 @@ func (s *Store) UpdateRuleEval(ctx context.Context, id uuid.UUID, state string, 
 
 /* ── Events ─────────────────────────────────────────────────────────────── */
 
-func (s *Store) InsertAlertEvent(ctx context.Context, ruleID, clusterID uuid.UUID, from, to string, value float64, msg string) error {
-	_, err := s.pool.Exec(ctx, `
+// InsertAlertEvent schreibt einen State-Übergang und gibt die Event-ID zurück
+// (der Evaluator verknüpft sie mit dem auto-deklarierten Incident).
+func (s *Store) InsertAlertEvent(ctx context.Context, ruleID, clusterID uuid.UUID, from, to string, value float64, msg string) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := s.pool.QueryRow(ctx, `
 		INSERT INTO alert_events (rule_id, cluster_id, from_state, to_state, value, message)
-		VALUES ($1,$2,$3,$4,$5,$6)`, ruleID, clusterID, from, to, value, msg)
-	return err
+		VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, ruleID, clusterID, from, to, value, msg).Scan(&id)
+	return id, err
 }
 
 func (s *Store) ListAlertEvents(ctx context.Context, clusterID uuid.UUID, limit int) ([]model.AlertEvent, error) {

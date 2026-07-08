@@ -444,6 +444,51 @@ type AlertEvent struct {
 	Message   string    `json:"message"`
 }
 
+// ── Incidents ──────────────────────────────────────────────────────────────
+
+// Incident ist die Klammer über einen Vorfall: verbindet Alerts, Copilot-
+// Investigations und Actions über einen Lebenszyklus (open→acknowledged→
+// mitigated→resolved). MTTA/MTTR sind aus den Timestamps ableitbar.
+type Incident struct {
+	ID             uuid.UUID  `json:"id"`
+	OrgID          uuid.UUID  `json:"orgId"`
+	ClusterID      uuid.UUID  `json:"clusterId"`
+	Number         int        `json:"number"`
+	Title          string     `json:"title"`
+	Summary        string     `json:"summary"`
+	Severity       string     `json:"severity"`
+	Status         string     `json:"status"`
+	Source         string     `json:"source"`
+	DedupKey       *string    `json:"-"`
+	AssigneeID     *uuid.UUID `json:"assigneeId,omitempty"`
+	AssigneeName   string     `json:"assigneeName,omitempty"`
+	AssigneeEmail  string     `json:"assigneeEmail,omitempty"`
+	CreatedBy      *uuid.UUID `json:"createdBy,omitempty"`
+	CreatedByName  string     `json:"createdByName,omitempty"`
+	AcknowledgedAt *time.Time `json:"acknowledgedAt,omitempty"`
+	MitigatedAt    *time.Time `json:"mitigatedAt,omitempty"`
+	ResolvedAt     *time.Time `json:"resolvedAt,omitempty"`
+	Postmortem     string     `json:"postmortem"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+	// Aggregat für die Listenansicht (nicht in der Detail-Query):
+	EventCount int `json:"eventCount,omitempty"`
+}
+
+// IncidentEvent ist ein Eintrag in der Incident-Timeline.
+type IncidentEvent struct {
+	ID         uuid.UUID       `json:"id"`
+	IncidentID uuid.UUID       `json:"incidentId"`
+	At         time.Time       `json:"at"`
+	Kind       string          `json:"kind"`
+	ActorID    *uuid.UUID      `json:"actorId,omitempty"`
+	ActorEmail string          `json:"actorEmail,omitempty"`
+	Message    string          `json:"message"`
+	RefType    string          `json:"refType,omitempty"`
+	RefID      *uuid.UUID      `json:"refId,omitempty"`
+	Metadata   json.RawMessage `json:"metadata,omitempty"`
+}
+
 // MetricDefinition ist eine Derived Metric: Logs/Spans → benannte Zeitreihe.
 type MetricDefinition struct {
 	ID          uuid.UUID `json:"id"`

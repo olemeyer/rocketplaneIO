@@ -143,20 +143,39 @@ func (e *Evaluator) evalRule(ctx context.Context, r *model.AlertRule) {
 	if newState != r.State {
 		stateSince = now
 		msg := fmt.Sprintf("%s: value %.2f %s threshold %.2f (window %ds)", r.Name, value, opWord(r.Op), r.Threshold, r.WindowSeconds)
-		_ = e.store.InsertAlertEvent(ctx, r.ID, r.ClusterID, r.State, newState, value, msg)
+		evID, _ := e.store.InsertAlertEvent(ctx, r.ID, r.ClusterID, r.State, newState, value, msg)
+		var evPtr *uuid.UUID
+		if evID != uuid.Nil {
+			evPtr = &evID
+		}
 		// Snooze: State-Machine + Events laufen weiter, Notifications pausieren.
 		muted := r.MutedUntil != nil && r.MutedUntil.After(now)
 		if newState == "firing" {
 			if !muted {
 				e.notify(ctx, r, "firing", value)
 			}
+			// AUTO-INCIDENT: firing deklariert (oder dedupliziert) einen Incident —
+			// die Klammer, an die sich Investigations und Actions hängen.
+			if _, _, err := e.store.DeclareIncidentFromAlert(ctx, r.ID, r.ClusterID, r.Name, r.Severity, value, evPtr); err != nil {
+				log.Printf("alerts: declare incident for %s: %v", r.Name, err)
+			} else {
+				e.broker.Publish(r.ClusterID, "incidents", 0)
+			}
 			// AUTO-REMEDIATION: firing dispatcht den konfigurierten Workflow —
 			// der Agent führt ihn als verifizierte Pipeline aus.
 			if r.ActionDefinitionID != nil {
 				e.dispatchRemediation(ctx, r, value)
 			}
-		} else if r.State == "firing" && newState == "ok" && !muted {
-			e.notify(ctx, r, "resolved", value)
+		} else if r.State == "firing" && newState == "ok" {
+			if !muted {
+				e.notify(ctx, r, "resolved", value)
+			}
+			// Auto-Incident schließt sich mit dem geklärten Alert.
+			if _, err := e.store.ResolveIncidentFromAlert(ctx, r.ID, r.ClusterID, r.Name, evPtr); err != nil {
+				log.Printf("alerts: resolve incident for %s: %v", r.Name, err)
+			} else {
+				e.broker.Publish(r.ClusterID, "incidents", 0)
+			}
 		}
 		e.broker.Publish(r.ClusterID, "alerts", 0)
 	}
@@ -330,7 +349,7 @@ func (e *Evaluator) dispatchRemediation(ctx context.Context, r *model.AlertRule,
 		log.Printf("alerts: dispatch remediation %s: %v", def.Name, err)
 		return
 	}
-	_ = e.store.InsertAlertEvent(ctx, r.ID, r.ClusterID, "firing", "firing", value,
+	_, _ = e.store.InsertAlertEvent(ctx, r.ID, r.ClusterID, "firing", "firing", value,
 		fmt.Sprintf("auto-remediation dispatched: workflow %q", def.Name))
 	e.broker.Publish(r.ClusterID, "actions", 0)
 	log.Printf("alerts: %s firing → dispatched workflow %q", r.Name, def.Name)
