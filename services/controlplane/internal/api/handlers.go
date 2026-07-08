@@ -102,7 +102,7 @@ func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 // install command.
 func (s *Server) handleCreateCluster(w http.ResponseWriter, r *http.Request) {
 	user, _ := auth.UserFrom(r.Context())
-	orgID, ok := s.resolveOrg(w, r)
+	orgID, _, ok := s.requireRole(w, r, "admin")
 	if !ok {
 		return
 	}
@@ -158,7 +158,7 @@ func (s *Server) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 // handleReconnect issues a fresh enroll token for an existing cluster.
 func (s *Server) handleReconnect(w http.ResponseWriter, r *http.Request) {
 	user, _ := auth.UserFrom(r.Context())
-	orgID, ok := s.resolveOrg(w, r)
+	orgID, _, ok := s.requireRole(w, r, "admin")
 	if !ok {
 		return
 	}

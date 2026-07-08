@@ -73,6 +73,26 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/me", sess(http.HandlerFunc(s.handleMe)))
 	mux.Handle("POST /api/orgs", sess(http.HandlerFunc(s.handleCreateOrg)))
 	mux.Handle("POST /api/session/org", sess(http.HandlerFunc(s.handleSetOrg)))
+
+	// ── Tenancy: members, invitations, org lifecycle, audit ──
+	mux.Handle("GET /api/orgs/{org}/members", sess(http.HandlerFunc(s.handleListMembers)))
+	mux.Handle("PATCH /api/orgs/{org}/members/{user}", sess(http.HandlerFunc(s.handleUpdateMemberRole)))
+	mux.Handle("DELETE /api/orgs/{org}/members/{user}", sess(http.HandlerFunc(s.handleRemoveMember)))
+	mux.Handle("GET /api/orgs/{org}/invitations", sess(http.HandlerFunc(s.handleListInvitations)))
+	mux.Handle("POST /api/orgs/{org}/invitations", sess(http.HandlerFunc(s.handleCreateInvitation)))
+	mux.Handle("DELETE /api/orgs/{org}/invitations/{invite}", sess(http.HandlerFunc(s.handleRevokeInvitation)))
+	mux.Handle("GET /api/invitations/{token}", sess(http.HandlerFunc(s.handleInvitationPreview)))
+	mux.Handle("POST /api/invitations/{token}/accept", sess(http.HandlerFunc(s.handleAcceptInvitation)))
+	mux.Handle("PATCH /api/orgs/{org}", sess(http.HandlerFunc(s.handleUpdateOrg)))
+	mux.Handle("DELETE /api/orgs/{org}", sess(http.HandlerFunc(s.handleDeleteOrg)))
+	mux.Handle("POST /api/orgs/{org}/transfer", sess(http.HandlerFunc(s.handleTransferOwnership)))
+	mux.Handle("GET /api/orgs/{org}/audit", sess(http.HandlerFunc(s.handleListAudit)))
+
+	// ── Platform admin (super admin) console ──
+	mux.Handle("GET /api/admin/stats", sess(http.HandlerFunc(s.handleAdminStats)))
+	mux.Handle("GET /api/admin/users", sess(http.HandlerFunc(s.handleAdminListUsers)))
+	mux.Handle("GET /api/admin/orgs", sess(http.HandlerFunc(s.handleAdminListOrgs)))
+	mux.Handle("PATCH /api/admin/users/{user}", sess(http.HandlerFunc(s.handleAdminSetUserFlags)))
 	mux.Handle("GET /api/orgs/{org}/clusters", sess(http.HandlerFunc(s.handleListClusters)))
 	mux.Handle("POST /api/orgs/{org}/clusters", sess(http.HandlerFunc(s.handleCreateCluster)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}", sess(http.HandlerFunc(s.handleGetCluster)))
@@ -190,6 +210,8 @@ func (s *statusWriter) Flush() {
 
 // StartBackground startet Schema-Sicherung + Alert-Evaluator (bis ctx endet).
 func (s *Server) StartBackground(ctx context.Context) {
+	// Configured emails become platform admins (RP_PLATFORM_ADMINS).
+	s.ensurePlatformAdmins(ctx)
 	if err := s.tele.EnsureInfraSchema(ctx); err != nil {
 		log.Printf("infra metrics schema: %v", err)
 	}

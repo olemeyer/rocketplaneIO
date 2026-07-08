@@ -109,7 +109,7 @@ func (s *Server) handleListMetricDefs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateMetricDef(w http.ResponseWriter, r *http.Request) {
-	_, clusterID, ok := s.resolveClusterScope(w, r)
+	_, clusterID, ok := s.requireClusterRole(w, r, "admin")
 	if !ok {
 		return
 	}
@@ -130,7 +130,7 @@ func (s *Server) handleCreateMetricDef(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateMetricDef(w http.ResponseWriter, r *http.Request) {
-	_, clusterID, ok := s.resolveClusterScope(w, r)
+	_, clusterID, ok := s.requireClusterRole(w, r, "admin")
 	if !ok {
 		return
 	}
@@ -159,7 +159,7 @@ func (s *Server) handleUpdateMetricDef(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteMetricDef(w http.ResponseWriter, r *http.Request) {
-	_, clusterID, ok := s.resolveClusterScope(w, r)
+	_, clusterID, ok := s.requireClusterRole(w, r, "admin")
 	if !ok {
 		return
 	}

@@ -211,6 +211,11 @@ func (a *Auth) WithSession(next http.Handler) http.Handler {
 			a.unauthorized(w, r)
 			return
 		}
+		if user.SuspendedAt != nil {
+			// Suspended by a platform admin — invalidate the live session.
+			a.unauthorized(w, r)
+			return
+		}
 		ctx := context.WithValue(r.Context(), ctxUser, user)
 		ctx = context.WithValue(ctx, ctxOrgID, sess.OrgID)
 		next.ServeHTTP(w, r.WithContext(ctx))

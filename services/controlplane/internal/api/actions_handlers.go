@@ -478,7 +478,7 @@ type createActionReq struct {
 
 // handleCreateAction — POST /api/orgs/{org}/clusters/{cluster}/actions
 func (s *Server) handleCreateAction(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := s.resolveOrg(w, r)
+	orgID, role, ok := s.resolveOrgRole(w, r)
 	if !ok {
 		return
 	}
@@ -591,6 +591,18 @@ func (s *Server) handleCreateAction(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// RBAC on mutation blast-radius: a plain member may run read-level actions
+	// (diagnostics: get_resource, pod_logs, net_probe, describe, …) but any
+	// cluster-mutating action (reversible/disruptive/destructive, incl. scripts)
+	// requires admin. The level is the same one the Copilot guardrails use.
+	var lvlParams map[string]any
+	_ = json.Unmarshal(req.Params, &lvlParams)
+	level := actionLevel(req.Kind, lvlParams)
+	if level != "read" && roleRank(role) < roleRank("admin") {
+		writeErr(w, http.StatusForbidden, "running "+level+" actions requires admin role — a member can only run read-only diagnostics")
+		return
+	}
+
 	user, _ := auth.UserFrom(r.Context())
 	a, err := s.store.CreateAction(r.Context(), clusterID, user.ID, req.Kind, req.TargetNamespace, req.TargetKind, req.TargetName, req.Params)
 	if err != nil {
@@ -598,6 +610,10 @@ func (s *Server) handleCreateAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.RequestedBy = user.Email
+	// Audit every non-read action (the mutation trail SREs and auditors want).
+	if level != "read" {
+		s.audit(r, &orgID, "action.created", "action", a.ID.String(), req.Kind+" "+req.TargetKind+"/"+req.TargetName, map[string]any{"level": level, "kind": req.Kind})
+	}
 	s.broker.Publish(clusterID, "actions", 0)
 	// dispatch weckt den Agent-Stream: claimen in Push-Latenz statt Poll-Takt.
 	s.broker.Publish(clusterID, "dispatch", 0)

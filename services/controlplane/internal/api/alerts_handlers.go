@@ -41,7 +41,7 @@ func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := s.resolveOrg(w, r)
+	orgID, _, ok := s.requireRole(w, r, "admin")
 	if !ok {
 		return
 	}
@@ -69,7 +69,7 @@ func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteProvider(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := s.resolveOrg(w, r)
+	orgID, _, ok := s.requireRole(w, r, "admin")
 	if !ok {
 		return
 	}
@@ -239,7 +239,7 @@ func (s *Server) handleListRules(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateRule(w http.ResponseWriter, r *http.Request) {
-	_, clusterID, ok := s.resolveClusterScope(w, r)
+	_, clusterID, ok := s.requireClusterRole(w, r, "admin")
 	if !ok {
 		return
 	}
@@ -257,7 +257,7 @@ func (s *Server) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
-	_, clusterID, ok := s.resolveClusterScope(w, r)
+	_, clusterID, ok := s.requireClusterRole(w, r, "admin")
 	if !ok {
 		return
 	}
@@ -284,7 +284,7 @@ func (s *Server) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
-	_, clusterID, ok := s.resolveClusterScope(w, r)
+	_, clusterID, ok := s.requireClusterRole(w, r, "admin")
 	if !ok {
 		return
 	}

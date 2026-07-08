@@ -70,7 +70,7 @@ func (s *Server) handleListActionDefs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateActionDef(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := s.resolveOrg(w, r)
+	orgID, _, ok := s.requireRole(w, r, "admin")
 	if !ok {
 		return
 	}
@@ -88,7 +88,7 @@ func (s *Server) handleCreateActionDef(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateActionDef(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := s.resolveOrg(w, r)
+	orgID, _, ok := s.requireRole(w, r, "admin")
 	if !ok {
 		return
 	}
@@ -114,7 +114,7 @@ func (s *Server) handleUpdateActionDef(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteActionDef(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := s.resolveOrg(w, r)
+	orgID, _, ok := s.requireRole(w, r, "admin")
 	if !ok {
 		return
 	}

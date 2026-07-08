@@ -102,12 +102,14 @@ func (s *Store) UpsertUserFromOIDC(ctx context.Context, sub, email, name, avatar
 	return &u, tx.Commit(ctx)
 }
 
-// GetUser loads a user by id.
+// GetUser loads a user by id (incl. platform-admin + suspension state, which the
+// session middleware and admin console rely on).
 func (s *Store) GetUser(ctx context.Context, userID uuid.UUID) (*model.User, error) {
 	var u model.User
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, email, name, avatar_url, created_at FROM users WHERE id=$1`, userID).
-		Scan(&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.CreatedAt)
+		SELECT id, email, name, avatar_url, is_platform_admin, suspended_at, created_at
+		FROM users WHERE id=$1`, userID).
+		Scan(&u.ID, &u.Email, &u.Name, &u.AvatarURL, &u.IsPlatformAdmin, &u.SuspendedAt, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

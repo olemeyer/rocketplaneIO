@@ -12,11 +12,65 @@ import (
 
 // User is an authenticated principal (Google SSO or dev-login).
 type User struct {
-	ID        uuid.UUID `json:"id"`
+	ID              uuid.UUID  `json:"id"`
+	Email           string     `json:"email"`
+	Name            string     `json:"name"`
+	AvatarURL       string     `json:"avatarUrl"`
+	IsPlatformAdmin bool       `json:"isPlatformAdmin"`
+	SuspendedAt     *time.Time `json:"suspendedAt,omitempty"`
+	CreatedAt       time.Time  `json:"createdAt"`
+}
+
+// Member is a user together with their role in a specific org (Settings > Members).
+type Member struct {
+	UserID    uuid.UUID `json:"userId"`
 	Email     string    `json:"email"`
 	Name      string    `json:"name"`
 	AvatarURL string    `json:"avatarUrl"`
-	CreatedAt time.Time `json:"createdAt"`
+	Role      string    `json:"role"` // owner | admin | member
+	JoinedAt  time.Time `json:"joinedAt"`
+	IsYou     bool      `json:"isYou,omitempty"`
+}
+
+// Invitation is a pending (or accepted) invite of an email to an org with a role.
+type Invitation struct {
+	ID          uuid.UUID  `json:"id"`
+	OrgID       uuid.UUID  `json:"orgId"`
+	Email       string     `json:"email"`
+	Role        string     `json:"role"`
+	InvitedBy   string     `json:"invitedBy"` // email of the inviter (display)
+	CreatedAt   time.Time  `json:"createdAt"`
+	ExpiresAt   time.Time  `json:"expiresAt"`
+	AcceptedAt  *time.Time `json:"acceptedAt,omitempty"`
+	OrgName     string     `json:"orgName,omitempty"`     // populated on public preview
+	Token       string     `json:"token,omitempty"`       // only returned once, at creation
+	AcceptURL   string     `json:"acceptUrl,omitempty"`   // convenience for the inviter
+}
+
+// AuditEntry is one recorded mutating action (Settings > Audit / admin console).
+type AuditEntry struct {
+	ID         uuid.UUID       `json:"id"`
+	OrgID      *uuid.UUID      `json:"orgId,omitempty"`
+	ActorEmail string          `json:"actorEmail"`
+	Action     string          `json:"action"`
+	TargetType string          `json:"targetType"`
+	TargetID   string          `json:"targetId,omitempty"`
+	TargetName string          `json:"targetName,omitempty"`
+	Metadata   json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt  time.Time       `json:"createdAt"`
+}
+
+// AdminUser is a user row for the platform-admin console, with org count.
+type AdminUser struct {
+	User
+	OrgCount int `json:"orgCount"`
+}
+
+// AdminOrg is an org row for the platform-admin console, with member/cluster counts.
+type AdminOrg struct {
+	Org
+	MemberCount  int `json:"memberCount"`
+	ClusterCount int `json:"clusterCount"`
 }
 
 // Org is the tenant boundary. Role is only populated when the org is loaded in

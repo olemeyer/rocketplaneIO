@@ -51,7 +51,7 @@ func (s *Server) handleListDashboards(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateDashboard(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := s.resolveOrg(w, r)
+	orgID, _, ok := s.requireRole(w, r, "admin")
 	if !ok {
 		return
 	}
@@ -69,7 +69,7 @@ func (s *Server) handleCreateDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateDashboard(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := s.resolveOrg(w, r)
+	orgID, _, ok := s.requireRole(w, r, "admin")
 	if !ok {
 		return
 	}
@@ -95,7 +95,7 @@ func (s *Server) handleUpdateDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteDashboard(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := s.resolveOrg(w, r)
+	orgID, _, ok := s.requireRole(w, r, "admin")
 	if !ok {
 		return
 	}

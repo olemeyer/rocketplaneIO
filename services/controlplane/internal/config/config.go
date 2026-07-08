@@ -13,9 +13,10 @@ type Config struct {
 	DatabaseURL        string // DATABASE_URL
 	Listen             string // RP_LISTEN
 	PublicURL          string // RP_PUBLIC_URL (install-command + OIDC redirect base)
-	SessionSecret      string // RP_SESSION_SECRET (HMAC key)
-	GoogleClientID     string // GOOGLE_CLIENT_ID
-	GoogleClientSecret string // GOOGLE_CLIENT_SECRET
+	SessionSecret      string   // RP_SESSION_SECRET (HMAC key)
+	GoogleClientID     string   // GOOGLE_CLIENT_ID
+	GoogleClientSecret string   // GOOGLE_CLIENT_SECRET
+	PlatformAdmins     []string // RP_PLATFORM_ADMINS (comma-separated emails granted super-admin on boot)
 
 	// ── Agent-Install (was der „Connect cluster"-Command generiert) ──
 	// Alles konfigurierbar, damit derselbe UI-Command in jeder Umgebung passt:
@@ -44,6 +45,7 @@ func Load() *Config {
 		SessionSecret:      env("RP_SESSION_SECRET", "dev-insecure-session-secret-change-me"),
 		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
+		PlatformAdmins:     splitList(os.Getenv("RP_PLATFORM_ADMINS")),
 
 		AgentInstallMethod: env("RP_AGENT_INSTALL_METHOD", "helm"),
 		AgentImage:         env("RP_AGENT_IMAGE", "ghcr.io/olemeyer/rocketplaneio/agent:edge"),
@@ -73,4 +75,19 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// splitList parses a comma-separated env value into a trimmed, lowercased list.
+func splitList(v string) []string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(strings.ToLower(p)); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
