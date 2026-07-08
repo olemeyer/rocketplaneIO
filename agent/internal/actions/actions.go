@@ -479,6 +479,8 @@ func (r *Runner) plan(a Action) []step {
 		return r.planRunDebugPod(a)
 	case "list_events":
 		return r.planListEvents(a)
+	case "net_probe":
+		return r.planNetProbe(a)
 	case "delete_pod":
 		// Alte Pod-UID zwischen den Steps teilen: bei StatefulSets heißt der
 		// Ersatz-Pod GENAUSO (clickhouse-0) — nur die UID unterscheidet alt/neu.

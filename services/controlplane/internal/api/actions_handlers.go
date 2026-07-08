@@ -79,6 +79,7 @@ var actionTargetKinds = map[string]map[string]bool{
 	"pod_logs":      {"Pod": true},       // read: kubectl logs [--previous] direkt vom Kubelet
 	"list_events":   {"Namespace": true}, // read: alle jüngsten Events eines Namespaces
 	"run_debug_pod": {"Namespace": true}, // ephemerer Probe-Pod (Image-Bisect, HTTP/DNS-Probe, PVC-Inspektion)
+	"net_probe":     {"Namespace": true}, // read: http/tcp/dns/tls-Probe direkt vom Agenten (Erreichbarkeit, Cert-Expiry)
 }
 
 // generalReadKinds: alles, was get_resource/describe_resource lesen dürfen.
@@ -366,6 +367,21 @@ func validateActionParams(w http.ResponseWriter, kind string, raw json.RawMessag
 			writeErr(w, http.StatusBadRequest, "list_events limit must be 1..100")
 			return false
 		}
+	case "net_probe":
+		var p struct {
+			Mode   string `json:"mode"`
+			Target string `json:"target"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || p.Target == "" || len(p.Target) > 512 {
+			writeErr(w, http.StatusBadRequest, "net_probe requires params.target (<=512 chars)")
+			return false
+		}
+		switch p.Mode {
+		case "http", "tcp", "dns", "tls":
+		default:
+			writeErr(w, http.StatusBadRequest, "net_probe mode must be http, tcp, dns or tls")
+			return false
+		}
 	case "run_debug_pod":
 		var p struct {
 			Image   string   `json:"image"`
@@ -558,7 +574,7 @@ func (s *Server) handleCreateAction(w http.ResponseWriter, r *http.Request) {
 			// Ausnahme: get_resource/describe_resource dürfen mit explizitem
 			// params.apiVersion+resource JEDEN Kind lesen (CRDs: Certificates,
 			// ArgoCD Applications, CNPG Clusters, …) — read-only, kein Risiko.
-			if !(okKind && (req.Kind == "get_resource" || req.Kind == "describe_resource") && hasResourceOverride(req.Params)) {
+			if !(okKind && (req.Kind == "get_resource" || req.Kind == "describe_resource" || req.Kind == "patch_resource") && hasResourceOverride(req.Params)) {
 				writeErr(w, http.StatusBadRequest, "unsupported action/target combination")
 				return
 			}

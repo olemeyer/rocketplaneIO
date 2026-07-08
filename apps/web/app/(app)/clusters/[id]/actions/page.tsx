@@ -395,6 +395,16 @@ const BUILTINS: Builtin[] = [
     ],
   },
   {
+    kind: 'net_probe',
+    name: 'net probe (reachability / tls)',
+    description: 'Probe from inside the cluster (the agent runs the check): http status+latency, tcp port open, dns resolution, or a TLS handshake with days-until-cert-expiry. The fast answer to “is it reachable / is the cert expiring?”.',
+    fields: [
+      { name: 'mode', type: 'enum', options: ['http', 'tcp', 'dns', 'tls'], default: 'http', required: true },
+      { name: 'target', type: 'string', required: true, description: 'http: http(s)://svc.ns:port/path · tcp/tls: host:port · dns: a hostname' },
+      { name: 'method', type: 'enum', options: ['GET', 'HEAD'], default: 'GET', description: 'http mode only' },
+    ],
+  },
+  {
     kind: 'pod_logs',
     name: 'pod logs (kubelet)',
     description: 'kubectl logs straight from the kubelet — including the PREVIOUS crashed container (the way to read a crash reason). Independent of the log pipeline.',
@@ -605,6 +615,9 @@ function buildActionBody(kind: string, values: Record<string, string>) {
   } else if (kind === 'run_debug_pod') {
     targetKind = 'Namespace';
     targetName = `probe-${Date.now() % 100000}`;
+  } else if (kind === 'net_probe') {
+    targetKind = 'Namespace';
+    targetName = values.namespace || '-';
   }
 
   if (kind === 'scale') params = { replicas: Number(values.replicas ?? 1) };
@@ -669,7 +682,8 @@ function buildActionBody(kind: string, values: Record<string, string>) {
       ...(values.pvcName ? { pvcName: values.pvcName } : {}),
       ...(values.nodeName ? { nodeName: values.nodeName } : {}),
     };
-  }
+  } else if (kind === 'net_probe')
+    params = { mode: values.mode ?? 'http', target: values.target ?? '', ...(values.method ? { method: values.method } : {}) };
 
   // Generisch: optionaler Ablauf-Timeout (10–1800s) — gilt für jede Action.
   if (values.timeoutSeconds && Number(values.timeoutSeconds) > 0) {
@@ -762,6 +776,7 @@ const ACTION_META: Record<string, { category: Category; klass: ActionClass }> = 
   pod_logs: { category: 'investigate', klass: 'read' },
   list_events: { category: 'investigate', klass: 'read' },
   run_debug_pod: { category: 'investigate', klass: 'destructive' },
+  net_probe: { category: 'investigate', klass: 'read' },
 };
 
 // TARGET_LABEL: worauf eine Action wirkt — als Chip auf der Karte, damit man
@@ -782,7 +797,7 @@ const TARGET_LABEL: Record<string, string> = {
   pvc_expand: 'pvc', delete_job: 'job',
   cronjob_trigger: 'cronjob', cronjob_suspend: 'cronjob', cronjob_resume: 'cronjob',
   get_resource: 'any object · crd', describe_resource: 'any object · crd', annotate: 'any object',
-  pod_logs: 'pod', list_events: 'namespace', run_debug_pod: 'ephemeral pod',
+  pod_logs: 'pod', list_events: 'namespace', run_debug_pod: 'ephemeral pod', net_probe: 'url · host:port',
 };
 
 // Level-Labels/Glyphs kommen aus lib/approval (LEVEL_META) — eine Quelle für
@@ -837,6 +852,7 @@ function ActionIcon({ kind }: { kind: string }) {
     pod_logs: (<><rect x="4" y="4" width="16" height="16" rx="1.5" /><path d="M7.5 8.5h9M7.5 12h9M7.5 15.5h5" /></>),
     list_events: (<><path d="M5 5h14M5 9.5h14M5 14h10M5 18.5h7" /><circle cx="19" cy="16.5" r="2.4" /></>),
     run_debug_pod: (<><rect x="4" y="7" width="12" height="12" rx="1.5" /><path d="M10 4h10v10" strokeDasharray="2.5 2" /><path d="M8 12l2 1.8L8 15.6M12 15.6h2" /></>),
+    net_probe: (<><circle cx="12" cy="12" r="8" /><path d="M4 12h16M12 4c2.5 2.5 2.5 13 0 16M12 4c-2.5 2.5-2.5 13 0 16" /></>),
   };
   return (
     <svg

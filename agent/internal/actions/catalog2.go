@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
@@ -153,14 +154,29 @@ func (r *Runner) planPatchResource(a Action) []step {
 				return "", fmt.Errorf("generic access unavailable")
 			}
 			var p struct {
-				Patch map[string]any `json:"patch"`
+				Patch      map[string]any `json:"patch"`
+				APIVersion string         `json:"apiVersion"`
+				Resource   string         `json:"resource"`
 			}
 			if err := json.Unmarshal(a.Params, &p); err != nil || len(p.Patch) == 0 {
 				return "", fmt.Errorf("patch_resource requires params.patch")
 			}
-			gvr, ok := kindGVR[a.TargetKind]
-			if !ok {
-				return "", fmt.Errorf("kind %q not patchable", a.TargetKind)
+			// GVR: statische Whitelist ODER CRD-Override (apiVersion+resource).
+			// Der Override erlaubt Flux/Argo/cert-manager/CNPG-Patches; die
+			// Gruppen-Denylist verhindert Privileg-Eskalation (RBAC/Webhooks/CRDs).
+			var gvr = kindGVR[a.TargetKind]
+			if p.APIVersion != "" && p.Resource != "" {
+				g, err := rawGVR(p.APIVersion, a.TargetKind, p.Resource)
+				if err != nil {
+					return "", err
+				}
+				if deniedPatchGroup(g.Group) {
+					return "", fmt.Errorf("patching group %q is not allowed (RBAC/webhooks/CRDs)", g.Group)
+				}
+				gvr = g
+			}
+			if (gvr == (schema.GroupVersionResource{})) {
+				return "", fmt.Errorf("kind %q not patchable — pass params.apiVersion + params.resource for CRDs", a.TargetKind)
 			}
 			patch, _ := json.Marshal(p.Patch)
 			if _, err := r.dyn.Resource(gvr).Namespace(a.TargetNamespace).Patch(ctx, a.TargetName, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: "rocketplane-agent"}); err != nil {
@@ -267,3 +283,18 @@ func (r *Runner) planRestoreResource(a Action) []step {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// deniedPatchGroup sperrt Gruppen, deren Patch Privilegien eskalieren würde —
+// dieselbe Linie wie die Starlark-raw_*-Denylist.
+func deniedPatchGroup(group string) bool {
+	switch group {
+	case "rbac.authorization.k8s.io",
+		"admissionregistration.k8s.io",
+		"apiextensions.k8s.io",
+		"apiregistration.k8s.io",
+		"certificates.k8s.io",
+		"scheduling.k8s.io":
+		return true
+	}
+	return false
+}

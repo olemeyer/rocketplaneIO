@@ -18,7 +18,7 @@ func actionLevel(kind string, params map[string]any) string {
 	switch kind {
 	case "debug_bundle", "pod_events", "rollout_history", "drain_preview",
 		"get_resource", "describe_resource", "get_secret", "helm_releases",
-		"pod_logs", "list_events":
+		"pod_logs", "list_events", "net_probe":
 		return "read"
 	case "exec_readonly":
 		// liest nur (Whitelist-Kommandos), betritt aber einen laufenden Container —
@@ -65,7 +65,7 @@ func actionCategory(kind string) string {
 	switch kind {
 	case "debug_bundle", "pod_events", "rollout_history", "drain_preview",
 		"get_resource", "describe_resource", "get_secret", "helm_releases", "exec_readonly",
-		"pod_logs", "list_events", "run_debug_pod":
+		"pod_logs", "list_events", "run_debug_pod", "net_probe":
 		return "diagnose"
 	case "rollout_restart", "rollout_undo", "rollout_pause", "rollout_resume",
 		"rollout_to_revision", "set_image", "statefulset_partition", "delete_pod", "evict_pod":

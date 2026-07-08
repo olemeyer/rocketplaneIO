@@ -545,6 +545,13 @@ for cs in pod.get("status", {}).get("containerStatuses", []):
         report("%s last exit: %s (%s)" % (cs["name"], last.get("exitCode"), last.get("reason")))
 `,
 
+  net_probe: `# net_probe runs through the built-in action (the agent probes the
+# network directly — http/tcp/dns/tls). Workflow scripts have no network
+# builtins; use the built-in net_probe action for reachability/TLS checks.
+step("hint")
+report("use the built-in net_probe action (mode=http|tcp|dns|tls)")
+`,
+
   exec_readonly: `# exec runs through the built-in action (whitelisted argv, no shell) —
 # container exec is not exposed to workflow scripts. Use run_debug_pod for
 # arbitrary commands in a FRESH pod, or the built-in exec_readonly action.

@@ -79,6 +79,7 @@ export function actionLevelOf(kind: string, params?: Record<string, unknown>): R
     case 'helm_releases':
     case 'pod_logs':
     case 'list_events':
+    case 'net_probe':
       return 'read';
     case 'scale': {
       // fail-closed wie das Backend: nicht parsebar oder 0 → destructive
@@ -133,7 +134,7 @@ export function actionCategoryOf(kind: string): ActionCategory {
   switch (kind) {
     case 'debug_bundle': case 'pod_events': case 'rollout_history': case 'drain_preview':
     case 'get_resource': case 'describe_resource': case 'get_secret': case 'helm_releases': case 'exec_readonly':
-    case 'pod_logs': case 'list_events': case 'run_debug_pod':
+    case 'pod_logs': case 'list_events': case 'run_debug_pod': case 'net_probe':
       return 'diagnose';
     case 'rollout_restart': case 'rollout_undo': case 'rollout_pause': case 'rollout_resume':
     case 'rollout_to_revision': case 'set_image': case 'statefulset_partition': case 'delete_pod': case 'evict_pod':

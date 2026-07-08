@@ -293,6 +293,21 @@ func tools() []tool {
 			},
 		},
 		{
+			name: "net_probe",
+			desc: "Probe reachability from inside the cluster: mode=http (status+latency), tcp (port open?), dns (resolves?), tls (handshake + cert days-until-expiry). The agent runs the check.",
+			schema: obj(map[string]any{
+				"mode":   str("http | tcp | dns | tls"),
+				"target": str("http: an http(s):// URL; tcp/tls: host:port; dns: a hostname"),
+				"method": str("http only: GET or HEAD"),
+			}, "mode", "target"),
+			call: func(a map[string]any) (string, error) {
+				return apiPost("/actions", map[string]any{
+					"kind": "net_probe", "targetNamespace": "-", "targetKind": "Namespace", "targetName": "-",
+					"params": map[string]any{"mode": s(a, "mode"), "target": s(a, "target"), "method": s(a, "method")},
+				})
+			},
+		},
+		{
 			name: "get_secret",
 			desc: "Inspect a Secret WITHOUT revealing values: keys, value lengths and sha256 hashes. Plaintext never leaves the cluster.",
 			schema: obj(map[string]any{
