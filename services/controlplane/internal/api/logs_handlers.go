@@ -67,6 +67,10 @@ func (s *Server) handleQueryLogs(w http.ResponseWriter, r *http.Request) {
 
 	q := parseLogsQuery(r)
 	q.ClusterID = clusterID
+	if err := q.Validate(); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	lines, err := s.tele.QueryLogs(r.Context(), q)
 	if err != nil {
@@ -118,6 +122,19 @@ func parseLogsQuery(r *http.Request) telemetry.LogsQuery {
 			}
 		}
 	}
+	// regex/exclude sind wiederholbar (?regex=a&regex=b); Limits prüft Validate().
+	var regexes []string
+	for _, rx := range v["regex"] {
+		if rx = strings.TrimSpace(rx); rx != "" {
+			regexes = append(regexes, rx)
+		}
+	}
+	var exclude []string
+	for _, ex := range v["exclude"] {
+		if ex = strings.TrimSpace(ex); ex != "" {
+			exclude = append(exclude, ex)
+		}
+	}
 	return telemetry.LogsQuery{
 		Namespace:   v.Get("namespace"),
 		Workload:    v.Get("workload"),
@@ -125,6 +142,10 @@ func parseLogsQuery(r *http.Request) telemetry.LogsQuery {
 		Pod:         v.Get("pod"),
 		MinSeverity: uint8(minSev),
 		Search:      v.Get("search"),
+		Regexes:     regexes,
+		RegexMode:   v.Get("regexMode"),
+		Exclude:     exclude,
+		Fuzzy:       strings.TrimSpace(v.Get("fuzzy")),
 		Since:       since,
 		Until:       until,
 		Limit:       limit,

@@ -9,10 +9,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -105,6 +107,23 @@ func (s *Store) EnsureLogsSchema(ctx context.Context) error {
 	return s.exec(ctx, url.Values{"query": {ddl}}, nil)
 }
 
+// EnsureLogsIndexes legt Skip-Indizes auf Body idempotent an: tokenbf_v1
+// beschleunigt Wort-/Token-Suchen, ngrambf_v1 Substring- und Regex-Literale.
+// Kein MATERIALIZE nötig — die TTL ist 3 Tage, Alt-Parts ohne Index wachsen
+// von selbst heraus.
+func (s *Store) EnsureLogsIndexes(ctx context.Context) error {
+	stmts := []string{
+		fmt.Sprintf("ALTER TABLE %s.otel_logs ADD INDEX IF NOT EXISTS idx_body_token Body TYPE tokenbf_v1(32768, 3, 0) GRANULARITY 4", s.db),
+		fmt.Sprintf("ALTER TABLE %s.otel_logs ADD INDEX IF NOT EXISTS idx_body_ngram Body TYPE ngrambf_v1(4, 65536, 3, 7) GRANULARITY 4", s.db),
+	}
+	for _, ddl := range stmts {
+		if err := s.exec(ctx, url.Values{"query": {ddl}}, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // InsertLogs schreibt einen Batch als JSONEachRow. ClusterId kommt aus der
 // Agent-Auth — nie vom Client.
 func (s *Store) InsertLogs(ctx context.Context, clusterID uuid.UUID, recs []LogRecord) error {
@@ -148,9 +167,81 @@ type LogsQuery struct {
 	Pod         string   // "" = alle (PodName — für Kontext-Ansichten)
 	MinSeverity uint8    // 0 = alle
 	Search      string   // Substring, case-insensitiv
+	Regexes     []string // RE2-Pattern (ClickHouse match(); case-sensitiv, (?i) für insensitiv)
+	RegexMode   string   // "any" (OR, default) | "all" (AND)
+	Exclude     []string // NOT-Substrings, case-insensitiv
+	Fuzzy       string   // ngram-Ähnlichkeitssuche (tippfehlertolerant)
 	Since       time.Time
 	Until       time.Time
 	Limit       int
+}
+
+const (
+	maxSearchPatterns = 5
+	maxPatternLen     = 512
+	// fuzzyThreshold: ngramSearchCaseInsensitive liefert 0..1; 0.4 toleriert
+	// Tippfehler/Varianten, ohne beliebige Zeilen zu matchen.
+	fuzzyThreshold = 0.4
+)
+
+// Validate prüft die erweiterten Suchparameter, bevor die Query ClickHouse
+// erreicht: Go-RE2 ist kompatibel zu ClickHouse-re2, ein Compile-Fehler hier
+// wäre dort ein Query-Fehler — so wird daraus ein sauberes 400.
+func (q LogsQuery) Validate() error {
+	if len(q.Regexes) > maxSearchPatterns {
+		return fmt.Errorf("at most %d regex patterns", maxSearchPatterns)
+	}
+	if len(q.Exclude) > maxSearchPatterns {
+		return fmt.Errorf("at most %d exclude terms", maxSearchPatterns)
+	}
+	if q.RegexMode != "" && q.RegexMode != "any" && q.RegexMode != "all" {
+		return errors.New(`regexMode must be "any" or "all"`)
+	}
+	for _, rx := range q.Regexes {
+		if rx == "" || len(rx) > maxPatternLen {
+			return fmt.Errorf("regex pattern must be 1..%d chars", maxPatternLen)
+		}
+		if _, err := regexp.Compile(rx); err != nil {
+			return fmt.Errorf("invalid regex %q: %v", rx, err)
+		}
+	}
+	for _, ex := range q.Exclude {
+		if ex == "" || len(ex) > maxPatternLen {
+			return fmt.Errorf("exclude term must be 1..%d chars", maxPatternLen)
+		}
+	}
+	if len(q.Fuzzy) > maxPatternLen {
+		return fmt.Errorf("fuzzy term must be at most %d chars", maxPatternLen)
+	}
+	return nil
+}
+
+// searchConds baut die erweiterten Body-Suchbedingungen (Regex/Exclude/Fuzzy)
+// als SQL-Fragment (beginnt mit " AND …" oder ist leer) und setzt die
+// zugehörigen ClickHouse-Parameter — parametrisiert, Injection-sicher.
+func (q LogsQuery) searchConds(params url.Values) string {
+	var b strings.Builder
+	if len(q.Regexes) > 0 {
+		op := " OR "
+		if q.RegexMode == "all" {
+			op = " AND "
+		}
+		parts := make([]string, len(q.Regexes))
+		for i, rx := range q.Regexes {
+			parts[i] = fmt.Sprintf("match(Body, {rx%d:String})", i)
+			params.Set(fmt.Sprintf("param_rx%d", i), rx)
+		}
+		b.WriteString(" AND (" + strings.Join(parts, op) + ")")
+	}
+	for i, ex := range q.Exclude {
+		fmt.Fprintf(&b, " AND positionCaseInsensitive(Body, {ex%d:String}) = 0", i)
+		params.Set(fmt.Sprintf("param_ex%d", i), ex)
+	}
+	if q.Fuzzy != "" {
+		fmt.Fprintf(&b, " AND ngramSearchCaseInsensitive(Body, {fz:String}) > %g", fuzzyThreshold)
+		params.Set("param_fz", q.Fuzzy)
+	}
+	return b.String()
 }
 
 // LogLine ist die API-Antwortzeile (camelCase).
@@ -187,13 +278,14 @@ func (s *Store) QueryLogs(ctx context.Context, q LogsQuery) ([]LogLine, error) {
 		}
 		inClause = "AND WorkloadName IN (" + strings.Join(parts, ",") + ")"
 	}
+	params := url.Values{}
 	sql := fmt.Sprintf(`
 		SELECT toString(Timestamp) AS ts, Namespace, WorkloadName, PodName, ContainerName,
 		       Stream, SeverityText, SeverityNumber, Body
 		FROM %s.otel_logs
 		WHERE ClusterId = {cid:String}
 		  AND Timestamp >= {since:DateTime64(9)} AND Timestamp < {until:DateTime64(9)}
-		  %s %s %s %s %s %s
+		  %s %s %s %s %s %s %s
 		ORDER BY Timestamp DESC
 		LIMIT %d FORMAT JSONEachRow`,
 		s.db,
@@ -203,9 +295,10 @@ func (s *Store) QueryLogs(ctx context.Context, q LogsQuery) ([]LogLine, error) {
 		cond(q.Pod != "", "AND PodName = {pod:String}"),
 		cond(q.MinSeverity > 0, "AND SeverityNumber >= {msev:UInt8}"),
 		cond(q.Search != "", "AND positionCaseInsensitive(Body, {search:String}) > 0"),
+		q.searchConds(params),
 		q.Limit)
 
-	params := url.Values{"query": {sql}}
+	params.Set("query", sql)
 	params.Set("param_cid", q.ClusterID.String())
 	params.Set("param_since", nanoToCH(q.Since.UnixNano()))
 	params.Set("param_until", nanoToCH(q.Until.UnixNano()))
@@ -267,6 +360,7 @@ func (s *Store) QueryHistogram(ctx context.Context, q LogsQuery, buckets int) ([
 	if stepSec < 1 {
 		stepSec = 1
 	}
+	params := url.Values{}
 	sql := fmt.Sprintf(`
 		SELECT toString(toStartOfInterval(Timestamp, INTERVAL %d SECOND)) AS ts,
 		       count() AS c, countIf(SeverityNumber >= 17) AS e,
@@ -274,15 +368,16 @@ func (s *Store) QueryHistogram(ctx context.Context, q LogsQuery, buckets int) ([
 		FROM %s.otel_logs
 		WHERE ClusterId = {cid:String}
 		  AND Timestamp >= {since:DateTime64(9)} AND Timestamp < {until:DateTime64(9)}
-		  %s %s %s %s
+		  %s %s %s %s %s
 		GROUP BY ts ORDER BY ts FORMAT JSONEachRow`,
 		stepSec, s.db,
 		cond(q.Namespace != "", "AND Namespace = {ns:String}"),
 		cond(q.Workload != "", "AND WorkloadName = {wl:String}"),
 		cond(q.MinSeverity > 0, "AND SeverityNumber >= {msev:UInt8}"),
-		cond(q.Search != "", "AND positionCaseInsensitive(Body, {search:String}) > 0"))
+		cond(q.Search != "", "AND positionCaseInsensitive(Body, {search:String}) > 0"),
+		q.searchConds(params))
 
-	params := url.Values{"query": {sql}}
+	params.Set("query", sql)
 	params.Set("param_cid", q.ClusterID.String())
 	params.Set("param_since", nanoToCH(q.Since.UnixNano()))
 	params.Set("param_until", nanoToCH(q.Until.UnixNano()))
