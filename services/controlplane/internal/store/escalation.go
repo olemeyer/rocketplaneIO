@@ -84,6 +84,10 @@ func normalizeSteps(steps []model.EscalationStep) []model.EscalationStep {
 		if steps[i].AfterMinutes < 0 {
 			steps[i].AfterMinutes = 0
 		}
+		// Auf 7 Tage begrenzen — verhindert time.Duration-Overflow im Escalator.
+		if steps[i].AfterMinutes > 7*24*60 {
+			steps[i].AfterMinutes = 7 * 24 * 60
+		}
 		if steps[i].ProviderIDs == nil {
 			steps[i].ProviderIDs = []uuid.UUID{}
 		}
@@ -118,16 +122,29 @@ func (s *Store) UpdateEscalationPolicy(ctx context.Context, orgID, id uuid.UUID,
 	return s.GetEscalationPolicy(ctx, orgID, id)
 }
 
-// DeleteEscalationPolicy entfernt eine Policy (FKs setzen Referenzen auf NULL).
+// DeleteEscalationPolicy entfernt eine Policy. Die FKs setzen die Referenzen auf
+// NULL; damit kein Incident mit gesetztem next_escalation_at aber ohne Policy
+// zurückbleibt (inkonsistent, würde bei Reopen nie mehr feuern), räumen wir die
+// laufenden Eskalations-Timer betroffener Incidents in derselben Transaktion ab.
 func (s *Store) DeleteEscalationPolicy(ctx context.Context, orgID, id uuid.UUID) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM escalation_policies WHERE id=$1 AND org_id=$2`, id, orgID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		UPDATE incidents SET next_escalation_at=NULL, updated_at=now()
+		WHERE escalation_policy_id=$1 AND next_escalation_at IS NOT NULL`, id); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM escalation_policies WHERE id=$1 AND org_id=$2`, id, orgID)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // GetClusterEscalationPolicy liefert die Default-Policy-ID eines Clusters (oder nil).
@@ -189,27 +206,49 @@ func (s *Store) DueEscalationIncidents(ctx context.Context, now time.Time) ([]Es
 	return out, rows.Err()
 }
 
-// AdvanceEscalation setzt Schritt + nächste Fälligkeit und schreibt — wenn
-// providerNames gesetzt sind — einen 'escalated'-Timeline-Eintrag. Ohne Namen
-// (Kette erschöpft) nur Zustand nachziehen, kein Event.
-func (s *Store) AdvanceEscalation(ctx context.Context, incidentID uuid.UUID, newStep int, nextAt *time.Time, firedStep int, providerNames []string) error {
+// AdvanceEscalation ist der ATOMARE Claim eines Eskalationsschritts: die UPDATE
+// ist mit `status='open' AND escalation_step=expectedStep AND next_escalation_at
+// <= now` bewacht, sodass ein zwischenzeitliches acknowledge/resolve ODER ein
+// bereits erfolgter Vorschub (anderer Tick) den Claim verlieren lässt (0 Zeilen
+// → returns false). Der Aufrufer (Escalator) claimt ZUERST und benachrichtigt
+// DANACH — schlägt der Versand fehl, ist der Schritt trotzdem vorgeschoben und
+// wird nicht erneut gefeuert (verhindert Doppel-Paging). Ein Timeline-Eintrag
+// wird nur bei einem echten Schritt (newStep != expectedStep) geschrieben; das
+// erlaubt, mit newStep==expectedStep+0 auch nur `next_escalation_at` zu leeren
+// (erschöpfte Kette) ohne Event.
+func (s *Store) AdvanceEscalation(ctx context.Context, incidentID uuid.UUID, expectedStep, newStep int, nextAt *time.Time, now time.Time, providerNames []string) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `
-		UPDATE incidents SET escalation_step=$1, next_escalation_at=$2, updated_at=now() WHERE id=$3`,
-		newStep, nextAt, incidentID); err != nil {
-		return err
+	tag, err := tx.Exec(ctx, `
+		UPDATE incidents SET escalation_step=$1, next_escalation_at=$2, updated_at=now()
+		WHERE id=$3 AND status='open' AND escalation_step=$4
+		  AND next_escalation_at IS NOT NULL AND next_escalation_at <= $5`,
+		newStep, nextAt, incidentID, expectedStep, now)
+	if err != nil {
+		return false, err
 	}
-	if len(providerNames) > 0 {
+	if tag.RowsAffected() == 0 {
+		return false, nil // acknowledged/resolved oder bereits vorgeschoben — kein Claim
+	}
+	// Nur bei einem tatsächlich gefeuerten Schritt einen Timeline-Eintrag.
+	if newStep != expectedStep {
 		namesRaw, _ := json.Marshal(providerNames)
-		meta := []byte(fmt.Sprintf(`{"step":%d,"providers":%s}`, firedStep+1, string(namesRaw)))
-		msg := fmt.Sprintf("Escalation step %d: paged %d channel(s)", firedStep+1, len(providerNames))
+		if providerNames == nil {
+			namesRaw = []byte(`[]`)
+		}
+		meta := []byte(fmt.Sprintf(`{"step":%d,"providers":%s}`, expectedStep+1, string(namesRaw)))
+		var msg string
+		if len(providerNames) == 0 {
+			msg = fmt.Sprintf("Escalation step %d: no channels configured", expectedStep+1)
+		} else {
+			msg = fmt.Sprintf("Escalation step %d: paged %d channel(s)", expectedStep+1, len(providerNames))
+		}
 		if err := writeIncidentEvent(ctx, tx, incidentID, "escalated", nil, "", msg, "", nil, meta); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return tx.Commit(ctx)
+	return true, tx.Commit(ctx)
 }

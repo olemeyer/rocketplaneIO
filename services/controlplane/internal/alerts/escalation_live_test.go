@@ -56,25 +56,27 @@ func TestEscalatorProcessLive(t *testing.T) {
 		t.Fatalf("declare: %v", err)
 	}
 
+	// Process feuert DB-global; deshalb prüfen wir NICHT den globalen Zähler
+	// (die geteilte Test-DB enthält Alt-Incidents), sondern die Progression
+	// GENAU dieses Incidents.
+
 	// Tick 1: step0 (after 0) fällig → feuert, step→1, next = +5m.
 	t1 := time.Now().UTC().Add(time.Minute)
-	if n := esc.Process(ctx, t1); n != 1 {
-		t.Fatalf("tick1 should fire 1 step, got %d", n)
-	}
+	esc.Process(ctx, t1)
 	got, _ := st.GetIncident(ctx, cl.ID, inc.ID)
 	if got.EscalationStep != 1 || got.NextEscalationAt == nil {
 		t.Fatalf("after tick1: step=%d next=%v", got.EscalationStep, got.NextEscalationAt)
 	}
 
-	// Tick 2 zur selben Zeit: nicht fällig.
-	if n := esc.Process(ctx, t1); n != 0 {
-		t.Fatalf("tick2 should fire nothing, got %d", n)
+	// Tick 2 zur selben Zeit: dieser Incident darf NICHT weiter (next liegt +5m).
+	esc.Process(ctx, t1)
+	got, _ = st.GetIncident(ctx, cl.ID, inc.ID)
+	if got.EscalationStep != 1 {
+		t.Fatalf("tick2 must not advance this incident, step=%d", got.EscalationStep)
 	}
 
 	// Tick 3: nach 6 Min → step1 feuert, step→2, next=NULL (Kette Ende).
-	if n := esc.Process(ctx, t1.Add(6*time.Minute)); n != 1 {
-		t.Fatalf("tick3 should fire step1, got %d", n)
-	}
+	esc.Process(ctx, t1.Add(6*time.Minute))
 	got, _ = st.GetIncident(ctx, cl.ID, inc.ID)
 	if got.EscalationStep != 2 || got.NextEscalationAt != nil {
 		t.Fatalf("after tick3: step=%d next=%v (want step=2 next=nil)", got.EscalationStep, got.NextEscalationAt)

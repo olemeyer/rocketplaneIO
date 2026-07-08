@@ -107,10 +107,18 @@ func TestEscalationStateMachineLive(t *testing.T) {
 		t.Fatalf("expected step 0, got %d", found.Step)
 	}
 
-	// Schritt 0 feuern (analog Escalator): step→1, next = now+5m, Timeline-Event.
+	// Schritt 0 atomar claimen (analog Escalator): expected=0 → new=1, next=now+5m.
 	next := now.Add(5 * time.Minute)
-	if err := st.AdvanceEscalation(ctx, inc.ID, 1, &next, 0, []string{prov.Name}); err != nil {
+	claimed, err := st.AdvanceEscalation(ctx, inc.ID, 0, 1, &next, now, []string{prov.Name})
+	if err != nil {
 		t.Fatalf("advance: %v", err)
+	}
+	if !claimed {
+		t.Fatalf("step 0 should have been claimed")
+	}
+	// Zweiter Claim mit demselben expectedStep muss fehlschlagen (Idempotenz).
+	if again, _ := st.AdvanceEscalation(ctx, inc.ID, 0, 1, &next, now, []string{prov.Name}); again {
+		t.Fatalf("re-claiming an already-advanced step must fail")
 	}
 	inc, _ = st.GetIncident(ctx, cl.ID, inc.ID)
 	if inc.EscalationStep != 1 {
@@ -148,6 +156,11 @@ func TestEscalationStateMachineLive(t *testing.T) {
 		if d.IncidentID == inc.ID {
 			t.Fatalf("acknowledged incident must not escalate")
 		}
+	}
+	// Race-Guard: selbst ein direkter Claim (als hätte ein Tick die Zeile vor dem
+	// ack gelesen) darf einen acknowledgten Incident NICHT mehr vorschieben.
+	if claimed, _ := st.AdvanceEscalation(ctx, inc.ID, 1, 2, &next, now.Add(10*time.Minute), []string{prov.Name}); claimed {
+		t.Fatalf("claim on an acknowledged incident must fail (status guard)")
 	}
 
 	// Policy löschen → Referenz am Incident wird NULL (FK SET NULL).

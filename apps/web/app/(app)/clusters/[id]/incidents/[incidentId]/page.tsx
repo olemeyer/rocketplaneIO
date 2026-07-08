@@ -234,7 +234,10 @@ export default function IncidentDetailPage() {
 function SummaryBlock({ incident, onSave }: { incident: Incident; onSave: (s: string) => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(incident.summary);
-  useEffect(() => setDraft(incident.summary), [incident.summary]);
+  // Live-Refresh darf einen offenen Editor NICHT überschreiben.
+  useEffect(() => {
+    if (!editing) setDraft(incident.summary);
+  }, [incident.summary, editing]);
   if (editing) {
     return (
       <div>
@@ -367,7 +370,9 @@ function NoteComposer({ onSubmit }: { onSubmit: (note: string) => Promise<void> 
 function Postmortem({ value, onSave }: { value: string; onSave: (t: string) => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [value, editing]);
   return (
     <section>
       <div className="flex items-center justify-between pb-2">

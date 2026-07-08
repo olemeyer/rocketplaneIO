@@ -346,7 +346,8 @@ func (s *Store) ResolveIncidentFromAlert(ctx context.Context, ruleID, clusterID 
 	// Incident kollidiert.
 	if source == "alert" {
 		if _, err := tx.Exec(ctx, `
-			UPDATE incidents SET status='resolved', resolved_at=now(), dedup_key=NULL, updated_at=now()
+			UPDATE incidents SET status='resolved', resolved_at=now(), dedup_key=NULL,
+			  next_escalation_at=NULL, updated_at=now()
 			WHERE id=$1`, id); err != nil {
 			return uuid.Nil, err
 		}
@@ -529,7 +530,12 @@ func (s *Store) LinkInvestigationToIncident(ctx context.Context, clusterID, inci
 	if _, err := s.GetIncident(ctx, clusterID, incidentID); err != nil {
 		return err
 	}
-	tag, err := s.pool.Exec(ctx, `UPDATE copilot_investigations SET incident_id=$1 WHERE chat_id=$2`, incidentID, chatID)
+	// Cluster-Scope erzwingen: die Investigation MUSS zum selben Cluster gehören
+	// wie der Incident — sonst ließe sich per fremder chat_id eine Investigation
+	// eines anderen Orgs/Clusters an einen Incident hängen (IDOR).
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE copilot_investigations SET incident_id=$1 WHERE chat_id=$2 AND cluster_id=$3`,
+		incidentID, chatID, clusterID)
 	if err != nil {
 		return fmt.Errorf("link investigation: %w", err)
 	}

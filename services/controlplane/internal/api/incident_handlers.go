@@ -153,6 +153,13 @@ func (s *Server) handleIncidentStatus(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	// Status im Handler validieren (kein roher Store-/DB-Fehler an den Client).
+	switch req.Status {
+	case "open", "acknowledged", "mitigated", "resolved":
+	default:
+		writeErr(w, http.StatusBadRequest, "invalid status")
+		return
+	}
 	actorID, email := s.actor(r)
 	inc, err := s.store.UpdateIncidentStatus(r.Context(), clusterID, id, req.Status, actorID, email)
 	if err != nil {
@@ -160,7 +167,7 @@ func (s *Server) handleIncidentStatus(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "incident not found")
 			return
 		}
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeErr(w, http.StatusInternalServerError, "failed to update status")
 		return
 	}
 	s.audit(r, &orgID, "incident.status", "incident", id.String(), inc.Title, map[string]any{"status": inc.Status})
@@ -211,7 +218,7 @@ func (s *Server) handleAssignIncident(w http.ResponseWriter, r *http.Request) {
 
 // handleIncidentNote — POST …/incidents/{id}/notes {note}
 func (s *Server) handleIncidentNote(w http.ResponseWriter, r *http.Request) {
-	_, clusterID, ok := s.requireClusterRole(w, r, "member")
+	orgID, clusterID, ok := s.requireClusterRole(w, r, "member")
 	if !ok {
 		return
 	}
@@ -234,6 +241,7 @@ func (s *Server) handleIncidentNote(w http.ResponseWriter, r *http.Request) {
 		writeIncidentErr(w, err)
 		return
 	}
+	s.audit(r, &orgID, "incident.note", "incident", id.String(), "", nil)
 	s.broker.Publish(clusterID, "incidents", 0)
 	events, _ := s.store.ListIncidentEvents(r.Context(), id)
 	writeJSON(w, http.StatusOK, map[string]any{"timeline": events})
@@ -268,7 +276,7 @@ func (s *Server) handleIncidentPostmortem(w http.ResponseWriter, r *http.Request
 
 // handleLinkInvestigation — POST …/incidents/{id}/link-investigation {chatId}
 func (s *Server) handleLinkInvestigation(w http.ResponseWriter, r *http.Request) {
-	_, clusterID, ok := s.requireClusterRole(w, r, "member")
+	orgID, clusterID, ok := s.requireClusterRole(w, r, "member")
 	if !ok {
 		return
 	}
@@ -292,6 +300,7 @@ func (s *Server) handleLinkInvestigation(w http.ResponseWriter, r *http.Request)
 		writeIncidentErr(w, err)
 		return
 	}
+	s.audit(r, &orgID, "incident.link_investigation", "incident", id.String(), req.ChatID, nil)
 	s.broker.Publish(clusterID, "incidents", 0)
 	events, _ := s.store.ListIncidentEvents(r.Context(), id)
 	writeJSON(w, http.StatusOK, map[string]any{"timeline": events})

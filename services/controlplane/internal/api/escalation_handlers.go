@@ -183,6 +183,11 @@ func (s *Server) handleSetClusterEscalation(w http.ResponseWriter, r *http.Reque
 		writeErr(w, http.StatusInternalServerError, "failed to save setting")
 		return
 	}
+	target := ""
+	if pid != nil {
+		target = pid.String()
+	}
+	s.audit(r, &orgID, "escalation.set_default", "cluster", clusterID.String(), target, nil)
 	s.broker.Publish(clusterID, "incidents", 0)
 	writeJSON(w, http.StatusOK, map[string]any{"policyId": pid})
 }

@@ -62,15 +62,36 @@ func (e *Escalator) Process(ctx context.Context, now time.Time) int {
 			log.Printf("alerts: escalation policy %s: %v", d.PolicyID, err)
 			continue
 		}
-		// Kette erschöpft: nur next_escalation_at leeren, kein Event.
+		// Kette erschöpft: nur next_escalation_at leeren (guarded, kein Event).
 		if d.Step >= len(steps) {
-			_ = e.store.AdvanceEscalation(ctx, d.IncidentID, d.Step, nil, d.Step, nil)
+			_, _ = e.store.AdvanceEscalation(ctx, d.IncidentID, d.Step, d.Step, nil, now, nil)
 			continue
 		}
+		// Provider + Namen VORHER auflösen, dann Schritt ATOMAR claimen, dann
+		// benachrichtigen. So verhindert ein zwischenzeitliches acknowledge den
+		// Page (Claim schlägt fehl) und ein Versandfehler feuert den Schritt
+		// nicht erneut (Zustand ist bereits vorgeschoben).
 		step := steps[d.Step]
 		provs, err := e.store.ProvidersByIDs(ctx, step.ProviderIDs)
 		if err != nil {
 			log.Printf("alerts: escalation providers: %v", err)
+		}
+		names := make([]string, 0, len(provs))
+		for i := range provs {
+			names = append(names, provs[i].Name)
+		}
+		var next *time.Time
+		if d.Step+1 < len(steps) {
+			n := now.Add(clampMinutes(steps[d.Step+1].AfterMinutes))
+			next = &n
+		}
+		claimed, err := e.store.AdvanceEscalation(ctx, d.IncidentID, d.Step, d.Step+1, next, now, names)
+		if err != nil {
+			log.Printf("alerts: advance escalation %s: %v", d.IncidentID, err)
+			continue
+		}
+		if !claimed {
+			continue // acknowledged/resolved oder anderer Tick war schneller
 		}
 		p := &Payload{
 			Rule:      incidentRuleLabel(d.Number, d.Title),
@@ -81,27 +102,27 @@ func (e *Escalator) Process(ctx context.Context, now time.Time) int {
 			At:        now,
 			Message:   incidentEscalationMessage(d.Number, d.Title, d.Severity, d.Step),
 		}
-		names := make([]string, 0, len(provs))
 		for i := range provs {
 			if err := SendNotification(ctx, e.http, &provs[i], p); err != nil {
 				log.Printf("alerts: escalate notify %s (%s): %v", provs[i].Name, provs[i].Type, err)
 			}
-			names = append(names, provs[i].Name)
-		}
-		// Nächste Fälligkeit = jetzt + afterMinutes des Folgeschritts (oder Ende).
-		var next *time.Time
-		if d.Step+1 < len(steps) {
-			n := now.Add(time.Duration(steps[d.Step+1].AfterMinutes) * time.Minute)
-			next = &n
-		}
-		if err := e.store.AdvanceEscalation(ctx, d.IncidentID, d.Step+1, next, d.Step, names); err != nil {
-			log.Printf("alerts: advance escalation %s: %v", d.IncidentID, err)
-			continue
 		}
 		e.broker.Publish(d.ClusterID, "incidents", 0)
 		fired++
 	}
 	return fired
+}
+
+// clampMinutes begrenzt afterMinutes defensiv auf [0, 7 Tage], damit die
+// time.Duration-Multiplikation nie überläuft (int-Minuten * 60e9 ns).
+func clampMinutes(m int) time.Duration {
+	if m < 0 {
+		m = 0
+	}
+	if m > 7*24*60 {
+		m = 7 * 24 * 60
+	}
+	return time.Duration(m) * time.Minute
 }
 
 func incidentRuleLabel(number int, title string) string {

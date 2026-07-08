@@ -44,11 +44,22 @@ export function EscalationManager({
     load();
   }, [orgId, load]);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   const pickDefault = async (id: string | null) => {
+    const prev = defaultId;
     setDefaultId(id);
     try {
       await setClusterEscalation(orgId, clusterId, id);
+      setErr(null);
     } catch {
+      setDefaultId(prev); // Rollback der optimistischen Auswahl
       setErr('Failed to set default policy.');
     }
   };

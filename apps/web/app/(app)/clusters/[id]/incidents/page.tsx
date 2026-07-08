@@ -194,8 +194,10 @@ export default function IncidentsPage() {
               const inc = await createIncident(orgId, clusterId, { title, severity });
               setDeclaring(false);
               router.push(`/clusters/${clusterId}/incidents/${inc.id}`);
+              return true;
             } catch {
               setErr('Failed to declare incident.');
+              return false;
             }
           }}
           err={err}
@@ -226,12 +228,19 @@ function DeclareModal({
   err,
 }: {
   onClose: () => void;
-  onSubmit: (title: string, severity: string) => void;
+  onSubmit: (title: string, severity: string) => Promise<boolean>;
   err: string | null;
 }) {
   const [title, setTitle] = useState('');
   const [severity, setSeverity] = useState('high');
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4" onClick={onClose}>
       <div
@@ -282,9 +291,10 @@ function DeclareModal({
           <button
             type="button"
             disabled={!title.trim() || busy}
-            onClick={() => {
+            onClick={async () => {
               setBusy(true);
-              onSubmit(title.trim(), severity);
+              const ok = await onSubmit(title.trim(), severity);
+              if (!ok) setBusy(false);
             }}
             className="rp-focus h-9 rounded-skin-sm px-4 font-mono text-[11.5px] font-semibold transition-opacity hover:opacity-90 disabled:opacity-50"
             style={{ background: 'var(--rp-btn-bg)', color: 'var(--rp-btn-fg)' }}
