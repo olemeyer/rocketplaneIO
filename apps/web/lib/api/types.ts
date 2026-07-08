@@ -24,6 +24,23 @@ export interface Member {
   isYou?: boolean;
 }
 
+/** An API token / service account for programmatic access. */
+export interface APIToken {
+  id: string;
+  orgId: string;
+  name: string;
+  role: OrgRole;
+  prefix: string;
+  createdBy?: string;
+  createdByName?: string;
+  createdAt: string;
+  lastUsedAt?: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  status: 'active' | 'expired' | 'revoked';
+  secret?: string; // returned ONCE on creation
+}
+
 /** A pending (or accepted) org invitation. */
 export interface Invitation {
   id: string;

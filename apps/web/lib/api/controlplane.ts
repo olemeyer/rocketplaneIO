@@ -66,6 +66,24 @@ export function transferOwnership(orgId: string, userId: string): Promise<unknow
   return apiFetch(`/api/orgs/${enc(orgId)}/transfer`, { method: 'POST', body: JSON.stringify({ userId }) });
 }
 
+/* ── API tokens / service accounts ──────────────────────────────────────── */
+
+export function listAPITokens(orgId: string): Promise<{ tokens: import('./types').APIToken[] }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/api-tokens`);
+}
+export function createAPIToken(
+  orgId: string,
+  body: { name: string; role: OrgRole; expiresInDays?: number },
+): Promise<import('./types').APIToken> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/api-tokens`, { method: 'POST', body: JSON.stringify(body) });
+}
+export function revokeAPIToken(orgId: string, tokenId: string): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/api-tokens/${enc(tokenId)}/revoke`, { method: 'POST', body: '{}' });
+}
+export function deleteAPIToken(orgId: string, tokenId: string): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/api-tokens/${enc(tokenId)}`, { method: 'DELETE' });
+}
+
 /* ── Members & invitations ──────────────────────────────────────────────── */
 
 export function listMembers(orgId: string): Promise<{ members: Member[] }> {

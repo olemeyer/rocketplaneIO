@@ -7,10 +7,11 @@ import { Spinner } from '@/components/ui';
 import { PageHeader } from '@/components/app/page-header';
 import { useMe } from '@/components/app/me-context';
 import {
-  createInvitation, deleteOrg, listAudit, listInvitations, listMembers,
-  removeMember, renameOrg, revokeInvitation, transferOwnership, updateMemberRole,
+  createAPIToken, createInvitation, deleteAPIToken, deleteOrg, listAPITokens, listAudit,
+  listInvitations, listMembers, removeMember, renameOrg, revokeAPIToken, revokeInvitation,
+  transferOwnership, updateMemberRole,
 } from '@/lib/api/controlplane';
-import type { AuditEntry, Invitation, Member, OrgRole } from '@/lib/api/types';
+import type { APIToken, AuditEntry, Invitation, Member, OrgRole } from '@/lib/api/types';
 import { ApiError } from '@/lib/api/client';
 
 // Settings — org-level Access Control: who is in the org (members + pending
@@ -18,7 +19,7 @@ import { ApiError } from '@/lib/api/client';
 // delete). Gated by the caller's role: members read, admins manage people,
 // owners manage the org. Mirrors the control-plane RBAC exactly.
 
-type Tab = 'members' | 'audit' | 'organization';
+type Tab = 'members' | 'api keys' | 'audit' | 'organization';
 const ROLE_RANK: Record<OrgRole, number> = { owner: 3, admin: 2, member: 1 };
 
 function relTime(iso: string): string {
@@ -29,6 +30,18 @@ function relTime(iso: string): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
+}
+
+// expiryLabel handles FUTURE timestamps (relTime clamps them to "just now").
+function expiryLabel(iso: string): string {
+  const t = Date.parse(iso);
+  if (!t) return '';
+  const s = (t - Date.now()) / 1000;
+  if (s <= 0) return 'expired';
+  const d = Math.floor(s / 86400);
+  if (d >= 1) return `expires in ${d}d`;
+  const h = Math.floor(s / 3600);
+  return h >= 1 ? `expires in ${h}h` : 'expires soon';
 }
 
 const ROLE_TONE: Record<OrgRole, string> = {
@@ -57,7 +70,7 @@ export default function SettingsPage() {
       </PageHeader>
 
       <div className="mt-3 flex shrink-0 gap-1">
-        {(['members', 'audit', 'organization'] as Tab[]).map((t) => (
+        {(['members', 'api keys', 'audit', 'organization'] as Tab[]).map((t) => (
           <button
             key={t}
             type="button"
@@ -74,7 +87,10 @@ export default function SettingsPage() {
       </div>
 
       <div className="mt-3 min-h-0 flex-1 overflow-y-auto pb-6">
-        {currentOrg.isPersonal ? (
+        {tab === 'api keys' ? (
+          // API keys work for both personal and team orgs (solo automation too).
+          <ApiKeysTab orgId={currentOrg.id} isAdmin={isAdmin} />
+        ) : currentOrg.isPersonal ? (
           <PersonalNotice />
         ) : tab === 'members' ? (
           <MembersTab orgId={currentOrg.id} isAdmin={isAdmin} isOwner={isOwner} myId={me?.user.id ?? ''} onLeave={refresh} />
@@ -335,6 +351,133 @@ function OrganizationTab({ orgId, orgName, isOwner, onChanged }: { orgId: string
 
       {msg ? <p className="font-mono text-[10.5px]" style={{ color: 'var(--rp-tone-green-fg)' }}>✓ {msg}</p> : null}
       {err ? <p className="font-mono text-[10.5px]" style={{ color: 'var(--rp-tone-red-fg)' }}>{err}</p> : null}
+    </div>
+  );
+}
+
+// ApiKeysTab — programmatic access: create org-scoped API tokens (rp_…) with a
+// member/admin role and optional expiry. The secret is shown exactly ONCE at
+// creation. Managing tokens requires an admin session (the API enforces it).
+function ApiKeysTab({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
+  const [tokens, setTokens] = useState<APIToken[] | null>(null);
+  const [name, setName] = useState('');
+  const [role, setRole] = useState<OrgRole>('member');
+  const [expiry, setExpiry] = useState('never');
+  const [busy, setBusy] = useState(false);
+  const [secret, setSecret] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    listAPITokens(orgId).then((r) => setTokens(r.tokens)).catch(() => setTokens([]));
+  }, [orgId]);
+  useEffect(load, [load]);
+
+  const create = async () => {
+    if (!name.trim() || busy) return;
+    setBusy(true); setErr(null); setSecret(null);
+    try {
+      const days = expiry === 'never' ? 0 : parseInt(expiry, 10);
+      const t = await createAPIToken(orgId, { name: name.trim(), role, expiresInDays: days });
+      setSecret(t.secret ?? null);
+      setName('');
+      load();
+    } catch (e) { setErr(e instanceof ApiError ? String(e.message) : 'failed to create token'); }
+    setBusy(false);
+  };
+
+  const chip = (t: APIToken) => {
+    if (t.status === 'revoked') return { fg: 'var(--rp-ink-muted)', bg: 'var(--rp-tone-neutral-bg)', label: 'revoked' };
+    if (t.status === 'expired') return { fg: 'var(--rp-tone-yellow-fg)', bg: 'var(--rp-tone-yellow-bg)', label: 'expired' };
+    return { fg: 'var(--rp-tone-green-fg)', bg: 'var(--rp-tone-green-bg)', label: 'active' };
+  };
+
+  return (
+    <div className="max-w-[720px] space-y-3">
+      {!isAdmin ? (
+        <p className="rounded-skin-sm px-3 py-2 font-mono text-[10.5px]" style={{ color: 'var(--rp-tone-yellow-fg)', background: 'var(--rp-tone-yellow-bg)' }}>
+          API tokens are managed by org admins. You can view them but not create or revoke.
+        </p>
+      ) : (
+        <section className="rounded-skin border border-line bg-raised p-3" style={{ boxShadow: 'var(--rp-rim)' }}>
+          <p className="rp-micro !text-[10px] mb-2">create an API token</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') create(); }}
+              placeholder="e.g. ci-deploy-bot"
+              className="rp-focus h-9 min-w-[200px] flex-1 rounded-skin-sm border border-line bg-inset px-3 font-mono text-[12px] text-ink placeholder:text-faint"
+            />
+            <select value={role} onChange={(e) => setRole(e.target.value as OrgRole)} className="rp-focus h-9 rounded-skin-sm border border-line bg-inset px-2 font-mono text-[11.5px] text-ink" title="token role">
+              <option value="member">member</option>
+              <option value="admin">admin</option>
+            </select>
+            <select value={expiry} onChange={(e) => setExpiry(e.target.value)} className="rp-focus h-9 rounded-skin-sm border border-line bg-inset px-2 font-mono text-[11.5px] text-ink" title="expiry">
+              <option value="never">no expiry</option>
+              <option value="30">30 days</option>
+              <option value="90">90 days</option>
+              <option value="365">1 year</option>
+            </select>
+            <button type="button" disabled={!name.trim() || busy} onClick={create} className="rp-focus h-9 rounded-skin-sm px-3.5 font-mono text-[11.5px] font-semibold transition-opacity hover:opacity-90 disabled:opacity-40" style={{ background: 'var(--rp-btn-bg)', color: 'var(--rp-btn-fg)' }}>
+              {busy ? 'creating…' : 'Create token'}
+            </button>
+          </div>
+          {err ? <p className="mt-2 font-mono text-[10.5px]" style={{ color: 'var(--rp-tone-red-fg)' }}>{err}</p> : null}
+          {secret ? (
+            <div className="mt-2 rounded-skin-sm border p-2.5" style={{ borderColor: 'var(--rp-tone-green-fg)', background: 'var(--rp-tone-green-bg)' }}>
+              <p className="font-mono text-[9.5px]" style={{ color: 'var(--rp-tone-green-fg)' }}>copy this token now — it will NOT be shown again:</p>
+              <div className="mt-1 flex items-center gap-2">
+                <code className="min-w-0 flex-1 truncate rounded-skin-sm bg-inset px-2 py-1 font-mono text-[11px] text-ink">{secret}</code>
+                <button type="button" onClick={() => navigator.clipboard?.writeText(secret)} className="rp-focus shrink-0 rounded-skin-chip border border-line bg-raised px-2 py-1 font-mono text-[10px] text-mid transition-colors hover:bg-hover hover:text-ink">copy</button>
+                <button type="button" onClick={() => setSecret(null)} className="rp-focus shrink-0 rounded-skin-chip px-2 py-1 font-mono text-[10px] text-faint transition-colors hover:text-ink">dismiss</button>
+              </div>
+            </div>
+          ) : null}
+          <p className="mt-2 font-mono text-[9.5px] leading-relaxed text-faint">
+            Use it as a bearer token: <code className="text-muted">Authorization: Bearer rp_…</code>. Scoped to this org with the chosen role; it cannot access the platform-admin console or manage tokens.
+          </p>
+        </section>
+      )}
+
+      {tokens === null ? (
+        <div className="flex items-center gap-2 py-3 text-muted"><Spinner /> <span className="font-mono text-[11px]">loading…</span></div>
+      ) : tokens.length === 0 ? (
+        <p className="py-2 font-mono text-[11px] text-faint">No API tokens yet.</p>
+      ) : (
+        <div className="divide-y divide-line overflow-hidden rounded-skin border border-line">
+          {tokens.map((t) => {
+            const c = chip(t);
+            const dim = t.status !== 'active';
+            return (
+              <div key={t.id} className="flex items-center gap-3 bg-raised px-3 py-2.5" style={dim ? { opacity: 0.6 } : undefined}>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate font-mono text-[11.5px] text-ink">{t.name}</span>
+                    <span className="shrink-0 rounded-skin-chip px-1 py-px font-mono text-[8.5px] uppercase tracking-[0.05em]" style={{ color: t.role === 'admin' ? 'var(--rp-accent)' : 'var(--rp-ink-muted)', background: 'var(--rp-tone-neutral-bg)' }}>{t.role}</span>
+                    <span className="shrink-0 rounded-skin-chip px-1 py-px font-mono text-[8.5px] uppercase tracking-[0.05em]" style={{ color: c.fg, background: c.bg }}>{c.label}</span>
+                  </div>
+                  <div className="mt-0.5 flex items-center gap-2 font-mono text-[9.5px] text-faint">
+                    <code className="text-muted">{t.prefix}…</code>
+                    <span>·</span>
+                    <span>{t.lastUsedAt ? `last used ${relTime(t.lastUsedAt)}` : 'never used'}</span>
+                    <span>·</span>
+                    <span>created {relTime(t.createdAt)}{t.createdByName ? ` by ${t.createdByName}` : ''}</span>
+                    {t.expiresAt ? <><span>·</span><span>{expiryLabel(t.expiresAt)}</span></> : null}
+                  </div>
+                </div>
+                {isAdmin ? (
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {t.status === 'active' ? (
+                      <button type="button" onClick={() => revokeAPIToken(orgId, t.id).then(load)} className="rp-focus rounded-skin-chip border border-line px-2 py-0.5 font-mono text-[10px] transition-colors hover:bg-hover" style={{ color: 'var(--rp-tone-red-fg)' }}>revoke</button>
+                    ) : null}
+                    <button type="button" onClick={() => deleteAPIToken(orgId, t.id).then(load)} className="rp-focus rounded-skin-chip border border-line px-2 py-0.5 font-mono text-[10px] text-faint transition-colors hover:bg-hover hover:text-ink">delete</button>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
