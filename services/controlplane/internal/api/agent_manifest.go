@@ -109,6 +109,14 @@ rules:
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]
+  # pod_logs: kubectl logs [--previous] direkt vom Kubelet
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # run_debug_pod: ephemere Probe-Pods (auto-cleanup; delete ist oben schon erlaubt)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create"]
   # patch_resource/restore_resource: Service/Ingress/NetworkPolicy/PDB editieren
   - apiGroups: [""]
     resources: ["services"]

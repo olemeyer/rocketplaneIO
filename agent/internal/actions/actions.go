@@ -473,6 +473,12 @@ func (r *Runner) plan(a Action) []step {
 		return r.planDeleteJob(a)
 	case "restore_resource":
 		return r.planRestoreResource(a)
+	case "pod_logs":
+		return r.planPodLogs(a)
+	case "run_debug_pod":
+		return r.planRunDebugPod(a)
+	case "list_events":
+		return r.planListEvents(a)
 	case "delete_pod":
 		// Alte Pod-UID zwischen den Steps teilen: bei StatefulSets heißt der
 		// Ersatz-Pod GENAUSO (clickhouse-0) — nur die UID unterscheidet alt/neu.
@@ -600,6 +606,16 @@ func (r *Runner) prepareUndo(ctx context.Context, a Action) (string, func(contex
 	case "patch_resource", "restore_resource":
 		// Generisch: Before-Objekt sichern und bei Fehlschlag per SSA re-applyen.
 		return r.undoGenericApply(ctx, a)
+	case "run_debug_pod":
+		// Cancel/Timeout überspringt den cleanup-Step — der Undo räumt auf.
+		name := debugPodName(a)
+		return "probe pod removed", func(rctx context.Context) error {
+			err := r.clientset.CoreV1().Pods(a.TargetNamespace).Delete(rctx, name, metav1.DeleteOptions{})
+			if err != nil && strings.Contains(err.Error(), "not found") {
+				return nil
+			}
+			return err
+		}
 	}
 	return "", nil
 }

@@ -77,6 +77,8 @@ export function actionLevelOf(kind: string, params?: Record<string, unknown>): R
     case 'describe_resource':
     case 'get_secret':
     case 'helm_releases':
+    case 'pod_logs':
+    case 'list_events':
       return 'read';
     case 'scale': {
       // fail-closed wie das Backend: nicht parsebar oder 0 → destructive
@@ -93,6 +95,7 @@ export function actionLevelOf(kind: string, params?: Record<string, unknown>): R
     case 'pvc_expand':
     case 'restore_resource':
     case 'script':
+    case 'run_debug_pod':
       return 'destructive';
     case 'delete_pod':
     case 'evict_pod':
@@ -130,6 +133,7 @@ export function actionCategoryOf(kind: string): ActionCategory {
   switch (kind) {
     case 'debug_bundle': case 'pod_events': case 'rollout_history': case 'drain_preview':
     case 'get_resource': case 'describe_resource': case 'get_secret': case 'helm_releases': case 'exec_readonly':
+    case 'pod_logs': case 'list_events': case 'run_debug_pod':
       return 'diagnose';
     case 'rollout_restart': case 'rollout_undo': case 'rollout_pause': case 'rollout_resume':
     case 'rollout_to_revision': case 'set_image': case 'statefulset_partition': case 'delete_pod': case 'evict_pod':

@@ -21,6 +21,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
 	"sigs.k8s.io/yaml"
@@ -36,10 +37,35 @@ const (
 
 /* ── get_resource ───────────────────────────────────────────────────────── */
 
+// resolveTarget holt das Zielobjekt — Standard-Kinds über die statische Karte,
+// ALLES ANDERE (CRDs: Certificates, ArgoCD Applications, CNPG Clusters, Istio
+// VirtualServices, …) über params.apiVersion + params.resource (Plural).
+func (r *Runner) resolveTarget(ctx context.Context, a Action) (*unstructured.Unstructured, error) {
+	var p struct {
+		APIVersion string `json:"apiVersion"`
+		Resource   string `json:"resource"`
+	}
+	_ = json.Unmarshal(a.Params, &p)
+	if p.APIVersion == "" && p.Resource == "" {
+		return r.getUnstructured(ctx, a.TargetKind, a.TargetNamespace, a.TargetName)
+	}
+	if r.dyn == nil {
+		return nil, fmt.Errorf("generic access unavailable (no dynamic client)")
+	}
+	gvr, err := rawGVR(p.APIVersion, a.TargetKind, p.Resource)
+	if err != nil {
+		return nil, err
+	}
+	if a.TargetNamespace == "-" || a.TargetNamespace == "" {
+		return r.dyn.Resource(gvr).Get(ctx, a.TargetName, metav1.GetOptions{})
+	}
+	return r.dyn.Resource(gvr).Namespace(a.TargetNamespace).Get(ctx, a.TargetName, metav1.GetOptions{})
+}
+
 func (r *Runner) planGetResource(a Action) []step {
 	return []step{
 		{name: "read", run: func(ctx context.Context, _ func(string)) (string, error) {
-			u, err := r.getUnstructured(ctx, a.TargetKind, a.TargetNamespace, a.TargetName)
+			u, err := r.resolveTarget(ctx, a)
 			if err != nil {
 				return "", err
 			}
@@ -65,7 +91,7 @@ func (r *Runner) planGetResource(a Action) []step {
 func (r *Runner) planDescribeResource(a Action) []step {
 	return []step{
 		{name: "status", run: func(ctx context.Context, _ func(string)) (string, error) {
-			u, err := r.getUnstructured(ctx, a.TargetKind, a.TargetNamespace, a.TargetName)
+			u, err := r.resolveTarget(ctx, a)
 			if err != nil {
 				return "", err
 			}
@@ -220,6 +246,10 @@ func (r *Runner) planHelmReleases(a Action) []step {
 type execParams struct {
 	Command   []string `json:"command"`
 	Container string   `json:"container"`
+	// Retry: bis zum Action-Timeout alle ~1.5s erneut versuchen — fängt das
+	// kurze Lauffenster eines CrashLoop-Pods ab („exec scheitert, Pod crasht
+	// zu schnell" aus echten Incidents).
+	Retry bool `json:"retry"`
 }
 
 // execAllowed spiegelt die CP-Whitelist (Defense-in-Depth: der Agent verlässt
@@ -286,27 +316,50 @@ func (r *Runner) planExecReadonly(a Action) []step {
 			if err != nil {
 				return "", err
 			}
-			ectx, cancel := context.WithTimeout(ctx, execTimeout)
-			defer cancel()
-			var stdout, stderr bytes.Buffer
-			streamErr := exec.StreamWithContext(ectx, remotecommand.StreamOptions{
-				Stdout: limitWriter{&stdout, execOutputCap},
-				Stderr: limitWriter{&stderr, 16 * 1024},
-			})
-			out := strings.TrimRight(stdout.String(), "\n")
-			if stderr.Len() > 0 {
-				out += "\n[stderr] " + strings.TrimRight(stderr.String(), "\n")
+			attempt := func() (string, error) {
+				ectx, cancel := context.WithTimeout(ctx, execTimeout)
+				defer cancel()
+				var stdout, stderr bytes.Buffer
+				streamErr := exec.StreamWithContext(ectx, remotecommand.StreamOptions{
+					Stdout: limitWriter{&stdout, execOutputCap},
+					Stderr: limitWriter{&stderr, 16 * 1024},
+				})
+				out := strings.TrimRight(stdout.String(), "\n")
+				if stderr.Len() > 0 {
+					out += "\n[stderr] " + strings.TrimRight(stderr.String(), "\n")
+				}
+				if streamErr != nil && out == "" {
+					return "", streamErr
+				}
+				if streamErr != nil {
+					out += "\n[exit] " + streamErr.Error()
+				}
+				if out == "" {
+					out = "(no output)"
+				}
+				return out, nil
 			}
-			if streamErr != nil && out == "" {
-				return "", streamErr
+			if !p.Retry {
+				return attempt()
 			}
-			if streamErr != nil {
-				out += "\n[exit] " + streamErr.Error()
+			// Retry-Modus: den Crash-Zyklus abpassen, bis der Action-Timeout greift.
+			tries := 0
+			for {
+				out, err := attempt()
+				if err == nil {
+					if tries > 0 {
+						out = fmt.Sprintf("[caught after %d retries]\n%s", tries, out)
+					}
+					return out, nil
+				}
+				tries++
+				report(fmt.Sprintf("attempt %d failed (%v) — retrying", tries, err))
+				select {
+				case <-ctx.Done():
+					return "", fmt.Errorf("could not catch a running container in %d attempts — last: %v", tries, err)
+				case <-time.After(1500 * time.Millisecond):
+				}
 			}
-			if out == "" {
-				out = "(no output)"
-			}
-			return out, nil
 		}},
 	}
 }

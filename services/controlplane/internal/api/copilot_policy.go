@@ -17,7 +17,8 @@ import (
 func actionLevel(kind string, params map[string]any) string {
 	switch kind {
 	case "debug_bundle", "pod_events", "rollout_history", "drain_preview",
-		"get_resource", "describe_resource", "get_secret", "helm_releases":
+		"get_resource", "describe_resource", "get_secret", "helm_releases",
+		"pod_logs", "list_events":
 		return "read"
 	case "exec_readonly":
 		// liest nur (Whitelist-Kommandos), betritt aber einen laufenden Container —
@@ -27,8 +28,8 @@ func actionLevel(kind string, params map[string]any) string {
 		return "reversible"
 	case "delete_job":
 		return "disruptive"
-	case "patch_resource", "create_configmap", "delete_configmap", "pvc_expand", "restore_resource", "script":
-		return "destructive"
+	case "patch_resource", "create_configmap", "delete_configmap", "pvc_expand", "restore_resource", "script", "run_debug_pod":
+		return "destructive" // run_debug_pod: beliebiges Image+Kommando, wenn auch isoliert + auto-cleanup
 	case "scale":
 		// Fail-closed: replicas nicht als >0-Int parsebar (z.B. String "0",
 		// fehlend) → destructive, damit ein scale-to-0 nie unter ein weicheres
@@ -63,7 +64,8 @@ func actionLevel(kind string, params map[string]any) string {
 func actionCategory(kind string) string {
 	switch kind {
 	case "debug_bundle", "pod_events", "rollout_history", "drain_preview",
-		"get_resource", "describe_resource", "get_secret", "helm_releases", "exec_readonly":
+		"get_resource", "describe_resource", "get_secret", "helm_releases", "exec_readonly",
+		"pod_logs", "list_events", "run_debug_pod":
 		return "diagnose"
 	case "rollout_restart", "rollout_undo", "rollout_pause", "rollout_resume",
 		"rollout_to_revision", "set_image", "statefulset_partition", "delete_pod", "evict_pod":

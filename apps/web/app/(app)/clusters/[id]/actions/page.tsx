@@ -391,6 +391,41 @@ const BUILTINS: Builtin[] = [
       { name: 'pod', type: 'string', required: true, description: 'exact pod name' },
       { name: 'container', type: 'string', description: 'blank = first container' },
       { name: 'command', type: 'string', required: true, multiline: true, description: 'one argument per line, e.g.\ncat\n/var/log/app/error.log' },
+      { name: 'retry', type: 'bool', description: 'keep retrying to catch a CrashLoop pod\u2019s brief run window' },
+    ],
+  },
+  {
+    kind: 'pod_logs',
+    name: 'pod logs (kubelet)',
+    description: 'kubectl logs straight from the kubelet — including the PREVIOUS crashed container (the way to read a crash reason). Independent of the log pipeline.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'pod', type: 'string', required: true, description: 'exact pod name' },
+      { name: 'container', type: 'string', description: 'blank = first container' },
+      { name: 'previous', type: 'bool', description: 'read the previous (crashed) container' },
+      { name: 'tailLines', type: 'int', min: 1, max: 500, default: '200' },
+    ],
+  },
+  {
+    kind: 'list_events',
+    name: 'namespace events',
+    description: 'ALL recent events of a namespace, newest first — “what happened here around 17:30?”. Optionally warnings only.',
+    fields: [
+      { name: 'namespace', type: 'namespace', description: 'blank = all namespaces' },
+      { name: 'warningsOnly', type: 'bool' },
+      { name: 'limit', type: 'int', min: 1, max: 100, default: '40' },
+    ],
+  },
+  {
+    kind: 'run_debug_pod',
+    name: 'run debug pod',
+    description: 'Ephemeral probe pod: image + argv, optional PVC mounted read-only at /pvc, optional node pinning. Logs are the result, the pod is always cleaned up. Image bisecting, in-cluster HTTP/DNS probes, PVC inspection.',
+    fields: [
+      { name: 'namespace', type: 'namespace', required: true, default: 'shop' },
+      { name: 'image', type: 'string', required: true, description: 'e.g. curlimages/curl or clickhouse/clickhouse-server:24.12.5.81' },
+      { name: 'command', type: 'string', required: true, multiline: true, description: 'one argument per line, e.g.\ncurl\n-sS\nhttp://payments:8080/healthz' },
+      { name: 'pvcName', type: 'string', description: 'PVC to mount read-only at /pvc (optional)' },
+      { name: 'nodeName', type: 'node', description: 'pin to a node (optional)' },
     ],
   },
   // ── Katalog Batch 2 — Config & Secrets ──────────────────────────────────
@@ -560,6 +595,16 @@ function buildActionBody(kind: string, values: Record<string, string>) {
     targetKind = 'PersistentVolumeClaim';
   } else if (kind === 'delete_job') {
     targetKind = 'Job';
+  } else if (kind === 'pod_logs') {
+    targetKind = 'Pod';
+    targetName = values.pod ?? '';
+  } else if (kind === 'list_events') {
+    targetKind = 'Namespace';
+    targetName = values.namespace || '-';
+    targetNamespace = '-';
+  } else if (kind === 'run_debug_pod') {
+    targetKind = 'Namespace';
+    targetName = `probe-${Date.now() % 100000}`;
   }
 
   if (kind === 'scale') params = { replicas: Number(values.replicas ?? 1) };
@@ -607,7 +652,23 @@ function buildActionBody(kind: string, values: Record<string, string>) {
   } else if (kind === 'pvc_expand') params = { size: values.size ?? '' };
   else if (kind === 'exec_readonly') {
     const argv = (values.command ?? '').split('\n').map((s) => s.trim()).filter(Boolean);
-    params = { command: argv, ...(values.container ? { container: values.container } : {}) };
+    params = { command: argv, ...(values.container ? { container: values.container } : {}), ...(isTrue(values.retry) ? { retry: true } : {}) };
+  } else if (kind === 'pod_logs')
+    params = {
+      ...(values.container ? { container: values.container } : {}),
+      ...(isTrue(values.previous) ? { previous: true } : {}),
+      ...(values.tailLines ? { tailLines: Number(values.tailLines) } : {}),
+    };
+  else if (kind === 'list_events')
+    params = { ...(isTrue(values.warningsOnly) ? { warningsOnly: true } : {}), ...(values.limit ? { limit: Number(values.limit) } : {}) };
+  else if (kind === 'run_debug_pod') {
+    const argv = (values.command ?? '').split('\n').map((s) => s.trim()).filter(Boolean);
+    params = {
+      image: values.image ?? '',
+      command: argv,
+      ...(values.pvcName ? { pvcName: values.pvcName } : {}),
+      ...(values.nodeName ? { nodeName: values.nodeName } : {}),
+    };
   }
 
   // Generisch: optionaler Ablauf-Timeout (10–1800s) — gilt für jede Action.
@@ -698,6 +759,9 @@ const ACTION_META: Record<string, { category: Category; klass: ActionClass }> = 
   patch_resource: { category: 'network', klass: 'destructive' },
   pvc_expand: { category: 'storage', klass: 'destructive' },
   delete_job: { category: 'batch', klass: 'disruptive' },
+  pod_logs: { category: 'investigate', klass: 'read' },
+  list_events: { category: 'investigate', klass: 'read' },
+  run_debug_pod: { category: 'investigate', klass: 'destructive' },
 };
 
 // TARGET_LABEL: worauf eine Action wirkt — als Chip auf der Karte, damit man
@@ -717,7 +781,8 @@ const TARGET_LABEL: Record<string, string> = {
   pdb_set: 'pdb', patch_resource: 'svc · ing · netpol · pdb',
   pvc_expand: 'pvc', delete_job: 'job',
   cronjob_trigger: 'cronjob', cronjob_suspend: 'cronjob', cronjob_resume: 'cronjob',
-  get_resource: 'any object', describe_resource: 'any object', annotate: 'any object',
+  get_resource: 'any object · crd', describe_resource: 'any object · crd', annotate: 'any object',
+  pod_logs: 'pod', list_events: 'namespace', run_debug_pod: 'ephemeral pod',
 };
 
 // Level-Labels/Glyphs kommen aus lib/approval (LEVEL_META) — eine Quelle für
@@ -769,6 +834,9 @@ function ActionIcon({ kind }: { kind: string }) {
     patch_resource: (<><path d="M4 20l4.5-1L20 7.5 16.5 4 5 15.5z" /><path d="M14 6.5L17.5 10" /></>),
     pvc_expand: (<><ellipse cx="12" cy="6" rx="7" ry="2.6" /><path d="M5 6v12c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V6" /><path d="M12 10.5v5M9.8 13.3L12 15.5l2.2-2.2" /></>),
     delete_job: (<><circle cx="12" cy="12" r="8" /><path d="M9 9l6 6M15 9l-6 6" /></>),
+    pod_logs: (<><rect x="4" y="4" width="16" height="16" rx="1.5" /><path d="M7.5 8.5h9M7.5 12h9M7.5 15.5h5" /></>),
+    list_events: (<><path d="M5 5h14M5 9.5h14M5 14h10M5 18.5h7" /><circle cx="19" cy="16.5" r="2.4" /></>),
+    run_debug_pod: (<><rect x="4" y="7" width="12" height="12" rx="1.5" /><path d="M10 4h10v10" strokeDasharray="2.5 2" /><path d="M8 12l2 1.8L8 15.6M12 15.6h2" /></>),
   };
   return (
     <svg

@@ -248,6 +248,51 @@ func tools() []tool {
 			},
 		},
 		{
+			name: "pod_logs",
+			desc: "Read a pod's logs directly from the kubelet — including the PREVIOUS crashed container (previous=true, the way to read a crash reason).",
+			schema: obj(map[string]any{
+				"namespace": str("namespace"),
+				"pod":       str("exact pod name"),
+				"container": str("container name (optional)"),
+				"previous":  str("'true' to read the previous crashed container"),
+				"tailLines": intp("lines from the end (default 200, max 500)"),
+			}, "namespace", "pod"),
+			call: func(a map[string]any) (string, error) {
+				params := map[string]any{}
+				if c := s(a, "container"); c != "" {
+					params["container"] = c
+				}
+				if s(a, "previous") == "true" {
+					params["previous"] = true
+				}
+				if n := i(a, "tailLines", 0); n > 0 {
+					params["tailLines"] = n
+				}
+				return apiPost("/actions", map[string]any{
+					"kind": "pod_logs", "targetNamespace": s(a, "namespace"),
+					"targetKind": "Pod", "targetName": s(a, "pod"), "params": params,
+				})
+			},
+		},
+		{
+			name: "list_events",
+			desc: "All recent events of a namespace sorted newest-first — 'what happened here?'.",
+			schema: obj(map[string]any{
+				"namespace":    str("namespace (omit for all)"),
+				"warningsOnly": str("'true' for Warning events only"),
+			}),
+			call: func(a map[string]any) (string, error) {
+				params := map[string]any{}
+				if s(a, "warningsOnly") == "true" {
+					params["warningsOnly"] = true
+				}
+				return apiPost("/actions", map[string]any{
+					"kind": "list_events", "targetNamespace": "-",
+					"targetKind": "Namespace", "targetName": orDef(s(a, "namespace"), "-"), "params": params,
+				})
+			},
+		},
+		{
 			name: "get_secret",
 			desc: "Inspect a Secret WITHOUT revealing values: keys, value lengths and sha256 hashes. Plaintext never leaves the cluster.",
 			schema: obj(map[string]any{

@@ -71,10 +71,14 @@ var actionTargetKinds = map[string]map[string]bool{
 	"create_configmap":  {"ConfigMap": true},
 	"delete_configmap":  {"ConfigMap": true},
 	"pdb_set":           {"PodDisruptionBudget": true},
-	"patch_resource":    {"Service": true, "Ingress": true, "NetworkPolicy": true, "PodDisruptionBudget": true},
+	"patch_resource":    {"Service": true, "Ingress": true, "NetworkPolicy": true, "PodDisruptionBudget": true, "ResourceQuota": true, "LimitRange": true},
 	"pvc_expand":        {"PersistentVolumeClaim": true},
 	"delete_job":        {"Job": true},
-	"restore_resource":  {"Service": true, "Ingress": true, "NetworkPolicy": true, "PodDisruptionBudget": true, "ConfigMap": true},
+	"restore_resource":  {"Service": true, "Ingress": true, "NetworkPolicy": true, "PodDisruptionBudget": true, "ConfigMap": true, "ResourceQuota": true, "LimitRange": true},
+	// Katalog Batch 3 — generische Incident-Primitive
+	"pod_logs":      {"Pod": true},       // read: kubectl logs [--previous] direkt vom Kubelet
+	"list_events":   {"Namespace": true}, // read: alle jüngsten Events eines Namespaces
+	"run_debug_pod": {"Namespace": true}, // ephemerer Probe-Pod (Image-Bisect, HTTP/DNS-Probe, PVC-Inspektion)
 }
 
 // generalReadKinds: alles, was get_resource/describe_resource lesen dürfen.
@@ -346,8 +350,62 @@ func validateActionParams(w http.ResponseWriter, kind string, raw json.RawMessag
 	case "get_secret":
 		// keine Params nötig; reveal ist bewusst NICHT implementiert (v1) —
 		// Secret-Werte erreichen weder LLM noch DB.
+	case "pod_logs":
+		var p struct {
+			TailLines *int `json:"tailLines"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || (p.TailLines != nil && (*p.TailLines < 1 || *p.TailLines > 500)) {
+			writeErr(w, http.StatusBadRequest, "pod_logs tailLines must be 1..500")
+			return false
+		}
+	case "list_events":
+		var p struct {
+			Limit *int `json:"limit"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || (p.Limit != nil && (*p.Limit < 1 || *p.Limit > 100)) {
+			writeErr(w, http.StatusBadRequest, "list_events limit must be 1..100")
+			return false
+		}
+	case "run_debug_pod":
+		var p struct {
+			Image   string   `json:"image"`
+			Command []string `json:"command"`
+			PVCName string   `json:"pvcName"`
+			Node    string   `json:"nodeName"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || p.Image == "" || len(p.Image) > 256 || strings.ContainsAny(p.Image, " \t\n") {
+			writeErr(w, http.StatusBadRequest, "run_debug_pod requires params.image (no whitespace, <=256 chars)")
+			return false
+		}
+		if len(p.Command) == 0 || len(p.Command) > 20 {
+			writeErr(w, http.StatusBadRequest, "run_debug_pod requires params.command (argv, 1..20 args)")
+			return false
+		}
+		for _, c := range p.Command {
+			if len(c) > 2048 {
+				writeErr(w, http.StatusBadRequest, "run_debug_pod command argument too long")
+				return false
+			}
+		}
+		if len(p.PVCName) > 253 || len(p.Node) > 253 {
+			writeErr(w, http.StatusBadRequest, "run_debug_pod pvcName/nodeName too long")
+			return false
+		}
 	}
 	return true
+}
+
+// hasResourceOverride: get_resource/describe_resource mit explizitem
+// apiVersion+resource (Plural) — der CRD-Lesepfad.
+func hasResourceOverride(raw json.RawMessage) bool {
+	var p struct {
+		APIVersion string `json:"apiVersion"`
+		Resource   string `json:"resource"`
+	}
+	if json.Unmarshal(raw, &p) != nil {
+		return false
+	}
+	return p.APIVersion != "" && p.Resource != "" && len(p.APIVersion) <= 100 && len(p.Resource) <= 100
 }
 
 // execAllowedCommands: read-only Diagnose-Kommandos, argv-basiert (keine Shell).
@@ -497,8 +555,13 @@ func (s *Server) handleCreateAction(w http.ResponseWriter, r *http.Request) {
 	} else {
 		kinds, okKind := actionTargetKinds[req.Kind]
 		if !okKind || !kinds[req.TargetKind] {
-			writeErr(w, http.StatusBadRequest, "unsupported action/target combination")
-			return
+			// Ausnahme: get_resource/describe_resource dürfen mit explizitem
+			// params.apiVersion+resource JEDEN Kind lesen (CRDs: Certificates,
+			// ArgoCD Applications, CNPG Clusters, …) — read-only, kein Risiko.
+			if !(okKind && (req.Kind == "get_resource" || req.Kind == "describe_resource") && hasResourceOverride(req.Params)) {
+				writeErr(w, http.StatusBadRequest, "unsupported action/target combination")
+				return
+			}
 		}
 		if (req.TargetKind == "Node" || req.TargetKind == "Namespace") && req.TargetNamespace == "" {
 			req.TargetNamespace = "-" // cluster- bzw. namespace-scoped Ziele
