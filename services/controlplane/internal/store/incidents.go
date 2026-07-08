@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -46,7 +48,8 @@ const incidentSelect = `
 	i.id, i.org_id, i.cluster_id, i.number, i.title, i.summary, i.severity, i.status, i.source,
 	i.assignee_id, COALESCE(a.name,''), COALESCE(a.email,''),
 	i.created_by, COALESCE(NULLIF(cb.name,''), cb.email, ''),
-	i.acknowledged_at, i.mitigated_at, i.resolved_at, i.postmortem, i.created_at, i.updated_at
+	i.acknowledged_at, i.mitigated_at, i.resolved_at, i.postmortem, i.created_at, i.updated_at,
+	i.escalation_policy_id, i.escalation_step, i.next_escalation_at
 	FROM incidents i
 	LEFT JOIN users a  ON a.id  = i.assignee_id
 	LEFT JOIN users cb ON cb.id = i.created_by`
@@ -57,7 +60,8 @@ func scanIncident(row pgx.Row, inc *model.Incident) error {
 		&inc.AssigneeID, &inc.AssigneeName, &inc.AssigneeEmail,
 		&inc.CreatedBy, &inc.CreatedByName,
 		&inc.AcknowledgedAt, &inc.MitigatedAt, &inc.ResolvedAt, &inc.Postmortem,
-		&inc.CreatedAt, &inc.UpdatedAt)
+		&inc.CreatedAt, &inc.UpdatedAt,
+		&inc.EscalationPolicyID, &inc.EscalationStep, &inc.NextEscalationAt)
 }
 
 // ListIncidents liefert die Incidents eines Clusters (neueste zuerst). status
@@ -177,6 +181,38 @@ func nextIncidentNumber(ctx context.Context, tx pgx.Tx, orgID uuid.UUID) (int, e
 	return n, err
 }
 
+// setupIncidentEscalation hängt die Default-Policy des Clusters an einen frisch
+// deklarierten Incident und plant den ersten Schritt (next_escalation_at =
+// Deklaration + steps[0].afterMinutes). Ohne Policy/Steps ein No-op.
+func setupIncidentEscalation(ctx context.Context, tx pgx.Tx, incidentID, clusterID uuid.UUID) error {
+	var policyID *uuid.UUID
+	err := tx.QueryRow(ctx, `SELECT policy_id FROM cluster_escalation WHERE cluster_id=$1`, clusterID).Scan(&policyID)
+	if errors.Is(err, pgx.ErrNoRows) || policyID == nil {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("cluster escalation: %w", err)
+	}
+	var stepsRaw []byte
+	if err := tx.QueryRow(ctx, `SELECT steps FROM escalation_policies WHERE id=$1`, *policyID).Scan(&stepsRaw); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	var steps []model.EscalationStep
+	_ = json.Unmarshal(stepsRaw, &steps)
+	if len(steps) == 0 {
+		_, err = tx.Exec(ctx, `UPDATE incidents SET escalation_policy_id=$1 WHERE id=$2`, *policyID, incidentID)
+		return err
+	}
+	next := time.Now().UTC().Add(time.Duration(steps[0].AfterMinutes) * time.Minute)
+	_, err = tx.Exec(ctx, `
+		UPDATE incidents SET escalation_policy_id=$1, escalation_step=0, next_escalation_at=$2 WHERE id=$3`,
+		*policyID, next, incidentID)
+	return err
+}
+
 // CreateIncident deklariert einen Incident manuell.
 func (s *Store) CreateIncident(ctx context.Context, orgID, clusterID uuid.UUID, title, summary, severity string, actorID *uuid.UUID, actorEmail string) (*model.Incident, error) {
 	if !incidentSeverityValid(severity) {
@@ -202,6 +238,9 @@ func (s *Store) CreateIncident(ctx context.Context, orgID, clusterID uuid.UUID, 
 	}
 	if err := writeIncidentEvent(ctx, tx, id, "declared", actorID, actorEmail,
 		fmt.Sprintf("Incident declared (%s)", severity), "", nil, nil); err != nil {
+		return nil, err
+	}
+	if err := setupIncidentEscalation(ctx, tx, id, clusterID); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -251,6 +290,9 @@ func (s *Store) DeclareIncidentFromAlert(ctx context.Context, ruleID, clusterID 
 		created = true
 		if err := writeIncidentEvent(ctx, tx, id, "declared", nil, "",
 			fmt.Sprintf("Auto-declared from alert %q", ruleName), "", nil, nil); err != nil {
+			return uuid.Nil, false, err
+		}
+		if err := setupIncidentEscalation(ctx, tx, id, clusterID); err != nil {
 			return uuid.Nil, false, err
 		}
 	} else if err != nil {
@@ -353,6 +395,11 @@ func (s *Store) UpdateIncidentStatus(ctx context.Context, clusterID, id uuid.UUI
 		set += ", resolved_at=now(), resolved_by=$3, dedup_key=NULL"
 	case "open":
 		set += ", resolved_at=NULL, mitigated_at=NULL"
+	}
+	// Eskalation stoppt, sobald der Incident den open-Zustand verlässt (ack/
+	// mitigate/resolve). Reopen startet sie bewusst NICHT neu.
+	if status != "open" {
+		set += ", next_escalation_at=NULL"
 	}
 	q := `UPDATE incidents SET ` + set + ` WHERE id=$2`
 	if status == "acknowledged" || status == "resolved" {

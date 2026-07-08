@@ -471,8 +471,28 @@ type Incident struct {
 	Postmortem     string     `json:"postmortem"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	UpdatedAt      time.Time  `json:"updatedAt"`
+	// Eskalation (Round 3): zugeordnete Policy + nächster fälliger Schritt.
+	EscalationPolicyID *uuid.UUID `json:"escalationPolicyId,omitempty"`
+	EscalationStep     int        `json:"escalationStep"`
+	NextEscalationAt   *time.Time `json:"nextEscalationAt,omitempty"`
 	// Aggregat für die Listenansicht (nicht in der Detail-Query):
 	EventCount int `json:"eventCount,omitempty"`
+}
+
+// EscalationPolicy ist eine geordnete Notification-Kette (org-weit).
+type EscalationPolicy struct {
+	ID        uuid.UUID        `json:"id"`
+	OrgID     uuid.UUID        `json:"orgId"`
+	Name      string           `json:"name"`
+	Steps     []EscalationStep `json:"steps"`
+	CreatedAt time.Time        `json:"createdAt"`
+	UpdatedAt time.Time        `json:"updatedAt"`
+}
+
+// EscalationStep feuert nach AfterMinutes über die genannten Provider.
+type EscalationStep struct {
+	AfterMinutes int         `json:"afterMinutes"`
+	ProviderIDs  []uuid.UUID `json:"providerIds"`
 }
 
 // IncidentEvent ist ein Eintrag in der Incident-Timeline.

@@ -136,6 +136,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/incidents/{incident}/notes", sess(http.HandlerFunc(s.handleIncidentNote)))
 	mux.Handle("PUT /api/orgs/{org}/clusters/{cluster}/incidents/{incident}/postmortem", sess(http.HandlerFunc(s.handleIncidentPostmortem)))
 	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/incidents/{incident}/link-investigation", sess(http.HandlerFunc(s.handleLinkInvestigation)))
+	// Escalation policies (org-scoped) + per-cluster default (Round 3).
+	mux.Handle("GET /api/orgs/{org}/escalation-policies", sess(http.HandlerFunc(s.handleListEscalationPolicies)))
+	mux.Handle("POST /api/orgs/{org}/escalation-policies", sess(http.HandlerFunc(s.handleCreateEscalationPolicy)))
+	mux.Handle("PUT /api/orgs/{org}/escalation-policies/{policy}", sess(http.HandlerFunc(s.handleUpdateEscalationPolicy)))
+	mux.Handle("DELETE /api/orgs/{org}/escalation-policies/{policy}", sess(http.HandlerFunc(s.handleDeleteEscalationPolicy)))
+	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/escalation", sess(http.HandlerFunc(s.handleGetClusterEscalation)))
+	mux.Handle("PUT /api/orgs/{org}/clusters/{cluster}/escalation", sess(http.HandlerFunc(s.handleSetClusterEscalation)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/logs", sess(http.HandlerFunc(s.handleQueryLogs)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/traces", sess(http.HandlerFunc(s.handleQueryTraces)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/traces/{traceId}", sess(http.HandlerFunc(s.handleTraceDetail)))
@@ -245,6 +252,9 @@ func (s *Server) StartBackground(ctx context.Context) {
 	// aufräumen. Verliert der Leader seine DB-Session, übernimmt eine andere.
 	go leader.Run(ctx, s.pool, "alerts+reaper", leaderLockKey, func(leadCtx context.Context) {
 		go alerts.New(s.store, s.tele, s.broker, s.promql).Run(leadCtx)
+		// Incident-Escalator: paged fällige, unbestätigte Incidents entlang ihrer
+		// Eskalations-Policy. Ebenfalls Leader-only (kein Doppel-Paging).
+		go alerts.NewEscalator(s.store, s.broker).Run(leadCtx)
 
 		// Action-Reaper: garantiert, dass Cancel/Runs nie ewig hängen (auch wenn
 		// der Agent tot ist). Läuft leichtgewichtig alle 30s.
