@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useScope } from './scope-context';
 import { ToolResultView } from './copilot-panels';
+import { InvestigationGraph } from './copilot-graph';
 import { copilotStore, GREETING, type Item, type Block, type Activity, type ChatSummary } from './copilot-store';
 import { APPROVAL_MODES, LEVEL_META, RISK_LEVELS, levelColor, loadApprovalPolicy, saveApprovalPolicy, type ApprovalMode, type ApprovalPolicy, type RiskLevel } from '@/lib/approval';
 import type { LLMConfig } from '@/lib/llm';
@@ -318,13 +319,22 @@ export function CopilotChat({ orgId, clusterId, config }: { orgId: string; clust
   const undoRewind = () => copilotStore.undoRewind(activeId);
   const dismissRewind = () => copilotStore.clearRewindUndo(activeId);
   const decide = (a: Activity, approve: boolean) => copilotStore.decide(activeId, a.id, approve);
+  const answer = (a: Activity, value: { value?: string; values?: string[] }, secret?: boolean) => copilotStore.answer(activeId, a.id, value, { secret });
 
-  // Action wartet auf Entscheidung? Dann ist alles gesperrt bis zur Antwort.
-  const awaiting = activities.find((a) => a.isAction && a.status === 'awaiting');
-  useEffect(() => { if (awaiting) setInspectorOpen(true); }, [awaiting?.id]);
+  // Action ODER Frage wartet auf Entscheidung? Dann ist alles gesperrt bis zur Antwort.
+  const awaiting = activities.find((a) => (a.isAction || a.isQuestion) && a.status === 'awaiting');
+  useEffect(() => { if (awaiting?.isAction) setInspectorOpen(true); }, [awaiting?.id, awaiting?.isAction]);
   const activeAction = activities.find((a) => a.isAction && !a.terminal && a.status !== 'rejected' && a.status !== 'cancelled');
   const locked = busy;
   const selectedActivity = activities.find((a) => a.id === selected) ?? null;
+  const nodes = session?.nodes ?? [];
+
+  // Graph-Knoten anklicken → die zugehörigen Tool-Calls im Inspector fokussieren.
+  const focusNode = (nodeId: string) => {
+    const acts = activities.filter((a) => a.nodeId === nodeId);
+    const a = acts[acts.length - 1];
+    if (a) { setSelected(a.id); setInspectorOpen(true); }
+  };
 
   const inspector = (
     <Inspector activity={selectedActivity} onDecide={decide} onClose={() => setInspectorOpen(false)} />
@@ -468,6 +478,11 @@ export function CopilotChat({ orgId, clusterId, config }: { orgId: string; clust
                             </button>
                           );
                         }
+                        if (b.type === 'question') {
+                          const act = activities.find((a) => a.id === b.refId);
+                          if (!act) return null;
+                          return <QuestionCard key={j} act={act} onAnswer={answer} onDismiss={() => decide(act, false)} />;
+                        }
                         // action
                         const act = activities.find((a) => a.id === b.refId);
                         if (!act) return null;
@@ -486,7 +501,7 @@ export function CopilotChat({ orgId, clusterId, config }: { orgId: string; clust
           <div className="shrink-0 border-t px-4 py-2 sm:px-6" style={{ borderColor: 'color-mix(in oklab, var(--rp-accent) 40%, var(--rp-line))', background: 'color-mix(in oklab, var(--rp-accent) 10%, transparent)' }}>
             <div className="mx-auto flex max-w-[720px] items-center gap-2 font-mono text-[11px]">
               <span className="rp-breath" style={{ color: 'var(--rp-accent)' }}>◆</span>
-              <span className="text-ink">Copilot is paused — approve or dismiss the action to continue.</span>
+              <span className="text-ink">{awaiting.isQuestion ? 'Copilot is paused — answer or dismiss the question to continue.' : 'Copilot is paused — approve or dismiss the action to continue.'}</span>
               <button type="button" onClick={() => setInspectorOpen(true)} className="ml-auto rounded-skin-chip border border-line px-2 py-0.5 text-mid hover:bg-hover hover:text-ink lg:hidden">review ›</button>
             </div>
           </div>
@@ -522,8 +537,12 @@ export function CopilotChat({ orgId, clusterId, config }: { orgId: string; clust
         </div>
       </div>
 
-      {/* ── Inspector-Spalte (Desktop) ─────────────────────────────── */}
-      <aside className="hidden w-[360px] shrink-0 lg:block xl:w-[400px]">{inspector}</aside>
+      {/* ── Inspector-Spalte (Desktop): Investigation-Graph + Inspector ── */}
+      <aside className="hidden w-[360px] shrink-0 lg:flex lg:flex-col lg:gap-3 xl:w-[400px]">
+        <InvestigationGraph nodes={nodes} onFocus={focusNode} />
+        <div className="min-h-0 flex-1">{inspector}</div>
+        <ReasoningLog lines={session?.reasoning ?? []} />
+      </aside>
 
       {/* ── Inspector-Overlay (Mobil/Tablet) ───────────────────────── */}
       {inspectorOpen ? (
@@ -538,6 +557,28 @@ export function CopilotChat({ orgId, clusterId, config }: { orgId: string; clust
         <div className="fixed inset-0 z-40 xl:hidden">
           <div className="absolute inset-0 bg-black/40" onClick={() => setHistoryOpen(false)} />
           <div className="absolute inset-y-0 left-0 w-[min(300px,86vw)] p-2" style={{ animation: 'rp-drawer-in 200ms ease-out' }}>{historyRail}</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ── Reasoning-Log (Dev-Transparenz): interne Master-Notizen, einklappbar ── */
+function ReasoningLog({ lines }: { lines: string[] }) {
+  const [open, setOpen] = useState(false);
+  if (!lines.length) return null;
+  return (
+    <div className="shrink-0 overflow-hidden rounded-skin border border-line bg-raised" style={{ boxShadow: 'var(--rp-rim)' }}>
+      <button type="button" onClick={() => setOpen((o) => !o)} className="rp-focus flex w-full items-center gap-2 px-3 py-2 text-left">
+        <span className="rp-micro !text-[10px] flex-1">agent reasoning</span>
+        <span className="font-mono text-[9.5px] tabular-nums text-muted">{lines.length}</span>
+        <span className="font-mono text-[10px] text-faint">{open ? '▾' : '▸'}</span>
+      </button>
+      {open ? (
+        <div className="max-h-[160px] overflow-y-auto border-t border-line px-3 py-2">
+          {lines.map((l, i) => (
+            <p key={i} className="py-0.5 font-mono text-[10px] leading-relaxed text-muted">· {l}</p>
+          ))}
         </div>
       ) : null}
     </div>
@@ -657,6 +698,86 @@ function ActionCard({ act, selected, onOpen, onDecide }: { act: Activity; select
   );
 }
 
+/* ── Inline-Fragebox (ask_user, Human-in-the-Loop) ───────────────────────── */
+function QuestionCard({ act, onAnswer, onDismiss }: { act: Activity; onAnswer: (a: Activity, v: { value?: string; values?: string[] }, secret?: boolean) => void; onDismiss: () => void }) {
+  const q = act.args ?? {};
+  const kind = String(q.kind ?? 'text');
+  const options = Array.isArray(q.options) ? (q.options as string[]) : [];
+  const allowFree = q.allowFreeText === true;
+  const isSecret = kind === 'secret';
+  const [text, setText] = useState('');
+  const [picked, setPicked] = useState<string[]>([]);
+  const awaitingQ = act.status === 'awaiting';
+
+  const toggle = (o: string) => {
+    if (kind === 'choice') setPicked([o]);
+    else setPicked((p) => (p.includes(o) ? p.filter((x) => x !== o) : [...p, o]));
+  };
+  const canSubmit = kind === 'text' || isSecret ? text.trim() !== '' : picked.length > 0 || (allowFree && text.trim() !== '');
+  const submit = () => {
+    if (!canSubmit) return;
+    if (kind === 'multi') onAnswer(act, { values: picked.length ? picked : [text.trim()] });
+    else if (kind === 'choice') onAnswer(act, { value: picked[0] ?? text.trim() });
+    else onAnswer(act, { value: text.trim() }, isSecret);
+    setText('');
+  };
+
+  return (
+    <div className="overflow-hidden rounded-skin border border-line" style={{ background: 'var(--rp-bg-inset)', boxShadow: awaitingQ ? '0 0 0 1px color-mix(in oklab, var(--rp-accent) 40%, transparent)' : undefined }}>
+      <div className="flex items-center gap-2 border-b border-line px-3 py-2">
+        <span className={awaitingQ ? 'rp-breath' : ''} style={{ color: awaitingQ ? 'var(--rp-accent)' : 'var(--rp-ink-faint)' }}>{awaitingQ ? '◆' : '○'}</span>
+        <span className="font-mono text-[11px] font-semibold text-ink">Copilot asks</span>
+        {isSecret ? <span className="ml-auto shrink-0 rounded-skin-chip border border-line px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.05em] text-muted">🔒 secret — stored server-side only</span> : null}
+      </div>
+      <div className="space-y-2 px-3 py-2.5">
+        <p className="font-mono text-[11.5px] leading-relaxed text-ink">{String(q.question ?? '')}</p>
+        {awaitingQ ? (
+          <>
+            {options.length > 0 ? (
+              <div className="space-y-1">
+                {options.map((o) => {
+                  const on = picked.includes(o);
+                  return (
+                    <button key={o} type="button" onClick={() => toggle(o)} className={`flex w-full items-center gap-2 rounded-skin-sm border px-2.5 py-1.5 text-left font-mono text-[11px] transition-colors ${on ? 'border-line-strong bg-hover text-ink' : 'border-line text-mid hover:bg-hover'}`}>
+                      <span aria-hidden className="shrink-0 text-[10px]" style={{ color: on ? 'var(--rp-accent)' : 'var(--rp-ink-faint)' }}>
+                        {kind === 'multi' ? (on ? '▣' : '□') : on ? '◉' : '○'}
+                      </span>
+                      <span className="min-w-0 flex-1 break-all">{o}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+            {kind === 'text' || isSecret || allowFree ? (
+              <input
+                type={isSecret ? 'password' : 'text'}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } }}
+                spellCheck={false}
+                autoComplete={isSecret ? 'off' : undefined}
+                placeholder={isSecret ? String(q.secretHint || 'secret value — never shown to the model') : allowFree && options.length ? 'or type your own answer…' : 'your answer…'}
+                className="rp-focus h-8 w-full rounded-skin-sm border border-line bg-raised px-2.5 font-mono text-[11.5px] text-ink placeholder:text-faint"
+              />
+            ) : null}
+            <div className="flex items-center gap-2 pt-0.5">
+              <button type="button" disabled={!canSubmit} onClick={submit} className="rp-focus flex h-7 items-center gap-1.5 rounded-skin-sm px-3 font-mono text-[11px] font-semibold transition-opacity hover:opacity-90 disabled:opacity-40" style={{ background: 'var(--rp-btn-bg)', color: 'var(--rp-btn-fg)' }}>
+                Answer <span aria-hidden>→</span>
+              </button>
+              <button type="button" onClick={onDismiss} className="rp-focus h-7 rounded-skin-sm border border-line px-2.5 font-mono text-[11px] text-mid transition-colors hover:bg-hover hover:text-ink">Dismiss</button>
+              {isSecret ? <span className="ml-auto font-mono text-[9px] text-faint">value goes to the run vault, the model sees a placeholder</span> : null}
+            </div>
+          </>
+        ) : (
+          <p className="font-mono text-[10.5px] text-muted">
+            {act.status === 'answered' ? <>answered: <span className="text-ink">{act.result}</span></> : act.status === 'rejected' ? '○ dismissed' : act.status}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ── Inspector-Panel: „was der Agent sieht" ──────────────────────────────── */
 function Inspector({ activity, onDecide, onClose }: { activity: Activity | null; onDecide: (a: Activity, ok: boolean) => void; onClose: () => void }) {
   return (
@@ -764,6 +885,13 @@ function ActionInspector({ act, onDecide }: { act: Activity; onDecide: (a: Activ
 
         <p className="rp-micro !text-[10px] mb-1">action</p>
         <pre className="mb-3 overflow-x-auto rounded-skin-sm border border-line bg-inset p-2 font-mono text-[10.5px] leading-relaxed text-mid">{pretty(act.args)}</pre>
+
+        {act.source ? (
+          <>
+            <p className="rp-micro !text-[10px] mb-1" style={{ color: 'var(--rp-node-crit)' }}>script source — read before you arm</p>
+            <pre className="mb-3 max-h-[280px] overflow-auto rounded-skin-sm border p-2 font-mono text-[10.5px] leading-relaxed text-ink" style={{ borderColor: 'color-mix(in oklab, var(--rp-node-crit) 40%, var(--rp-line))', background: 'var(--rp-bg-inset)' }}>{act.source}</pre>
+          </>
+        ) : null}
 
         {act.reason ? <p className="mb-3 font-mono text-[10.5px] leading-relaxed text-muted">“{act.reason}”</p> : null}
 

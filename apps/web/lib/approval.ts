@@ -73,13 +73,26 @@ export function actionLevelOf(kind: string, params?: Record<string, unknown>): R
     case 'pod_events':
     case 'rollout_history':
     case 'drain_preview':
+    case 'get_resource':
+    case 'describe_resource':
+    case 'get_secret':
+    case 'helm_releases':
       return 'read';
-    case 'scale':
-      return Number(params?.replicas ?? NaN) === 0 ? 'destructive' : 'reversible';
+    case 'scale': {
+      // fail-closed wie das Backend: nicht parsebar oder 0 → destructive
+      const n = Number(params?.replicas ?? NaN);
+      return Number.isFinite(n) && n > 0 ? 'reversible' : 'destructive';
+    }
     case 'node_taint':
       return params?.effect === 'NoExecute' ? 'destructive' : 'reversible';
     case 'drain':
     case 'expand_pvc':
+    case 'patch_resource':
+    case 'create_configmap':
+    case 'delete_configmap':
+    case 'pvc_expand':
+    case 'restore_resource':
+    case 'script':
       return 'destructive';
     case 'delete_pod':
     case 'evict_pod':
@@ -87,6 +100,8 @@ export function actionLevelOf(kind: string, params?: Record<string, unknown>): R
     case 'cleanup_pods':
     case 'cleanup_jobs':
     case 'cronjob_trigger':
+    case 'exec_readonly':
+    case 'delete_job':
       return 'disruptive';
     default:
       return 'reversible';

@@ -16,6 +16,7 @@ export type Activity = {
   id: string;
   name: string;
   isAction?: boolean;
+  isQuestion?: boolean; // ask_user — Human-in-the-loop-Fragebox
   args?: Record<string, unknown>;
   status: string;
   result?: string;
@@ -29,8 +30,28 @@ export type Activity = {
   progress?: string;
   steps?: unknown;
   terminal?: boolean;
+  nodeId?: string; // Investigation-Graph-Knoten, zu dem dieser Call gehört
+  source?: string; // propose_script: der Starlark-Quelltext
 };
-export type Block = { type: 'text'; text: string } | { type: 'tool'; refId: string; name: string } | { type: 'action'; refId: string };
+// Ein Knoten im Investigation-Graph (Hypothese→Verdict; Branch über parentId).
+export type GraphNode = {
+  id: string;
+  parentId?: string | null;
+  seq: number;
+  kind: string; // hypothesis | action | question | conclusion
+  hypothesis: string;
+  task?: unknown;
+  verdict?: unknown;
+  status: string; // running | done | failed | abandoned
+  confidence?: number;
+  tokensIn?: number;
+  tokensOut?: number;
+};
+export type Block =
+  | { type: 'text'; text: string }
+  | { type: 'tool'; refId: string; name: string }
+  | { type: 'action'; refId: string }
+  | { type: 'question'; refId: string };
 export type Item =
   | { role: 'user'; text: string }
   | { role: 'assistant'; blocks: Block[] }
@@ -43,6 +64,8 @@ export type Session = {
   id: string;
   items: Item[];
   activities: Activity[];
+  nodes: GraphNode[]; // Investigation-Graph (Hypothese→Verdict-Knoten)
+  reasoning: string[]; // Master-Reasoning (Dev-Ansicht, optional eingeblendet)
   busy: boolean;
   title: string;
   summary: string;
@@ -67,7 +90,7 @@ type Internal = {
 
 export const GREETING: Item = {
   role: 'assistant',
-  blocks: [{ type: 'text', text: 'Hi — I watch your cluster and can fix things, but only ever through safe, reversible actions. Ask me what’s wrong, or to change something.' }],
+  blocks: [{ type: 'text', text: 'Hi — I investigate this cluster with a team of sub-agents: every hypothesis becomes a node in the graph on the right, and I only change anything through safe, approved actions. Ask me what’s wrong, or what to fix.' }],
 };
 
 function newId(): string {
@@ -120,6 +143,16 @@ function upsertActivity(id: string, aid: string, p: Partial<Activity>, focus = f
   });
 }
 
+function upsertNode(id: string, nid: string, p: Partial<GraphNode>) {
+  patch(id, (s) => {
+    const i = s.nodes.findIndex((n) => n.id === nid);
+    const nodes = i === -1
+      ? [...s.nodes, { id: nid, seq: s.nodes.length + 1, kind: 'hypothesis', hypothesis: '', status: 'running', ...p } as GraphNode]
+      : (() => { const n = s.nodes.slice(); n[i] = { ...n[i]!, ...p }; return n; })();
+    return { ...s, nodes };
+  });
+}
+
 export const copilotStore = {
   subscribe(cb: () => void) {
     listeners.add(cb);
@@ -138,7 +171,7 @@ export const copilotStore = {
   ensure(orgId: string, clusterId: string, id?: string, config?: LLMConfig | null): string {
     const sid = id || newId();
     if (!sessions[sid]) {
-      sessions[sid] = { id: sid, items: [GREETING], activities: [], busy: false, title: '', summary: '', rewindUndo: null };
+      sessions[sid] = { id: sid, items: [GREETING], activities: [], nodes: [], reasoning: [], busy: false, title: '', summary: '', rewindUndo: null };
       intern[sid] = { orgId, clusterId, config: config ?? null, scope: "", sending: false, runId: '', contQueue: [], decided: new Set(), watching: new Set(), lastLearn: null, learnBuf: {} };
       emit();
     } else if (config) {
@@ -179,13 +212,25 @@ export const copilotStore = {
       const r = await fetch(`${apiBase(orgId, clusterId)}/copilot/chats/${encodeURIComponent(id)}`, { credentials: 'include' });
       if (!r.ok) return;
       const chat = await r.json();
-      const data = (chat.data ?? {}) as { items?: Item[]; activities?: Activity[] };
+      const data = (chat.data ?? {}) as { items?: Item[]; activities?: Activity[]; nodes?: GraphNode[]; reasoning?: string[] };
+      // Graph: der Server ist die Wahrheit (DB) — Fallback auf den in data
+      // persistierten Stand, wenn die Route (noch) nichts liefert.
+      let nodes: GraphNode[] = data.nodes ?? [];
+      try {
+        const g = await fetch(`${apiBase(orgId, clusterId)}/copilot/chats/${encodeURIComponent(id)}/graph`, { credentials: 'include' });
+        if (g.ok) {
+          const serverNodes = ((await g.json()).nodes ?? []) as GraphNode[];
+          if (serverNodes.length) nodes = serverNodes;
+        }
+      } catch { /* offline */ }
       sessions = {
         ...sessions,
         [id]: {
           id,
           items: data.items?.length ? data.items : [GREETING],
           activities: data.activities ?? [],
+          nodes,
+          reasoning: data.reasoning ?? [],
           busy: intern[id]?.sending ?? false,
           title: String(chat.title ?? ''),
           summary: String(chat.summary ?? ''),
@@ -264,11 +309,33 @@ export const copilotStore = {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ title, summary: s.summary, data: { items: s.items, activities: s.activities } }),
+        body: JSON.stringify({ title, summary: s.summary, data: { items: s.items, activities: s.activities, nodes: s.nodes, reasoning: s.reasoning } }),
       });
       if (refresh) this.refreshChats(it.orgId, it.clusterId);
     } catch {
       /* offline */
+    }
+  },
+
+  // answer beantwortet eine ask_user-Frage. Secrets werden VOR jeder lokalen
+  // Persistenz maskiert — der Klartext geht ausschließlich im Decision-POST an
+  // den Server (dort in den Run-Vault) und taucht nie in items/activities auf.
+  async answer(id: string, activityId: string, answer: { value?: string; values?: string[] }, opts?: { secret?: boolean }) {
+    const it = intern[id];
+    if (!it || it.decided.has(activityId)) return;
+    it.decided.add(activityId);
+    const shown = opts?.secret ? '•••' : (answer.values?.length ? answer.values.join(', ') : (answer.value ?? ''));
+    upsertActivity(id, activityId, { status: 'answered', terminal: true, result: shown });
+    copilotStore.scheduleSave(id);
+    try {
+      await fetch(`${apiBase(it.orgId, it.clusterId)}/copilot/action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ runId: it.runId, callId: activityId, decision: 'answer', answer }),
+      });
+    } catch {
+      /* Backend läuft über den offenen Stream weiter */
     }
   },
 
@@ -339,9 +406,14 @@ export const copilotStore = {
         case 'tool_call': {
           const cid = String(data.id ?? '');
           it.lastLearn = null;
-          upsertActivity(id, cid, { name: String(data.name ?? ''), args: (data.args as Record<string, unknown>) ?? {}, status: 'running', isAction: false }, true);
-          blocks.push({ type: 'tool', refId: cid, name: String(data.name ?? '') });
-          flush();
+          const nodeId = data.nodeId != null ? String(data.nodeId) : undefined;
+          upsertActivity(id, cid, { name: String(data.name ?? ''), args: (data.args as Record<string, unknown>) ?? {}, status: 'running', isAction: false, nodeId }, true);
+          // Investigator-Calls (mit nodeId) laufen im Graph-Kontext — sie erscheinen
+          // im Inspector/Graph, nicht als eigener Chat-Block (der Chat bleibt ruhig).
+          if (!nodeId) {
+            blocks.push({ type: 'tool', refId: cid, name: String(data.name ?? '') });
+            flush();
+          }
           break;
         }
         case 'tool_result': {
@@ -360,6 +432,8 @@ export const copilotStore = {
             name: 'run_safe_action', isAction: true, status: 'awaiting', terminal: false,
             kind: String(data.kind ?? ''), target: String(data.target ?? ''), klass: level, approvalMode: mode,
             reason: String(data.reason ?? ''), args: (data.input as Record<string, unknown>) ?? {},
+            nodeId: data.nodeId != null ? String(data.nodeId) : undefined,
+            source: data.source != null ? String(data.source) : undefined,
           }, true);
           blocks.push({ type: 'action', refId: cid });
           flush();
@@ -369,6 +443,55 @@ export const copilotStore = {
             void copilotStore.decide(id, cid, false); // Policy: Stufe für den Copilot gesperrt
             upsertActivity(id, cid, { status: 'blocked', terminal: true, result: `blocked by guardrails — ${level} actions are disabled for the Copilot` });
           }
+          break;
+        }
+        case 'ask_user': {
+          const cid = String(data.id ?? '');
+          it.lastLearn = null;
+          upsertActivity(id, cid, {
+            name: 'ask_user', isQuestion: true, status: 'awaiting', terminal: false,
+            args: {
+              question: String(data.question ?? ''),
+              kind: String(data.kind ?? 'text'),
+              options: (data.options as string[]) ?? [],
+              allowFreeText: data.allowFreeText === true,
+              secretHint: data.secretHint != null ? String(data.secretHint) : '',
+            },
+            nodeId: data.nodeId != null ? String(data.nodeId) : undefined,
+          }, true);
+          blocks.push({ type: 'question', refId: cid });
+          flush();
+          break;
+        }
+        case 'node_started': {
+          const nid = String(data.nodeId ?? '');
+          upsertNode(id, nid, {
+            parentId: data.parentId != null ? String(data.parentId) : null,
+            seq: Number(data.seq ?? 0),
+            kind: String(data.kind ?? 'hypothesis'),
+            hypothesis: String(data.hypothesis ?? ''),
+            task: data.task,
+            status: 'running',
+          });
+          copilotStore.scheduleSave(id);
+          break;
+        }
+        case 'verdict': {
+          const nid = String(data.nodeId ?? '');
+          const tokens = (data.tokens as { in?: number; out?: number }) ?? {};
+          const verdict = data.verdict as Record<string, unknown> | undefined;
+          const conf = verdict && typeof verdict.confidence === 'number' ? (verdict.confidence as number) : undefined;
+          upsertNode(id, nid, { verdict, status: 'done', confidence: conf, tokensIn: tokens.in, tokensOut: tokens.out });
+          copilotStore.scheduleSave(id);
+          break;
+        }
+        case 'node_status': {
+          upsertNode(id, String(data.nodeId ?? ''), { status: String(data.status ?? 'running') });
+          break;
+        }
+        case 'reasoning': {
+          const tx = String(data.text ?? '').trim();
+          if (tx) patch(id, (cur) => ({ ...cur, reasoning: [...cur.reasoning, tx] }));
           break;
         }
         case 'action_status': {
@@ -406,7 +529,7 @@ export const copilotStore = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ messages: msgs, config, scope: it.scope }),
+        body: JSON.stringify({ messages: msgs, config, scope: it.scope, chatId: id }),
       });
       if (!res.ok || !res.body) {
         let msg = 'request failed';
