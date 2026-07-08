@@ -201,7 +201,22 @@ func (r *Runner) execute(ctx context.Context, a Action) {
 		r.executeScript(ctx, a)
 		return
 	}
-	ctx, cancelFn := context.WithTimeout(ctx, monitorTimeout)
+	// timeoutSeconds: JEDE Action akzeptiert einen eigenen Timeout (Copilot/UI
+	// steuern ihn je Situation), hart geclampt — die Obergrenze gehört dem Agenten.
+	timeout := monitorTimeout
+	var tp struct {
+		TimeoutSeconds int `json:"timeoutSeconds"`
+	}
+	if len(a.Params) > 0 && json.Unmarshal(a.Params, &tp) == nil && tp.TimeoutSeconds > 0 {
+		timeout = time.Duration(tp.TimeoutSeconds) * time.Second
+		if timeout < 10*time.Second {
+			timeout = 10 * time.Second
+		}
+		if timeout > 30*time.Minute {
+			timeout = 30 * time.Minute
+		}
+	}
+	ctx, cancelFn := context.WithTimeout(ctx, timeout)
 	defer cancelFn()
 
 	// Cancel kommt auf zwei Wegen: SOFORT als SSE-Signal (Cancel-Registry,
@@ -297,7 +312,7 @@ func (r *Runner) execute(ctx context.Context, a Action) {
 			if ctx.Err() == context.DeadlineExceeded {
 				states[i].Status = "failed"
 				states[i].Detail = "timeout"
-				rollback("timeout after " + monitorTimeout.String())
+				rollback("timeout after " + timeout.String())
 				return
 			}
 			states[i].Status = "failed"
@@ -459,8 +474,14 @@ func (r *Runner) plan(a Action) []step {
 	case "restore_resource":
 		return r.planRestoreResource(a)
 	case "delete_pod":
+		// Alte Pod-UID zwischen den Steps teilen: bei StatefulSets heißt der
+		// Ersatz-Pod GENAUSO (clickhouse-0) — nur die UID unterscheidet alt/neu.
+		var oldUID string
 		return []step{
 			{name: "delete", run: func(ctx context.Context, _ func(string)) (string, error) {
+				if p, err := r.clientset.CoreV1().Pods(a.TargetNamespace).Get(ctx, a.TargetName, metav1.GetOptions{}); err == nil {
+					oldUID = string(p.UID)
+				}
 				err := r.clientset.CoreV1().Pods(a.TargetNamespace).Delete(ctx, a.TargetName, metav1.DeleteOptions{})
 				if err != nil {
 					return "", err
@@ -471,7 +492,7 @@ func (r *Runner) plan(a Action) []step {
 				return r.observePodGone(ctx, a, report)
 			}},
 			{name: "recreate", run: func(ctx context.Context, report func(string)) (string, error) {
-				return r.observeReplacement(ctx, a, report)
+				return r.observeReplacement(ctx, a, oldUID, report)
 			}},
 			{name: "verify", run: func(ctx context.Context, report func(string)) (string, error) {
 				return r.verifySiblingsStable(ctx, a, report)
@@ -932,6 +953,13 @@ func (r *Runner) observeAllPodsReady(ctx context.Context, a Action, report func(
 			if last.terminating == 0 && int32(last.total) == st.desired && int32(last.ready) == st.desired {
 				return last.String(), nil
 			}
+			// Fail fast: ein endgültig feststeckender Pod wird nie ready —
+			// der Grund ist die Antwort, nicht der Timeout.
+			for i := range pods {
+				if stuck := podStuckReason(&pods[i]); stuck != "" {
+					return "", fmt.Errorf("pods will not become ready — %s", stuck)
+				}
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -1041,9 +1069,50 @@ func (r *Runner) observePodGone(ctx context.Context, a Action, report func(strin
 	}
 }
 
-// observeReplacement wartet auf einen NEUEN ready-Pod desselben Workloads
-// (Namens-Präfix des ReplicaSets: alles bis zum letzten '-').
-func (r *Runner) observeReplacement(ctx context.Context, a Action, report func(string)) (string, error) {
+// podStuckReason erkennt ENDGÜLTIG feststeckende Pods — Zustände, aus denen
+// Warten allein nie herausführt. Statt den Action-Timeout stumpf auszusitzen,
+// schlägt der Observer sofort mit dem ECHTEN Grund fehl (fail fast: der Grund
+// ist die Diagnose). CrashLoopBackOff erst ab dem 2. Restart — ein einzelner
+// Crash direkt nach dem Start (z.B. Warten auf die DB) darf sich fangen.
+func podStuckReason(p *corev1.Pod) string {
+	for i := range p.Status.ContainerStatuses {
+		cs := &p.Status.ContainerStatuses[i]
+		w := cs.State.Waiting
+		if w == nil {
+			continue
+		}
+		decisive := false
+		switch w.Reason {
+		case "ImagePullBackOff", "ErrImagePull", "InvalidImageName", "CreateContainerConfigError", "CreateContainerError", "RunContainerError":
+			decisive = true
+		case "CrashLoopBackOff":
+			decisive = cs.RestartCount >= 2
+		}
+		if !decisive {
+			continue
+		}
+		msg := fmt.Sprintf("%s: container %s stuck in %s", p.Name, cs.Name, w.Reason)
+		if lt := cs.LastTerminationState.Terminated; lt != nil {
+			msg += fmt.Sprintf(" (last exit %d %s)", lt.ExitCode, lt.Reason)
+		}
+		if w.Message != "" {
+			m := w.Message
+			if len(m) > 160 {
+				m = m[:160] + "…"
+			}
+			msg += " — " + m
+		}
+		return msg
+	}
+	return ""
+}
+
+// observeReplacement wartet auf einen NEUEN ready-Pod desselben Workloads.
+// Deployment/ReplicaSet: neuer Name mit demselben Präfix. StatefulSet: der
+// GLEICHE Name mit neuer UID (oldUID unterscheidet alt/neu). Steckt der
+// Ersatz endgültig fest (CrashLoop/ImagePull), schlägt der Step sofort mit
+// dem Grund fehl statt den Timeout auszusitzen.
+func (r *Runner) observeReplacement(ctx context.Context, a Action, oldUID string, report func(string)) (string, error) {
 	prefix := a.TargetName
 	if i := strings.LastIndex(prefix, "-"); i > 0 {
 		prefix = prefix[:i+1]
@@ -1053,8 +1122,10 @@ func (r *Runner) observeReplacement(ctx context.Context, a Action, report func(s
 	for {
 		pods, err := r.clientset.CoreV1().Pods(a.TargetNamespace).List(ctx, metav1.ListOptions{})
 		if err == nil {
-			for _, p := range pods.Items {
-				if p.Name == a.TargetName || !strings.HasPrefix(p.Name, prefix) || p.DeletionTimestamp != nil {
+			for i := range pods.Items {
+				p := &pods.Items[i]
+				isSameNameNew := p.Name == a.TargetName && string(p.UID) != oldUID
+				if (!isSameNameNew && p.Name == a.TargetName) || !strings.HasPrefix(p.Name, prefix) || p.DeletionTimestamp != nil {
 					continue
 				}
 				ready := false
@@ -1065,6 +1136,9 @@ func (r *Runner) observeReplacement(ctx context.Context, a Action, report func(s
 				}
 				if ready {
 					return fmt.Sprintf("replacement %s ready", p.Name), nil
+				}
+				if stuck := podStuckReason(p); stuck != "" {
+					return "", fmt.Errorf("replacement will not become ready — %s", stuck)
 				}
 				report(fmt.Sprintf("replacement %s starting…", p.Name))
 			}

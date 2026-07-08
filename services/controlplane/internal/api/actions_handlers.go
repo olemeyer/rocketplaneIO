@@ -90,6 +90,17 @@ var generalReadKinds = map[string]bool{
 // Unvalidiertes erreicht den Cluster. Kinds ohne Params (rollout_*, cordon,
 // cronjob_*, cleanup_pods …) fallen durch auf true.
 func validateActionParams(w http.ResponseWriter, kind string, raw json.RawMessage) bool {
+	// Generisch für ALLE Kinds: optionaler params.timeoutSeconds — der Copilot
+	// (und die UI) steuern den Ablauf-Timeout je Situation; die Grenzen sind hart.
+	if len(raw) > 0 {
+		var tp struct {
+			TimeoutSeconds *float64 `json:"timeoutSeconds"`
+		}
+		if json.Unmarshal(raw, &tp) == nil && tp.TimeoutSeconds != nil && (*tp.TimeoutSeconds < 10 || *tp.TimeoutSeconds > 1800) {
+			writeErr(w, http.StatusBadRequest, "params.timeoutSeconds must be 10..1800 seconds")
+			return false
+		}
+	}
 	switch kind {
 	case "scale":
 		var p struct {

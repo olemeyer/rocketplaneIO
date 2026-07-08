@@ -691,8 +691,13 @@ func (r *Runner) planEvictPod(a Action) []step {
 		GracePeriodSeconds *int64 `json:"gracePeriodSeconds"`
 	}
 	_ = json.Unmarshal(a.Params, &p)
+	// UID des alten Pods für die Ersatz-Erkennung (StatefulSets: gleicher Name).
+	var oldUID string
 	return []step{
 		{name: "evict", run: func(ctx context.Context, _ func(string)) (string, error) {
+			if pod, err := r.clientset.CoreV1().Pods(a.TargetNamespace).Get(ctx, a.TargetName, metav1.GetOptions{}); err == nil {
+				oldUID = string(pod.UID)
+			}
 			ev := &policyv1.Eviction{
 				ObjectMeta:    metav1.ObjectMeta{Name: a.TargetName, Namespace: a.TargetNamespace},
 				DeleteOptions: &metav1.DeleteOptions{},
@@ -709,7 +714,7 @@ func (r *Runner) planEvictPod(a Action) []step {
 			return "eviction requested (graceful, PDB-aware)", nil
 		}},
 		{name: "drain", run: func(ctx context.Context, rep func(string)) (string, error) { return r.observePodGone(ctx, a, rep) }},
-		{name: "recreate", run: func(ctx context.Context, rep func(string)) (string, error) { return r.observeReplacement(ctx, a, rep) }},
+		{name: "recreate", run: func(ctx context.Context, rep func(string)) (string, error) { return r.observeReplacement(ctx, a, oldUID, rep) }},
 		{name: "verify", run: func(ctx context.Context, rep func(string)) (string, error) { return r.verifySiblingsStable(ctx, a, rep) }},
 	}
 }
