@@ -76,7 +76,10 @@ func main() {
 	log.Printf("cluster identity (kube-system uid)=%s name=%q version=%s", k8sUID, clusterName, agentVersion)
 
 	// 3. Enroll (retries with backoff until the control-plane accepts us).
-	resp, err := enroll.Enroll(ctx, controlplaneURL, enroll.Request{
+	//    Enroll auto-discovers a reachable control-plane if the configured URL
+	//    can't be reached from the pod (localhost/host.minikube.internal traps),
+	//    and returns the URL that actually worked — use THAT downstream.
+	resp, cpURL, err := enroll.Enroll(ctx, controlplaneURL, enroll.Request{
 		EnrollToken:  enrollToken,
 		K8sUID:       k8sUID,
 		ClusterName:  clusterName,
@@ -85,7 +88,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("enroll: %v", err)
 	}
-	log.Printf("enrolled: clusterId=%s", resp.ClusterID)
+	controlplaneURL = cpURL
+	log.Printf("enrolled: clusterId=%s (control-plane=%s)", resp.ClusterID, controlplaneURL)
 
 	syncer := agentsync.New(controlplaneURL, resp.AgentToken, agentVersion, clientset)
 
