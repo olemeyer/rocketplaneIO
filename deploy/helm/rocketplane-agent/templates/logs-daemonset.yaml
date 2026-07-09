@@ -101,5 +101,8 @@ spec:
         - name: varlibdockercontainers
           hostPath:
             path: /var/lib/docker/containers
+            # DirectoryOrCreate → safe on containerd nodes where the dir is absent
+            # (created empty, unused); on the docker runtime it holds the real logs.
+            type: DirectoryOrCreate
         {{- end }}
 {{- end }}
