@@ -282,6 +282,78 @@ spec:
             requests: {cpu: 50m, memory: 64Mi}
             limits: {cpu: 200m, memory: 128Mi}
 {{- end }}
+{{- if not .Flows }}
+---
+# Node-local log collector — one lightweight pod per node (RP_AGENT_ROLE=logs)
+# tails the container logs under /var/log/pods read-only and ships them OUTBOUND.
+# The agent Deployment above is a single pod and cannot see every node's logs, so
+# without this DaemonSet the Logs view stays empty. (The Flows DaemonSet variant
+# already collects logs itself, so this is only rendered for the Deployment.)
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: rocketplane-agent-logs
+  namespace: rocketplane
+  labels:
+    app.kubernetes.io/name: rocketplane-agent
+    app.kubernetes.io/component: logs
+    app.kubernetes.io/part-of: rocketplane
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketplane-agent
+      app.kubernetes.io/component: logs
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketplane-agent
+        app.kubernetes.io/component: logs
+        app.kubernetes.io/part-of: rocketplane
+    spec:
+      serviceAccountName: rocketplane-agent
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: agent
+          image: {{ y .Image }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: RP_AGENT_ROLE
+              value: logs
+            - name: RP_CONTROLPLANE_URL
+              value: {{ y .ControlPlaneURL }}
+            - name: RP_ENROLL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rocketplane-agent-enroll
+                  key: enroll-token
+            - name: RP_CLUSTER_NAME
+              value: {{ y .ClusterName }}
+            - name: RP_AGENT_VERSION
+              value: {{ y .AgentVersion }}
+          # containerd/CRI keep the real files under /var/log/pods;
+          # /var/lib/docker/containers covers the Docker-runtime symlinks (minikube).
+          volumeMounts:
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 300m, memory: 256Mi}
+      volumes:
+        - name: varlogpods
+          hostPath: {path: /var/log/pods}
+        - name: varlibdockercontainers
+          hostPath: {path: /var/lib/docker/containers}
+{{- end }}
 ---
 # Beyla — eBPF auto-instrumentation: L7 traces + L4 network flows produce the
 # service map and RED metrics, no code changes. Privileged + host-level, like
