@@ -212,15 +212,17 @@ function NamespacePill() {
 export function ScopeSelector() {
   return (
     <div className="flex min-w-0 items-center gap-1">
-      {/* On phones the top bar shows only the CLUSTER (the active scope). Org and
-          namespace would squeeze the right-hand chrome (Copilot/theme/user) and
-          crush the Copilot button, so they move to the nav drawer / show at sm+. */}
+      {/* Space budget: at md+ the 236px sidebar appears, leaving the top bar only
+          ~600px on a tablet. So we reveal scope progressively — CLUSTER always,
+          ORG from sm+, and the NAMESPACE pill only at lg+ (with the search field);
+          on phones org+namespace move to the nav drawer. This keeps the Copilot
+          button uncrushed at every width. */}
       <span className="hidden sm:contents">
         <OrgSwitcher />
         <Sep />
       </span>
       <ClusterPill />
-      <span className="hidden sm:contents">
+      <span className="hidden lg:contents">
         <NamespacePill />
       </span>
     </div>

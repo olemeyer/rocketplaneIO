@@ -36,13 +36,15 @@ export function Topbar() {
         <ScopeSelector />
       </div>
       <div className="flex items-center gap-1.5 sm:gap-2">
-        {/* Primärfeature — der AI-Copilot, prominent */}
+        {/* Primary feature — the AI Copilot, kept prominent at every width. */}
         <CopilotButton />
-        <span className="mx-0.5 hidden h-4 w-px bg-line sm:block" aria-hidden />
-        <div className="hidden sm:block">
+        {/* Search only appears at lg+; on tablet the 236px sidebar leaves too
+            little room, so it would collide with the scope + Copilot. */}
+        <span className="mx-0.5 hidden h-4 w-px bg-line lg:block" aria-hidden />
+        <div className="hidden lg:block">
           <CommandTrigger />
         </div>
-        <span className="mx-1 hidden h-4 w-px bg-line md:block" aria-hidden />
+        <span className="mx-1 hidden h-4 w-px bg-line sm:block" aria-hidden />
         <ThemeSwitcher />
         <span className="mx-1 hidden h-4 w-px bg-line sm:block" aria-hidden />
         <UserMenu />
