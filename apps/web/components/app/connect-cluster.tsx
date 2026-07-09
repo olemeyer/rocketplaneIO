@@ -48,7 +48,7 @@ export function ConnectClusterButton({
 
 const STEP_HINTS = [
   'Copy the command below.',
-  'Run it against the cluster you want to observe (uses your current kubectl context).',
+  'Run it against the cluster you want to observe (uses your current kube-context).',
   'The agent enrolls automatically — this page will light up when it connects.',
 ];
 

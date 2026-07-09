@@ -14,6 +14,11 @@ Kubernetes cluster to the rocketplane control-plane.
 - **Self-enrolling.** On startup it exchanges the one-time enroll token
   (`rpe_...`) for a long-lived agent token, which it keeps in memory and uses as
   a `Bearer` token for heartbeats and namespace syncs.
+- **eBPF auto-instrumentation (optional).** When `beyla.enabled=true` (default)
+  the chart also installs a privileged [Grafana Beyla](https://grafana.com/oss/beyla-ebpf/)
+  DaemonSet that emits L7 traces and L4 network flows via OTLP — no app changes.
+  It is heavy and privileged (`privileged`/`hostPID`/`hostNetwork`); disable with
+  `--set beyla.enabled=false` if your cluster policy forbids that.
 
 ## Connect a cluster
 
@@ -60,6 +65,11 @@ kubectl apply -f install.yaml
 | `serviceAccount.create` | `true` | Create the ServiceAccount |
 | `serviceAccount.name` | `rocketplane-agent` | ServiceAccount name |
 | `replicaCount` | `1` | Keep at 1 (single writer) |
+| `beyla.enabled` | `true` | Install the privileged Beyla eBPF DaemonSet |
+| `beyla.image.tag` | `2.2` | Beyla image tag (pinned) |
+| `beyla.openPorts` | HTTP/gRPC + DB ports | Ports Beyla instruments → `BEYLA_OPEN_PORT` |
+| `beyla.otlpEndpoint` | `http://otel-collector:4318` | OTLP endpoint (overridable) → `OTEL_EXPORTER_OTLP_ENDPOINT` |
+| `beyla.clusterName` | `""` | Cluster name for Beyla; falls back to `clusterName` |
 
 ## RBAC
 

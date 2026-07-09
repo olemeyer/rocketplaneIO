@@ -118,12 +118,15 @@ export function InstallPicker({
   commands?: { kubectl: string; helm: string };
   fallback: string;
 }) {
-  const [tab, setTab] = useState<'kubectl' | 'helm'>('kubectl');
+  const [tab, setTab] = useState<'kubectl' | 'helm'>('helm');
   if (!commands) return <CommandBox command={fallback} />;
   const active = commands[tab];
+  // Helm is the default route — it installs the full chart (agent + Beyla eBPF
+  // + log collector) and is the upgrade/uninstall-friendly path. kubectl stays
+  // as the plain-manifest alternative.
   const TABS: { key: 'kubectl' | 'helm'; label: string; hint: string }[] = [
+    { key: 'helm', label: 'Helm', hint: 'installs the full chart (agent + Beyla)' },
     { key: 'kubectl', label: 'kubectl', hint: 'applies a rendered manifest' },
-    { key: 'helm', label: 'Helm', hint: 'installs the published chart' },
   ];
   return (
     <div>

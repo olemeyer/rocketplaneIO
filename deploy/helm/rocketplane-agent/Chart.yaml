@@ -7,7 +7,7 @@ description: >-
   never initiates connections into the cluster.
 type: application
 # Chart version — bump on any change to the chart itself.
-version: 0.1.0
+version: 0.2.0
 # appVersion tracks the rocketplane-agent binary; surfaced to the control-plane
 # as RP_AGENT_VERSION and stored on the cluster row.
 appVersion: "0.1.0"

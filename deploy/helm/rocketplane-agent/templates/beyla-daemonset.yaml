@@ -1,0 +1,102 @@
+{{- if .Values.beyla.enabled }}
+# Grafana Beyla — PRIVILEGED eBPF DaemonSet (one pod per node). It attaches eBPF
+# probes to node processes to emit L7 traces (HTTP/gRPC/SQL/Redis) and L4 network
+# flows as OTLP, then pushes them OUTBOUND to the collector — no app changes.
+#
+# Unlike the read-only agent this pod is privileged and highly node-invasive:
+#   - hostPID: eBPF must see every node process's PID to instrument it.
+#   - hostNetwork: L4 flow capture attaches to the host net-namespace interfaces;
+#     without it Beyla only sees its own pod's traffic, not the node's pods
+#     (standard for network monitors — Cilium/Coroot run the same way).
+#   - dnsPolicy ClusterFirstWithHostNet: still resolve in-cluster names (the OTLP
+#     endpoint Service) despite hostNetwork.
+#   - tolerations Exists: run on every node, control-plane/tainted nodes included.
+#
+# Selector labels are deliberately distinct from the agent Deployment and the
+# logs DaemonSet (component: beyla) so their pod selectors never collide.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "rocketplane-agent.fullname" . }}-beyla
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rocketplane-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: beyla
+spec:
+  selector:
+    matchLabels:
+      {{- include "rocketplane-agent.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: beyla
+  template:
+    metadata:
+      labels:
+        {{- include "rocketplane-agent.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: beyla
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "rocketplane-agent.fullname" . }}-beyla
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: beyla
+          image: "{{ .Values.beyla.image.repository }}:{{ .Values.beyla.image.tag }}"
+          imagePullPolicy: {{ .Values.beyla.image.pullPolicy }}
+          securityContext:
+            privileged: true
+          env:
+            # Broad coverage: common HTTP/gRPC app ports AND DB ports (Beyla
+            # parses SQL/Redis → app<->db edges in the map).
+            - name: BEYLA_OPEN_PORT
+              value: {{ .Values.beyla.openPorts | quote }}
+            # Go apps (pgx, clickhouse-go) do DB I/O WITHOUT database/sql — Beyla's
+            # Go uprobes miss it. Generic kprobe instrumentation captures the
+            # Postgres wire protocol even for Go; price: Go-specific uprobe extras.
+            - name: BEYLA_SKIP_GO_SPECIFIC_TRACERS
+              value: "true"
+            - name: BEYLA_KUBE_METADATA_ENABLE
+              value: "true"
+            # L4 network flows (eBPF): connection edges for protocols not L7-parsable
+            # (NATS, ClickHouse-native, …). The CP uses them as fill edges under the
+            # L7 trace edges — the CNI-agnostic replacement for conntrack.
+            - name: BEYLA_NETWORK_METRICS
+              value: "true"
+            - name: BEYLA_OTEL_METRICS_FEATURES
+              value: "application,network"
+            # Stamp the cluster identity onto every signal (k8s.cluster.name).
+            # Falls back to the top-level clusterName when beyla.clusterName is empty.
+            - name: BEYLA_KUBE_CLUSTER_NAME
+              value: {{ .Values.beyla.clusterName | default .Values.clusterName | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.beyla.otlpEndpoint | quote }}
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "http/protobuf"
+            - name: BEYLA_METRICS_INTERVAL
+              value: {{ .Values.beyla.metricsInterval | quote }}
+            # eBPF context propagation: inject W3C traceparent into outgoing requests
+            # → cross-service traces without any SDK. "headers" = clean W3C chaining.
+            - name: BEYLA_BPF_CONTEXT_PROPAGATION
+              value: {{ .Values.beyla.contextPropagation | quote }}
+            - name: BEYLA_BPF_TRACK_REQUEST_HEADERS
+              value: "true"
+          {{- with .Values.beyla.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

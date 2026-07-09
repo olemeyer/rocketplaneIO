@@ -1,0 +1,35 @@
+{{- if .Values.beyla.enabled }}
+# Read-only ClusterRole for Beyla's Kubernetes metadata decoration
+# (BEYLA_KUBE_METADATA_ENABLE): it resolves pods/services/nodes and their owning
+# workloads so every signal carries k8s.* attributes. get/list/watch only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "rocketplane-agent.fullname" . }}-beyla
+  labels:
+    {{- include "rocketplane-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: beyla
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "rocketplane-agent.fullname" . }}-beyla
+  labels:
+    {{- include "rocketplane-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: beyla
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "rocketplane-agent.fullname" . }}-beyla
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rocketplane-agent.fullname" . }}-beyla
+    namespace: {{ .Release.Namespace }}
+{{- end }}

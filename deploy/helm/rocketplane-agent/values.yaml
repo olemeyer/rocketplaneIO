@@ -78,6 +78,56 @@ logs:
       cpu: 300m
       memory: 256Mi
 
+# Grafana Beyla — eBPF auto-instrumentation. A SEPARATE, PRIVILEGED DaemonSet
+# (one pod per node) that attaches eBPF probes to node processes to emit L7
+# traces (HTTP/gRPC/SQL/Redis) and L4 network flows as OTLP — no code changes in
+# your apps. It powers the service map and the distributed traces in the UI.
+#
+# WARNING — this is heavy and privileged, unlike the rest of this chart:
+#   - runs with securityContext.privileged: true (root, full host access),
+#   - hostPID + hostNetwork (must see all node PIDs and the host net namespace),
+#   - tolerates every taint (runs on every node, control-plane nodes included).
+# It is far more invasive than the read-only agent. Disable it (beyla.enabled:
+# false) if your cluster policy forbids privileged/hostPID/hostNetwork pods.
+beyla:
+  # -- Deploy the privileged Beyla eBPF DaemonSet. Without it the UI has no
+  # auto-instrumented traces / service map from this cluster. Off => no Beyla
+  # objects are rendered at all (SA, RBAC and DaemonSet are all gated on this).
+  enabled: true
+  image:
+    # -- Beyla image repository.
+    repository: grafana/beyla
+    # -- Beyla image tag. Pinned — eBPF programs are kernel/version-sensitive.
+    tag: "2.2"
+    # -- Beyla image pull policy.
+    pullPolicy: IfNotPresent
+  # -- Ports Beyla instruments (BEYLA_OPEN_PORT). Common HTTP/gRPC app ports plus
+  # DB ports (Beyla parses SQL/Redis/Mongo to draw app<->db edges in the map).
+  openPorts: "80,443,3000,3001,4173,5000,5678,8000,8080,8090,8443,9000,3306,5432,6379,27017"
+  # -- OTLP endpoint Beyla exports to (OTEL_EXPORTER_OTLP_ENDPOINT). Defaults to
+  # the in-cluster collector Service. Override to point at your own collector,
+  # e.g. --set beyla.otlpEndpoint=http://my-collector.observability:4318 .
+  otlpEndpoint: "http://otel-collector:4318"
+  # -- eBPF trace-context propagation mode (BEYLA_BPF_CONTEXT_PROPAGATION).
+  # "headers" = clean W3C traceparent chaining (real distributed traces). Avoid
+  # "all" — its IP/connection heuristic merges unrelated keep-alive requests into
+  # one trace (bogus waterfalls).
+  contextPropagation: headers
+  # -- How often Beyla flushes metrics (BEYLA_METRICS_INTERVAL).
+  metricsInterval: 15s
+  # -- Cluster name stamped onto every Beyla signal (BEYLA_KUBE_CLUSTER_NAME).
+  # Empty => falls back to the top-level `.Values.clusterName`. Set only to give
+  # Beyla a different cluster identity than the agent.
+  clusterName: ""
+  # -- Resources for each Beyla pod. Heavier than the agent — eBPF processing.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 800m
+      memory: 1Gi
+
 # -- Pod-level annotations.
 podAnnotations: {}
 
