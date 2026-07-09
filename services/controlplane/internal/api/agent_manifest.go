@@ -282,6 +282,99 @@ spec:
             requests: {cpu: 50m, memory: 64Mi}
             limits: {cpu: 200m, memory: 128Mi}
 {{- end }}
+---
+# Beyla — eBPF auto-instrumentation: L7 traces + L4 network flows produce the
+# service map and RED metrics, no code changes. Privileged + host-level, like
+# every eBPF monitor (Cilium/Coroot run the same way). It exports OTLP to an
+# in-cluster collector Service at otel-collector:4318; deploy one alongside, or
+# use the Helm chart to point Beyla at a different endpoint (beyla.otlpEndpoint)
+# or turn it off (beyla.enabled=false).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rocketplane-beyla
+  namespace: rocketplane
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rocketplane-beyla
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rocketplane-beyla
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: rocketplane-beyla
+subjects:
+  - kind: ServiceAccount
+    name: rocketplane-beyla
+    namespace: rocketplane
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: rocketplane-beyla
+  namespace: rocketplane
+  labels:
+    app.kubernetes.io/name: rocketplane-beyla
+    app.kubernetes.io/part-of: rocketplane
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketplane-beyla
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketplane-beyla
+        app.kubernetes.io/part-of: rocketplane
+    spec:
+      serviceAccountName: rocketplane-beyla
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: beyla
+          image: grafana/beyla:2.2
+          securityContext:
+            privileged: true
+          env:
+            - name: BEYLA_OPEN_PORT
+              value: "80,443,3000,3001,4173,5000,5678,8000,8080,8090,8443,9000,3306,5432,6379,27017"
+            - name: BEYLA_SKIP_GO_SPECIFIC_TRACERS
+              value: "true"
+            - name: BEYLA_KUBE_METADATA_ENABLE
+              value: "true"
+            - name: BEYLA_NETWORK_METRICS
+              value: "true"
+            - name: BEYLA_OTEL_METRICS_FEATURES
+              value: "application,network"
+            - name: BEYLA_KUBE_CLUSTER_NAME
+              value: {{ y .ClusterName }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4318"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "http/protobuf"
+            - name: BEYLA_METRICS_INTERVAL
+              value: "15s"
+            - name: BEYLA_BPF_CONTEXT_PROPAGATION
+              value: "headers"
+            - name: BEYLA_BPF_TRACK_REQUEST_HEADERS
+              value: "true"
+          resources:
+            requests: {cpu: 50m, memory: 256Mi}
+            limits: {cpu: 800m, memory: 1Gi}
 `))
 
 // handleAgentManifest rendert das Install-Manifest. Der Enroll-Token (Query)
