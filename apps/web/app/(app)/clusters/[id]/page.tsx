@@ -3,15 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import {
-  Button,
-  EmptyState,
-  Panel,
-  PanelHeader,
-  Skeleton,
-  Spinner,
-  StatusBadge,
-} from '@/components/ui';
+import { Button, EmptyState, Skeleton, Spinner, StatusBadge } from '@/components/ui';
 import { useMe } from '@/components/app/me-context';
 import { useScope } from '@/components/app/scope-context';
 import { InstallPicker } from '@/components/app/copy-box';
@@ -102,7 +94,7 @@ export default function ClusterPage() {
   const loading = (meLoading && !currentOrg) || (detail === null && !error);
   const connected = status === 'connected' || status === 'stale';
 
-  // Connected → Service Map füllt den Content-Bereich randlos.
+  // Connected → the service map fills the content area edge-to-edge.
   if (connected && orgId) {
     return (
       <div className="h-[calc(100dvh-3rem)]">
@@ -111,6 +103,25 @@ export default function ClusterPage() {
     );
   }
 
+  // Pending → the SAME (empty) service map is the canvas, with the connect
+  // overlay floating over it. The moment the agent enrolls, the poll flips
+  // `status` to connected and the real nodes draw themselves in behind — no
+  // separate "install" page, no fake topology.
+  if (detail && orgId) {
+    return (
+      <div className="relative h-[calc(100dvh-3rem)]">
+        <ServiceMapCanvas orgId={orgId} clusterId={clusterId} namespace={namespace} fill />
+        <ConnectOverlay
+          clusterName={detail.cluster.name}
+          install={install}
+          onRegenerate={regenerate}
+          regenBusy={regenBusy}
+        />
+      </div>
+    );
+  }
+
+  // Loading / not-found.
   return (
     <div className="mx-auto max-w-[1120px] px-4 py-6 md:px-6 md:py-8">
       <Link
@@ -119,17 +130,16 @@ export default function ClusterPage() {
       >
         <span aria-hidden>←</span> Clusters
       </Link>
-
       {loading ? (
         <div className="mt-4 space-y-4">
           <Skeleton className="h-9 w-64" />
           <Skeleton className="h-40 w-full" />
         </div>
-      ) : error && !detail ? (
+      ) : (
         <div className="mt-4">
           <EmptyState
             title="Cluster not found"
-            description={error}
+            description={error ?? 'This cluster does not exist.'}
             action={
               <Link href="/">
                 <Button variant="default">Back to clusters</Button>
@@ -137,56 +147,52 @@ export default function ClusterPage() {
             }
           />
         </div>
-      ) : detail ? (
-        <>
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-4">
-            <div className="flex items-center gap-3">
-              <h1 className="rp-headline text-[24px] font-extrabold tracking-tightest text-ink">
-                {detail.cluster.name}
-              </h1>
-              <StatusBadge status={detail.cluster.status} />
-            </div>
-          </div>
-          <PendingView
-            install={install}
-            onRegenerate={regenerate}
-            regenBusy={regenBusy}
-          />
-        </>
-      ) : null}
+      )}
     </div>
   );
 }
 
-/* ── Pending: warten auf Enroll ─────────────────────────────────────────── */
+/* ── Connect overlay — floats over the empty map while the agent enrolls ───── */
 
 const STEPS = [
   'Copy the install command.',
-  'Run it against your cluster (uses your current kubectl context).',
+  'Run it against your cluster (uses your current kube-context).',
   'The agent reads the kube-system UID and enrolls — no inbound access needed.',
 ];
 
-function PendingView({
+function ConnectOverlay({
+  clusterName,
   install,
   onRegenerate,
   regenBusy,
 }: {
+  clusterName: string;
   install: { command: string; commands?: InstallCommands } | null;
   onRegenerate: () => void;
   regenBusy: boolean;
 }) {
   return (
-    <div className="mt-5 grid gap-4 lg:grid-cols-[1.5fr_1fr]">
-      <Panel>
-        <PanelHeader index="01" title="Install the agent" subtitle="One command, outbound-only" />
-        <div className="space-y-5 p-4">
-          <ol className="space-y-3">
+    <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-4 py-6">
+      {/* Soft scrim so the empty map grid stays visible behind the card. */}
+      <div className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(60% 60% at 50% 45%, color-mix(in oklab, var(--rp-base) 72%, transparent), transparent)' }} aria-hidden />
+      <div
+        className="reveal pointer-events-auto relative w-full max-w-[540px] overflow-hidden rounded-skin border border-line bg-raised"
+        style={{ boxShadow: 'var(--rp-rim), var(--rp-shadow-pop)' }}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+          <div className="min-w-0">
+            <div className="rp-micro !text-[10px] text-faint">connecting</div>
+            <h1 className="mt-0.5 truncate font-display text-[18px] font-bold tracking-tightest text-ink">{clusterName}</h1>
+          </div>
+          <StatusBadge status="pending" />
+        </div>
+
+        <div className="space-y-4 p-4">
+          <ol className="space-y-2">
             {STEPS.map((s, i) => (
-              <li key={i} className="flex gap-3">
-                <span className="font-mono text-[11px] font-bold text-accent">
-                  {String(i + 1).padStart(2, '0')}
-                </span>
-                <span className="text-[12.5px] leading-relaxed text-mid">{s}</span>
+              <li key={i} className="flex gap-2.5">
+                <span className="font-mono text-[10.5px] font-bold text-accent">{String(i + 1).padStart(2, '0')}</span>
+                <span className="text-[12px] leading-relaxed text-mid">{s}</span>
               </li>
             ))}
           </ol>
@@ -194,32 +200,26 @@ function PendingView({
           {install ? (
             <InstallPicker commands={install.commands} fallback={install.command} />
           ) : (
-            <div className="rounded-skin border border-line bg-inset px-4 py-6 text-center">
-              <p className="font-mono text-[12px] text-muted">
-                The enroll token isn’t available on this page anymore.
-              </p>
+            <div className="rounded-skin border border-line bg-inset px-4 py-5 text-center">
+              <p className="font-mono text-[11.5px] text-muted">The enroll token isn’t on this page anymore.</p>
               <Button variant="default" onClick={onRegenerate} disabled={regenBusy} className="mt-3">
                 {regenBusy ? <Spinner /> : null}
                 Generate install command
               </Button>
             </div>
           )}
-        </div>
-      </Panel>
 
-      <Panel>
-        <PanelHeader index="02" title="Status" subtitle="Waiting for enrollment" />
-        <div className="flex flex-col items-center justify-center gap-4 px-4 py-12 text-center">
-          <div className="flex h-16 w-16 items-center justify-center rounded-skin border border-line bg-inset">
-            <Spinner />
+          <div className="flex items-center gap-2.5 rounded-skin-sm border border-line bg-inset px-3 py-2.5">
+            <span className="relative flex h-2.5 w-2.5 items-center justify-center">
+              <span className="absolute h-2.5 w-2.5 rounded-full" style={{ background: 'var(--rp-accent)', animation: 'onboard-ping 1.8s ease-out infinite' }} />
+              <span className="h-2 w-2 rounded-full" style={{ background: 'var(--rp-accent)' }} />
+            </span>
+            <span className="font-mono text-[11.5px] leading-relaxed text-mid">
+              Waiting for the agent — your workloads draw themselves onto this map the moment it enrolls.
+            </span>
           </div>
-          <div className="rp-label text-[13px] text-ink">Waiting for connection…</div>
-          <StatusBadge status="pending" />
-          <p className="max-w-[220px] font-mono text-[11px] leading-relaxed text-muted">
-            This page updates automatically the moment the agent enrolls.
-          </p>
         </div>
-      </Panel>
+      </div>
     </div>
   );
 }

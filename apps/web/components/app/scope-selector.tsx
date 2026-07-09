@@ -6,6 +6,7 @@ import { cn } from '@/lib/cn';
 import { useScope } from './scope-context';
 import { Popover, MenuItem } from './popover';
 import { OrgSwitcher } from './org-switcher';
+import { ScopeCollector } from './scope-collector';
 import { ConnectClusterDialog } from './connect-cluster';
 import type { Cluster } from '@/lib/api/types';
 
@@ -211,20 +212,21 @@ function NamespacePill() {
 
 export function ScopeSelector() {
   return (
-    <div className="flex min-w-0 items-center gap-1">
-      {/* Space budget: at md+ the 236px sidebar appears, leaving the top bar only
-          ~600px on a tablet. So we reveal scope progressively — CLUSTER always,
-          ORG from sm+, and the NAMESPACE pill only at lg+ (with the search field);
-          on phones org+namespace move to the nav drawer. This keeps the Copilot
-          button uncrushed at every width. */}
-      <span className="hidden sm:contents">
+    <>
+      {/* Mobile + tablet: ONE integrated collector button (org / cluster /
+          namespace all inside). At md+ the 236px sidebar leaves the top bar too
+          little room for three inline pills, so this keeps everything selectable
+          without crowding the Copilot button. */}
+      <div className="flex min-w-0 items-center lg:hidden">
+        <ScopeCollector />
+      </div>
+      {/* Desktop: the full inline breadcrumb. */}
+      <div className="hidden min-w-0 items-center gap-1 lg:flex">
         <OrgSwitcher />
         <Sep />
-      </span>
-      <ClusterPill />
-      <span className="hidden lg:contents">
+        <ClusterPill />
         <NamespacePill />
-      </span>
-    </div>
+      </div>
+    </>
   );
 }

@@ -437,6 +437,54 @@
   }
 }
 
+/* Onboarding topology: edges stream data, nodes pop in + pulse a health ring
+   as the cluster "comes alive". */
+@keyframes onboard-flow {
+  to {
+    stroke-dashoffset: -60;
+  }
+}
+@keyframes onboard-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes onboard-ping {
+  0% {
+    opacity: 0.55;
+    transform: scale(0.7);
+  }
+  75%,
+  100% {
+    opacity: 0;
+    transform: scale(2.4);
+  }
+}
+@keyframes onboard-edge-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.55;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .onboard-flow-dash,
+  .onboard-node,
+  .onboard-ring,
+  .onboard-edge {
+    animation: none !important;
+  }
+}
+
 /* fließende Traffic-Partikel entlang der Flow-Kante */
 .rp-flow-dash {
   stroke-dashoffset: 30;
