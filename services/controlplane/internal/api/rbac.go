@@ -60,8 +60,8 @@ func (s *Server) resolveOrgRole(w http.ResponseWriter, r *http.Request) (uuid.UU
 		}
 		return uuid.Nil, "", false
 	}
-	// API-Token: strikt auf das Token-Org begrenzt, Rolle kommt vom Token (nie
-	// platform-admin/owner). Muss VOR dem User-/Platform-Admin-Pfad greifen.
+	// API token: strictly scoped to the token's org, role comes from the token (never
+	// platform-admin/owner). Must take effect BEFORE the user/platform-admin path.
 	if tp, ok := auth.TokenFrom(r.Context()); ok {
 		if tp.OrgID != orgID {
 			writeErr(w, http.StatusForbidden, "token is not scoped to this org")

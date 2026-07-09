@@ -13,10 +13,10 @@ import (
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/model"
 )
 
-// escalation_live_test.go — Zustandsmaschine der Incident-Eskalation gegen echtes
-// Postgres. RP_LIVE_PG-gated wie incidents_live_test.go. Geprüft: Policy-CRUD,
-// Cluster-Default, Setup beim Deklarieren, Due-Erkennung, Advance mit Timeline,
-// und dass acknowledge die Eskalation stoppt (next_escalation_at → NULL).
+// escalation_live_test.go — incident-escalation state machine against a real
+// Postgres. RP_LIVE_PG-gated like incidents_live_test.go. Covered: policy CRUD,
+// cluster default, setup on declare, due detection, advance with timeline,
+// and that acknowledge stops the escalation (next_escalation_at → NULL).
 func TestEscalationStateMachineLive(t *testing.T) {
 	dsn := os.Getenv("RP_LIVE_PG")
 	if dsn == "" {
@@ -43,13 +43,13 @@ func TestEscalationStateMachineLive(t *testing.T) {
 		t.Fatalf("cluster: %v", err)
 	}
 
-	// Provider (dummy webhook — reicht als Eskalationsziel).
+	// Provider (dummy webhook — enough as an escalation target).
 	prov, err := st.CreateAlertProvider(ctx, org.ID, "esc-webhook", "webhook", json.RawMessage(`{"url":"http://127.0.0.1:59999/none"}`))
 	if err != nil {
 		t.Fatalf("provider: %v", err)
 	}
 
-	// Policy: step0 sofort, step1 nach 5 Min.
+	// Policy: step0 immediately, step1 after 5 min.
 	steps := []model.EscalationStep{
 		{AfterMinutes: 0, ProviderIDs: []uuid.UUID{prov.ID}},
 		{AfterMinutes: 5, ProviderIDs: []uuid.UUID{prov.ID}},
@@ -62,14 +62,14 @@ func TestEscalationStateMachineLive(t *testing.T) {
 		t.Fatalf("expected 2 steps, got %d", len(pol.Steps))
 	}
 
-	// Cross-Org-Provider muss abgelehnt werden (Validierung im Handler; hier
-	// prüfen wir nur, dass die Policy sauber persistiert/gelesen wird).
+	// Cross-org provider must be rejected (validation lives in the handler; here
+	// we only check that the policy is persisted/read back cleanly).
 	got, err := st.GetEscalationPolicy(ctx, org.ID, pol.ID)
 	if err != nil || got.Steps[1].AfterMinutes != 5 {
 		t.Fatalf("get policy roundtrip failed: %v", err)
 	}
 
-	// Cluster-Default setzen.
+	// Set the cluster default.
 	if err := st.SetClusterEscalationPolicy(ctx, cl.ID, &pol.ID); err != nil {
 		t.Fatalf("set cluster policy: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestEscalationStateMachineLive(t *testing.T) {
 		t.Fatalf("cluster default not persisted")
 	}
 
-	// Incident deklarieren → Eskalation eingerichtet, step0 sofort fällig.
+	// Declare the incident → escalation set up, step0 immediately due.
 	inc, err := st.CreateIncident(ctx, org.ID, cl.ID, "escalating incident", "", "critical", &u.ID, u.Email)
 	if err != nil {
 		t.Fatalf("declare: %v", err)
@@ -89,7 +89,7 @@ func TestEscalationStateMachineLive(t *testing.T) {
 		t.Fatalf("next_escalation_at should be scheduled")
 	}
 
-	now := time.Now().UTC().Add(time.Minute) // step0 (after 0) ist fällig
+	now := time.Now().UTC().Add(time.Minute) // step0 (after 0) is due
 	due, err := st.DueEscalationIncidents(ctx, now)
 	if err != nil {
 		t.Fatalf("due: %v", err)
@@ -107,7 +107,7 @@ func TestEscalationStateMachineLive(t *testing.T) {
 		t.Fatalf("expected step 0, got %d", found.Step)
 	}
 
-	// Schritt 0 atomar claimen (analog Escalator): expected=0 → new=1, next=now+5m.
+	// Claim step 0 atomically (like the Escalator): expected=0 → new=1, next=now+5m.
 	next := now.Add(5 * time.Minute)
 	claimed, err := st.AdvanceEscalation(ctx, inc.ID, 0, 1, &next, now, []string{prov.Name})
 	if err != nil {
@@ -116,7 +116,7 @@ func TestEscalationStateMachineLive(t *testing.T) {
 	if !claimed {
 		t.Fatalf("step 0 should have been claimed")
 	}
-	// Zweiter Claim mit demselben expectedStep muss fehlschlagen (Idempotenz).
+	// A second claim with the same expectedStep must fail (idempotency).
 	if again, _ := st.AdvanceEscalation(ctx, inc.ID, 0, 1, &next, now, []string{prov.Name}); again {
 		t.Fatalf("re-claiming an already-advanced step must fail")
 	}
@@ -135,7 +135,7 @@ func TestEscalationStateMachineLive(t *testing.T) {
 		t.Fatalf("expected 1 escalated timeline event, got %d", escalated)
 	}
 
-	// Jetzt NICHT mehr fällig (next liegt +5m).
+	// Now NOT due anymore (next is +5m out).
 	due2, _ := st.DueEscalationIncidents(ctx, now)
 	for _, d := range due2 {
 		if d.IncidentID == inc.ID {
@@ -143,7 +143,7 @@ func TestEscalationStateMachineLive(t *testing.T) {
 		}
 	}
 
-	// Acknowledge stoppt die Eskalation.
+	// Acknowledge stops the escalation.
 	if _, err := st.UpdateIncidentStatus(ctx, cl.ID, inc.ID, "acknowledged", &u.ID, u.Email); err != nil {
 		t.Fatalf("ack: %v", err)
 	}
@@ -157,13 +157,13 @@ func TestEscalationStateMachineLive(t *testing.T) {
 			t.Fatalf("acknowledged incident must not escalate")
 		}
 	}
-	// Race-Guard: selbst ein direkter Claim (als hätte ein Tick die Zeile vor dem
-	// ack gelesen) darf einen acknowledgten Incident NICHT mehr vorschieben.
+	// Race guard: even a direct claim (as if a tick had read the row before the
+	// ack) must NOT advance an acknowledged incident anymore.
 	if claimed, _ := st.AdvanceEscalation(ctx, inc.ID, 1, 2, &next, now.Add(10*time.Minute), []string{prov.Name}); claimed {
 		t.Fatalf("claim on an acknowledged incident must fail (status guard)")
 	}
 
-	// Policy löschen → Referenz am Incident wird NULL (FK SET NULL).
+	// Delete the policy → the reference on the incident becomes NULL (FK SET NULL).
 	if err := st.DeleteEscalationPolicy(ctx, org.ID, pol.ID); err != nil {
 		t.Fatalf("delete policy: %v", err)
 	}

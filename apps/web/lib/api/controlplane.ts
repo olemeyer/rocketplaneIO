@@ -1,4 +1,4 @@
-// Typisierte Contract-Funktionen (docs/architecture.md §5). Dünne Hülle um apiFetch.
+// Typed contract functions (docs/architecture.md §5). Thin wrapper around apiFetch.
 import { apiFetch } from './client';
 import type {
   AdminOrg,
@@ -131,7 +131,7 @@ export function adminSetUserFlags(userId: string, flags: { suspended?: boolean; 
 
 /* ── Clusters ───────────────────────────────────────────────────────────── */
 
-/** Liste toleriert sowohl `[...]` als auch `{ clusters:[...] }`. */
+/** List tolerates both `[...]` and `{ clusters:[...] }`. */
 export async function listClusters(orgId: string): Promise<Cluster[]> {
   const data = await apiFetch<Cluster[] | { clusters: Cluster[] }>(
     `/api/orgs/${enc(orgId)}/clusters`,
@@ -273,7 +273,7 @@ export function createAction(
   });
 }
 
-/* ── Action-Definitionen ──────────────────────────────────────────────────── */
+/* ── Action definitions ───────────────────────────────────────────────────── */
 
 export function getActionDefinitions(
   orgId: string,
@@ -351,7 +351,7 @@ export function setWorkloadIcon(
   });
 }
 
-/* ── Metriken + Alerts ────────────────────────────────────────────────────── */
+/* ── Metrics + Alerts ─────────────────────────────────────────────────────── */
 
 export function getMetricSeries(
   orgId: string,
@@ -407,14 +407,14 @@ export function deleteAlertRule(orgId: string, clusterId: string, ruleId: string
     method: 'DELETE',
   });
 }
-/** Snooze: minutes > 0 = stumm für n Minuten, 0 = unmute. */
+/** Snooze: minutes > 0 = mute for n minutes, 0 = unmute. */
 export function muteAlertRule(orgId: string, clusterId: string, ruleId: string, minutes: number): Promise<unknown> {
   return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/alert-rules/${enc(ruleId)}/mute`, {
     method: 'POST',
     body: JSON.stringify({ minutes }),
   });
 }
-/** Wert-Historie des Evaluators (Sparkline auf der Rule-Karte). */
+/** Value history of the evaluator (sparkline on the rule card). */
 export function getAlertRuleSeries(
   orgId: string,
   clusterId: string,

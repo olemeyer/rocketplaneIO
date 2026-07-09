@@ -12,10 +12,10 @@ import (
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/model"
 )
 
-// api_tokens.go — programmatischer Zugriff (Service-Accounts). Ein Token ist
-// org-scoped, trägt eine Rolle (member|admin) und wird als `rp_<hex>` gesendet.
-// Persistiert wird NUR sha256(secret) (via hashToken/newToken aus tokens.go);
-// das Geheimnis ist genau einmal (bei Erstellung) sichtbar.
+// api_tokens.go — programmatic access (service accounts). A token is
+// org-scoped, carries a role (member|admin) and is sent as `rp_<hex>`.
+// ONLY sha256(secret) is persisted (via hashToken/newToken from tokens.go);
+// the secret is visible exactly once (at creation).
 
 func apiTokenStatus(t *model.APIToken, now time.Time) string {
 	switch {
@@ -36,7 +36,7 @@ func scanAPIToken(row pgx.Row, t *model.APIToken) error {
 		&t.CreatedByName, &t.CreatedAt, &t.LastUsedAt, &t.ExpiresAt, &t.RevokedAt)
 }
 
-// ListAPITokens liefert die Tokens eines Orgs (ohne Geheimnis/Hash).
+// ListAPITokens returns an org's tokens (without secret/hash).
 func (s *Store) ListAPITokens(ctx context.Context, orgID uuid.UUID) ([]model.APIToken, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+apiTokenCols+`
 		FROM api_tokens t LEFT JOIN users u ON u.id = t.created_by
@@ -58,9 +58,9 @@ func (s *Store) ListAPITokens(ctx context.Context, orgID uuid.UUID) ([]model.API
 	return out, rows.Err()
 }
 
-// CreateAPIToken legt ein Token an und gibt das Geheimnis EINMALIG zurück.
-// role wird auf member|admin begrenzt (nie owner/platform-admin). expiresAt nil
-// = kein Ablauf.
+// CreateAPIToken creates a token and returns the secret exactly ONCE.
+// role is limited to member|admin (never owner/platform-admin). expiresAt nil
+// = no expiry.
 func (s *Store) CreateAPIToken(ctx context.Context, orgID uuid.UUID, name, role string, createdBy uuid.UUID, expiresAt *time.Time) (*model.APIToken, error) {
 	if role != "admin" {
 		role = "member"
@@ -69,7 +69,7 @@ func (s *Store) CreateAPIToken(ctx context.Context, orgID uuid.UUID, name, role 
 	if err != nil {
 		return nil, fmt.Errorf("generate token: %w", err)
 	}
-	prefix := secret[:11] // "rp_" + 8 hex — reicht zur Wiedererkennung in der UI
+	prefix := secret[:11] // "rp_" + 8 hex — enough to recognize it in the UI
 	var id uuid.UUID
 	err = s.pool.QueryRow(ctx, `
 		INSERT INTO api_tokens (org_id, name, role, token_hash, prefix, created_by, expires_at)
@@ -82,7 +82,7 @@ func (s *Store) CreateAPIToken(ctx context.Context, orgID uuid.UUID, name, role 
 	if err != nil {
 		return nil, err
 	}
-	t.Secret = secret // NUR hier zurückgegeben
+	t.Secret = secret // returned ONLY here
 	return t, nil
 }
 
@@ -101,7 +101,7 @@ func (s *Store) getAPIToken(ctx context.Context, orgID, id uuid.UUID) (*model.AP
 	return &t, nil
 }
 
-// RevokeAPIToken markiert ein Token als widerrufen (idempotent).
+// RevokeAPIToken marks a token as revoked (idempotent).
 func (s *Store) RevokeAPIToken(ctx context.Context, orgID, id uuid.UUID) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE api_tokens SET revoked_at=COALESCE(revoked_at, now())
@@ -115,7 +115,7 @@ func (s *Store) RevokeAPIToken(ctx context.Context, orgID, id uuid.UUID) error {
 	return nil
 }
 
-// DeleteAPIToken entfernt ein Token endgültig.
+// DeleteAPIToken removes a token permanently.
 func (s *Store) DeleteAPIToken(ctx context.Context, orgID, id uuid.UUID) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM api_tokens WHERE id=$1 AND org_id=$2`, id, orgID)
 	if err != nil {
@@ -127,7 +127,7 @@ func (s *Store) DeleteAPIToken(ctx context.Context, orgID, id uuid.UUID) error {
 	return nil
 }
 
-// APITokenAuth ist das aufgelöste Principal hinter einem Bearer-Token.
+// APITokenAuth is the resolved principal behind a Bearer token.
 type APITokenAuth struct {
 	TokenID   uuid.UUID
 	OrgID     uuid.UUID
@@ -135,8 +135,8 @@ type APITokenAuth struct {
 	CreatedBy uuid.UUID
 }
 
-// ResolveAPIToken prüft ein Bearer-Geheimnis: Hash-Lookup, nicht widerrufen und
-// nicht abgelaufen. Aktualisiert last_used_at gedrosselt (max. 1×/Minute).
+// ResolveAPIToken validates a Bearer secret: hash lookup, not revoked and
+// not expired. Updates last_used_at in a throttled manner (at most once per minute).
 func (s *Store) ResolveAPIToken(ctx context.Context, secret string) (*APITokenAuth, error) {
 	var a APITokenAuth
 	err := s.pool.QueryRow(ctx, `
@@ -150,7 +150,7 @@ func (s *Store) ResolveAPIToken(ctx context.Context, secret string) (*APITokenAu
 	if err != nil {
 		return nil, err
 	}
-	// last_used_at gedrosselt fortschreiben (best-effort).
+	// Advance last_used_at in a throttled manner (best-effort).
 	_, _ = s.pool.Exec(ctx, `
 		UPDATE api_tokens SET last_used_at=now()
 		WHERE id=$1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')`, a.TokenID)

@@ -1,26 +1,26 @@
--- Incident-Management: erstklassige Incidents, die Alerts, Copilot-
--- Investigations und Safe-Actions zu EINEM Lebenszyklus verbinden. Ein Incident
--- ist die Klammer über einen Vorfall: er wird deklariert (manuell ODER
--- automatisch beim Feuern eines Alerts), durchläuft open → acknowledged →
--- mitigated → resolved und trägt eine chronologische Timeline aller Ereignisse.
--- MTTA (created→acknowledged) und MTTR (created→resolved) sind daraus ableitbar.
+-- Incident management: first-class incidents that tie alerts, Copilot
+-- investigations, and safe actions together into ONE lifecycle. An incident is
+-- the wrapper around an event: it is declared (manually OR automatically when an
+-- alert fires), moves through open → acknowledged → mitigated → resolved, and
+-- carries a chronological timeline of all events.
+-- MTTA (created→acknowledged) and MTTR (created→resolved) are derived from it.
 --
--- Auto-Glue: der Alert-Evaluator deklariert beim Übergang nach `firing` einen
--- Incident (dedupliziert über dedup_key = "alert:<ruleId>", solange offen) und
--- schließt ihn beim Zurückfallen nach `ok` wieder. Copilot-Investigations und
--- Actions verweisen per incident_id zurück und tauchen in der Timeline auf.
+-- Auto-glue: the alert evaluator declares an incident on the transition to
+-- `firing` (deduplicated via dedup_key = "alert:<ruleId>" while still open) and
+-- closes it again when it falls back to `ok`. Copilot investigations and
+-- actions reference it back via incident_id and show up in the timeline.
 
 CREATE TABLE IF NOT EXISTS incidents (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   org_id        uuid NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
   cluster_id    uuid NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
-  number        int  NOT NULL,                       -- pro Org fortlaufend (INC-<number>)
+  number        int  NOT NULL,                       -- sequential per org (INC-<number>)
   title         text NOT NULL,
   summary       text NOT NULL DEFAULT '',
   severity      text NOT NULL DEFAULT 'high',        -- critical | high | medium | low
   status        text NOT NULL DEFAULT 'open',        -- open | acknowledged | mitigated | resolved
   source        text NOT NULL DEFAULT 'manual',      -- manual | alert | copilot
-  dedup_key     text,                                -- Auto-Dedup offener Alert-Incidents
+  dedup_key     text,                                -- auto-dedup of open alert incidents
   assignee_id   uuid REFERENCES users(id) ON DELETE SET NULL,
   created_by    uuid REFERENCES users(id) ON DELETE SET NULL,
   acknowledged_at timestamptz,
@@ -34,21 +34,21 @@ CREATE TABLE IF NOT EXISTS incidents (
 );
 CREATE INDEX IF NOT EXISTS idx_incidents_cluster ON incidents(cluster_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_incidents_org ON incidents(org_id, created_at DESC);
--- Höchstens EIN offener Auto-Incident je dedup_key (Alert-Regel): erneutes
--- Feuern hängt sich an, statt zu duplizieren.
+-- At most ONE open auto-incident per dedup_key (alert rule): re-firing attaches
+-- to it instead of duplicating.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_incidents_open_dedup
   ON incidents(dedup_key) WHERE status <> 'resolved' AND dedup_key IS NOT NULL;
 
--- Pro-Org fortlaufender Zähler (atomar via UPSERT-RETURNING) — ergibt die
--- menschenlesbare INC-Nummer ohne Race.
+-- Per-org sequential counter (atomic via UPSERT-RETURNING) — produces the
+-- human-readable INC number without a race.
 CREATE TABLE IF NOT EXISTS incident_counters (
   org_id uuid PRIMARY KEY REFERENCES orgs(id) ON DELETE CASCADE,
   seq    int  NOT NULL DEFAULT 0
 );
 
--- Timeline: jede Zeile ein Ereignis am Incident. ref_type/ref_id verlinken auf
--- das auslösende Objekt (alert_event | investigation | action), metadata trägt
--- Kontext (alter/neuer Status, Wert, …).
+-- Timeline: each row is one event on the incident. ref_type/ref_id link to the
+-- triggering object (alert_event | investigation | action), metadata carries
+-- context (old/new status, value, …).
 CREATE TABLE IF NOT EXISTS incident_events (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   incident_id uuid NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
@@ -63,9 +63,9 @@ CREATE TABLE IF NOT EXISTS incident_events (
 );
 CREATE INDEX IF NOT EXISTS idx_incident_events_inc ON incident_events(incident_id, at);
 
--- Rückverweise: Alert-Übergänge, Copilot-Investigations und Actions tragen die
--- incident_id, damit die Timeline sie einsammeln kann (SET NULL: der Incident
--- kann gelöscht/archiviert werden, ohne die Quelle zu verlieren).
+-- Back-references: alert transitions, Copilot investigations, and actions carry
+-- the incident_id so the timeline can collect them (SET NULL: the incident can
+-- be deleted/archived without losing the source).
 ALTER TABLE alert_events
   ADD COLUMN IF NOT EXISTS incident_id uuid REFERENCES incidents(id) ON DELETE SET NULL;
 ALTER TABLE copilot_investigations

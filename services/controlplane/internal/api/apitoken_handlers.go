@@ -11,12 +11,12 @@ import (
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/store"
 )
 
-// apitoken_handlers.go — Verwaltung der API-Tokens (Service-Accounts). BEWUSST
-// nur mit interaktiver Session UND Admin-Rolle: ein Token darf keine weiteren
-// Tokens erstellen/widerrufen (sonst Selbst-Verlängerung / Rechte-Persistenz).
+// apitoken_handlers.go — management of API tokens (service accounts). DELIBERATELY
+// restricted to an interactive session AND the admin role: a token may not create
+// or revoke further tokens (otherwise self-renewal / privilege persistence).
 
-// requireSessionAdmin verlangt eine Cookie-Session (kein API-Token) mit
-// Admin-Rolle im Org. Gibt die orgID zurück.
+// requireSessionAdmin requires a cookie session (not an API token) with the
+// admin role in the org. Returns the orgID.
 func (s *Server) requireSessionAdmin(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	if _, isToken := auth.TokenFrom(r.Context()); isToken {
 		writeErr(w, http.StatusForbidden, "managing API tokens requires an interactive session")
@@ -77,7 +77,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, &orgID, "apitoken.create", "api_token", tok.ID.String(), tok.Name, map[string]any{"role": tok.Role})
-	writeJSON(w, http.StatusCreated, tok) // enthält das Secret EINMALIG
+	writeJSON(w, http.StatusCreated, tok) // contains the secret ONE TIME ONLY
 }
 
 func (s *Server) handleRevokeAPIToken(w http.ResponseWriter, r *http.Request) {

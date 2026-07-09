@@ -2,16 +2,16 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-// use-cluster-events — der Live-Kanal der UI: EIN SSE-Stream je Cluster-Scope
-// liefert Invalidation-Signale (topology/actions/logs/namespaces); die
-// Komponente refetcht daraufhin gezielt ihre Query. Ergebnis: Updates in
-// Push-Latenz statt Poll-Intervall, und pro Browser EINE idle Verbindung
-// statt Dauerfeuer — die Grundlage, auf der das System auf viele Nutzer
-// skaliert (Signale sind winzig, Reads bleiben normale Query-Pfade).
+// use-cluster-events — the UI's live channel: ONE SSE stream per cluster scope
+// delivers invalidation signals (topology/actions/logs/namespaces); the
+// component then refetches its query in a targeted way. The result: updates at
+// push latency instead of poll interval, and ONE idle connection per browser
+// instead of constant fire — the foundation on which the system scales to many
+// users (signals are tiny, reads stay normal query paths).
 //
-// `live` = Stream verbunden → Komponenten strecken ihre Polls auf einen
-// seltenen FALLBACK (Robustheit bei Proxy-Problemen); EventSource selbst
-// reconnected automatisch.
+// `live` = stream connected → components stretch their polls to a rare
+// FALLBACK (robustness against proxy problems); EventSource itself
+// reconnects automatically.
 
 export type ClusterEventType = 'topology' | 'actions' | 'logs' | 'namespaces' | 'alerts' | 'incidents';
 
@@ -41,7 +41,7 @@ export function useClusterEvents(
       ['incidents', on('incidents')],
     ];
     for (const [type, fn] of listeners) es.addEventListener(type, fn);
-    es.onerror = () => setLive(false); // EventSource reconnected selbst
+    es.onerror = () => setLive(false); // EventSource reconnects on its own
 
     return () => {
       es.close();

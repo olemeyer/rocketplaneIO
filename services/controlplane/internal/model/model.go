@@ -116,10 +116,10 @@ type Namespace struct {
 	LastSeenAt  time.Time         `json:"lastSeenAt"`
 }
 
-// ── Topologie (Service-Map) ────────────────────────────────────────────────
-// Diese Typen sind der Agent→Control-Plane-Sync-Contract für die Service-Map.
+// ── Topology (Service-Map) ─────────────────────────────────────────────────
+// These types are the Agent→Control-Plane sync contract for the service map.
 
-// Pod ist eine vom Agent gesyncte Pod-Momentaufnahme (inkl. Owner-Ableitung).
+// Pod is a pod snapshot synced by the agent (incl. owner derivation).
 type Pod struct {
 	Namespace    string `json:"namespace"`
 	Name         string `json:"name"`
@@ -133,7 +133,7 @@ type Pod struct {
 	WorkloadName string `json:"workloadName"`
 }
 
-// K8sService ist ein gesyncter Kubernetes-Service.
+// K8sService is a synced Kubernetes service.
 type K8sService struct {
 	Namespace string            `json:"namespace"`
 	Name      string            `json:"name"`
@@ -142,8 +142,8 @@ type K8sService struct {
 	Selector  map[string]string `json:"selector"`
 }
 
-// FlowEdge ist eine vom Agent (conntrack) beobachtete, auf Workload-Ebene
-// aggregierte Verbindung from → to.
+// FlowEdge is a from → to connection observed by the agent (conntrack) and
+// aggregated at the workload level.
 type FlowEdge struct {
 	FromNamespace string `json:"fromNamespace"`
 	FromKind      string `json:"fromKind"`
@@ -155,8 +155,8 @@ type FlowEdge struct {
 	ConnCount     int64  `json:"connCount"`
 }
 
-// WorkloadSync ist ein direkt vom Workload-Objekt gelesener Knoten —
-// die Wahrheit für desired/ready, auch bei scaled-to-zero (keine Pods).
+// WorkloadSync is a node read directly from the workload object —
+// the source of truth for desired/ready, even when scaled-to-zero (no pods).
 type WorkloadSync struct {
 	Namespace       string `json:"namespace"`
 	Name            string `json:"name"`
@@ -165,7 +165,7 @@ type WorkloadSync struct {
 	ReplicasReady   int    `json:"replicasReady"`
 }
 
-// TopologySync ist der Agent-Payload für POST /api/agent/topology.
+// TopologySync is the agent payload for POST /api/agent/topology.
 type TopologySync struct {
 	Pods      []Pod          `json:"pods"`
 	Services  []K8sService   `json:"services"`
@@ -175,7 +175,7 @@ type TopologySync struct {
 	PVCs      []PVCSync      `json:"pvcs"`
 }
 
-// MapNode ist ein Knoten der Service-Map (ein Workload).
+// MapNode is a node in the service map (a workload).
 type MapNode struct {
 	ID        string `json:"id"` // namespace/kind/name
 	Namespace string `json:"namespace"`
@@ -185,34 +185,34 @@ type MapNode struct {
 	PodsReady int    `json:"podsReady"`
 	PodsTotal int    `json:"podsTotal"`
 	Restarts  int    `json:"restarts"`
-	// Image = Container-Image (Auto-Tech-Erkennung); Icon = manueller Override.
+	// Image = container image (auto tech detection); Icon = manual override.
 	Image string `json:"image"`
 	Icon  string `json:"icon"`
 }
 
-// MapEdge ist eine gerichtete, aggregierte Kante zwischen zwei Workloads.
+// MapEdge is a directed, aggregated edge between two workloads.
 type MapEdge struct {
 	From      string `json:"from"` // MapNode.ID
 	To        string `json:"to"`
 	ConnCount int64  `json:"connCount"`
-	// Source unterscheidet die Kantenherkunft: "trace" = aus Beyla-eBPF-Spans
-	// (primär, mit RED), "flow" = Beyla-L4-Netzwerk-Flows (Protokolle ohne
-	// L7-Parsing: NATS, ClickHouse-native, …), "conntrack" = letzter Fallback
-	// aus der Kernel-Conntrack-Tabelle. Leer bei Alt-Clients.
+	// Source distinguishes the edge origin: "trace" = from Beyla eBPF spans
+	// (primary, with RED), "flow" = Beyla L4 network flows (protocols without
+	// L7 parsing: NATS, ClickHouse-native, …), "conntrack" = last-resort fallback
+	// from the kernel conntrack table. Empty for older clients.
 	Source string `json:"source,omitempty"`
-	// L7-Anreicherung — nur bei Source=="trace" gesetzt.
+	// L7 enrichment — only set when Source=="trace".
 	Protocol string  `json:"protocol,omitempty"` // http | grpc | <db.system> (postgresql, redis, …)
-	ReqRate  float64 `json:"reqRate,omitempty"`  // Requests/Sekunde über das Fenster
-	ErrRate  float64 `json:"errRate,omitempty"`  // Fehleranteil 0..1
-	P95Ms    float64 `json:"p95Ms,omitempty"`    // p95-Latenz in ms
-	// L4-Anreicherung — nur bei Source=="flow" gesetzt (Bytes/s über das Fenster).
+	ReqRate  float64 `json:"reqRate,omitempty"`  // requests/second over the window
+	ErrRate  float64 `json:"errRate,omitempty"`  // error fraction 0..1
+	P95Ms    float64 `json:"p95Ms,omitempty"`    // p95 latency in ms
+	// L4 enrichment — only set when Source=="flow" (bytes/s over the window).
 	BytesRate float64 `json:"bytesRate,omitempty"`
 }
 
-// RawFlowEdge ist eine aus Beylas L4-Netzwerk-Flow-Metrik aggregierte, noch
-// nicht gegen die Topologie validierte Kante. Beide Seiten sind bereits von
-// Beyla kube-dekoriert (owner + namespace) — es bleibt nur der Abgleich gegen
-// bekannte Workloads (store.ResolveFlowEdges).
+// RawFlowEdge is an edge aggregated from Beyla's L4 network flow metric that has
+// not yet been validated against the topology. Both sides are already
+// kube-decorated by Beyla (owner + namespace) — all that remains is matching
+// against known workloads (store.ResolveFlowEdges).
 type RawFlowEdge struct {
 	SrcNs   string
 	SrcName string
@@ -221,20 +221,20 @@ type RawFlowEdge struct {
 	Bytes   float64
 }
 
-// RawTraceEdge ist eine aus Beyla-Spans aggregierte, NOCH NICHT auf Workloads
-// aufgelöste Kante. Eine Seite ist sauber bekannt (der berichtende Workload aus
-// ResourceAttributes), die andere ist nur eine Adresse (server.address bei
-// Client-Spans, client.address bei Server-Spans) und wird gegen die Topologie
-// aufgelöst (store.ResolveTraceEdges).
+// RawTraceEdge is an edge aggregated from Beyla spans that has NOT YET been
+// resolved to workloads. One side is cleanly known (the reporting workload from
+// ResourceAttributes), the other is just an address (server.address on
+// client spans, client.address on server spans) and gets resolved against the
+// topology (store.ResolveTraceEdges).
 type RawTraceEdge struct {
-	// KnownNs/KnownName: die saubere Workload-Seite (der Span-berichtende Prozess).
+	// KnownNs/KnownName: the clean workload side (the span-reporting process).
 	KnownNs   string
 	KnownName string
-	// Peer: die noch aufzulösende Gegenseite — Service-Name, FQDN, IP oder (auf
-	// kube-proxy) ein Node-Name; Letzteres löst auf nichts auf und fällt weg.
+	// Peer: the counterpart still to be resolved — service name, FQDN, IP or (on
+	// kube-proxy) a node name; the latter resolves to nothing and is dropped.
 	Peer string
-	// KnownIsClient: true → Kante Known→Peer (aus einem CLIENT-Span); false →
-	// Peer→Known (aus einem SERVER-Span, die Gegenseite ist der Aufrufer).
+	// KnownIsClient: true → edge Known→Peer (from a CLIENT span); false →
+	// Peer→Known (from a SERVER span, where the counterpart is the caller).
 	KnownIsClient bool
 	Protocol      string
 	Reqs          int64
@@ -242,7 +242,7 @@ type RawTraceEdge struct {
 	P95Ms         float64
 }
 
-// ServiceMap ist die Antwort von GET …/clusters/{id}/service-map.
+// ServiceMap is the response of GET …/clusters/{id}/service-map.
 type ServiceMap struct {
 	Namespaces []string  `json:"namespaces"`
 	Nodes      []MapNode `json:"nodes"`
@@ -250,14 +250,14 @@ type ServiceMap struct {
 }
 
 // ── Safe-Actions ───────────────────────────────────────────────────────────
-// Vom User angeforderte Kubernetes-Aktionen; der Agent pollt und führt aus
-// (outbound-only — die Control-Plane hat nie Cluster-Zugriff).
+// Kubernetes actions requested by the user; the agent polls and executes them
+// (outbound-only — the Control-Plane never has cluster access).
 
-// Action ist eine Kubernetes-Aktion auf einem Workload/Pod.
+// Action is a Kubernetes action on a workload/pod.
 type Action struct {
 	ID              uuid.UUID       `json:"id"`
 	ClusterID       uuid.UUID       `json:"clusterId"`
-	RequestedBy     string          `json:"requestedBy"` // Anzeigename/E-Mail (aufgelöst)
+	RequestedBy     string          `json:"requestedBy"` // display name/email (resolved)
 	Kind            string          `json:"kind"`        // rollout_restart | scale | delete_pod
 	TargetNamespace string          `json:"targetNamespace"`
 	TargetKind      string          `json:"targetKind"` // Deployment | StatefulSet | DaemonSet | Pod
@@ -265,24 +265,24 @@ type Action struct {
 	Params          json.RawMessage `json:"params"`
 	Status          string          `json:"status"` // pending|running|succeeded|failed
 	Result          string          `json:"result"`
-	// Progress ist die Live-Zeile des laufenden Schritts („rollout: 1/3 available"),
-	// Steps der Zustand des gesamten Ablaufs ([{name,status,detail}]).
+	// Progress is the live line of the running step ("rollout: 1/3 available"),
+	// Steps the state of the whole flow ([{name,status,detail}]).
 	Progress        string          `json:"progress"`
 	Steps           json.RawMessage `json:"steps"`
-	// Revert: die inverse Katalog-Action (vom Agenten mit Before-Snapshot
-	// befüllt, nur bei succeeded) — Grundlage des "Revert"-Buttons der Runs-Seite.
+	// Revert: the inverse catalog action (filled by the agent with a before
+	// snapshot, only when succeeded) — basis for the "Revert" button on the Runs page.
 	Revert json.RawMessage `json:"revert,omitempty"`
-	// Snapshot: das gestrippte Zielobjekt VOR der Mutation (generischer
-	// Before-Snapshot) — Audit-Trail + restore_resource-Grundlage.
+	// Snapshot: the stripped target object BEFORE the mutation (generic
+	// before snapshot) — audit trail + restore_resource basis.
 	Snapshot        json.RawMessage `json:"snapshot,omitempty"`
 	CancelRequested bool            `json:"cancelRequested"`
 	CreatedAt       time.Time       `json:"createdAt"`
 	UpdatedAt       time.Time       `json:"updatedAt"`
 }
 
-// WorkloadPod ist eine Pod-Zeile für das Workload-Panel (inkl. Node).
-// Phase kennt zusätzlich "Terminating" (Pod fährt raus); FirstSeenAt lässt
-// die UI frische Pods („new") markieren.
+// WorkloadPod is a pod row for the workload panel (incl. node).
+// Phase additionally knows "Terminating" (pod is shutting down); FirstSeenAt lets
+// the UI mark fresh pods ("new").
 type WorkloadPod struct {
 	Namespace   string    `json:"namespace"`
 	Name        string    `json:"name"`
@@ -294,7 +294,7 @@ type WorkloadPod struct {
 	FirstSeenAt time.Time `json:"firstSeenAt"`
 }
 
-// ActionDefinition ist ein org-weiter, wiederverwendbarer Starlark-Workflow.
+// ActionDefinition is an org-wide, reusable Starlark workflow.
 type ActionDefinition struct {
 	ID             uuid.UUID       `json:"id"`
 	OrgID          uuid.UUID       `json:"orgId"`
@@ -307,20 +307,20 @@ type ActionDefinition struct {
 	UpdatedAt      time.Time       `json:"updatedAt"`
 }
 
-// Dashboard ist ein org-weites „dashboard as code": die Perses-YAML-Spec (offener
-// CNCF-Standard) wird roh gespeichert → 1:1 portabel im Perses-Ökosystem.
+// Dashboard is an org-wide "dashboard as code": the Perses YAML spec (open
+// CNCF standard) is stored raw → 1:1 portable within the Perses ecosystem.
 type Dashboard struct {
 	ID          uuid.UUID `json:"id"`
 	OrgID       uuid.UUID `json:"orgId"`
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
-	Spec        string    `json:"spec"` // Perses-YAML
+	Spec        string    `json:"spec"` // Perses YAML
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
-// CopilotChat ist ein gespeicherter Copilot-Vorgang (Konversation). Data hält
-// den kompletten Render-Zustand (Chat-Verlauf + Tool-Aktivitäten) als JSON.
+// CopilotChat is a saved Copilot session (conversation). Data holds
+// the full render state (chat history + tool activities) as JSON.
 type CopilotChat struct {
 	ID        uuid.UUID       `json:"id"`
 	ClusterID uuid.UUID       `json:"clusterId"`
@@ -332,9 +332,9 @@ type CopilotChat struct {
 	UpdatedAt time.Time       `json:"updatedAt"`
 }
 
-// InvestigationNode ist ein Knoten im Investigation-Graph des Copilot-
-// Orchestrators: eine Hypothese (Task-JSON für den Investigator) und ihr
-// Verdict. Branching = parent_id zeigt auf einen älteren Knoten.
+// InvestigationNode is a node in the Copilot orchestrator's investigation
+// graph: a hypothesis (task JSON for the investigator) and its
+// verdict. Branching = parent_id points to an older node.
 type InvestigationNode struct {
 	ID              uuid.UUID       `json:"id"`
 	InvestigationID uuid.UUID       `json:"investigationId"`
@@ -352,9 +352,9 @@ type InvestigationNode struct {
 	FinishedAt      *time.Time      `json:"finishedAt,omitempty"`
 }
 
-// ── Infrastruktur (Nodes + PVCs) ───────────────────────────────────────────
+// ── Infrastructure (Nodes + PVCs) ──────────────────────────────────────────
 
-// NodeSync ist ein vom Agent gesyncter Cluster-Node inkl. kubelet-Stats.
+// NodeSync is a cluster node synced by the agent, incl. kubelet stats.
 type NodeSync struct {
 	Name            string `json:"name"`
 	Role            string `json:"role"`
@@ -375,11 +375,11 @@ type NodeSync struct {
 	FsUsed          int64  `json:"fsUsed"`
 	FsCapacity      int64  `json:"fsCapacity"`
 	ImageFsUsed     int64  `json:"imageFsUsed"`
-	// PodCount wird CP-seitig aus der pods-Tabelle gejoint (nicht vom Agent).
+	// PodCount is joined CP-side from the pods table (not from the agent).
 	PodCount int `json:"podCount"`
 }
 
-// PVCSync ist ein gesyncter PersistentVolumeClaim inkl. Belegung.
+// PVCSync is a synced PersistentVolumeClaim incl. utilization.
 type PVCSync struct {
 	Namespace      string   `json:"namespace"`
 	Name           string   `json:"name"`
@@ -395,7 +395,7 @@ type PVCSync struct {
 
 // ── Alerts ─────────────────────────────────────────────────────────────────
 
-// AlertProvider ist ein Versandkanal (org-weit): webhook | slack | email.
+// AlertProvider is a delivery channel (org-wide): webhook | slack | email.
 type AlertProvider struct {
 	ID        uuid.UUID       `json:"id"`
 	OrgID     uuid.UUID       `json:"orgId"`
@@ -405,7 +405,7 @@ type AlertProvider struct {
 	CreatedAt time.Time       `json:"createdAt"`
 }
 
-// AlertRule ist ein typed Check (Dash0-Muster: Bedingung + Threshold + for).
+// AlertRule is a typed check (Dash0 pattern: condition + threshold + for).
 type AlertRule struct {
 	ID            uuid.UUID       `json:"id"`
 	ClusterID     uuid.UUID       `json:"clusterId"`
@@ -419,7 +419,7 @@ type AlertRule struct {
 	Severity      string          `json:"severity"`
 	ProviderIDs   []uuid.UUID     `json:"providerIds"`
 	Enabled       bool            `json:"enabled"`
-	// Query: PromQL-Bedingung (kind='promql'); Snooze + Auto-Remediation.
+	// Query: PromQL condition (kind='promql'); snooze + auto-remediation.
 	Query              string          `json:"query"`
 	MutedUntil         *time.Time      `json:"mutedUntil"`
 	ActionDefinitionID *uuid.UUID      `json:"actionDefinitionId"`
@@ -432,7 +432,7 @@ type AlertRule struct {
 	CreatedAt     time.Time       `json:"createdAt"`
 }
 
-// AlertEvent ist ein State-Übergang (ok→pending→firing→ok) im Feed.
+// AlertEvent is a state transition (ok→pending→firing→ok) in the feed.
 type AlertEvent struct {
 	ID        uuid.UUID `json:"id"`
 	RuleID    uuid.UUID `json:"ruleId"`
@@ -446,9 +446,9 @@ type AlertEvent struct {
 
 // ── Incidents ──────────────────────────────────────────────────────────────
 
-// Incident ist die Klammer über einen Vorfall: verbindet Alerts, Copilot-
-// Investigations und Actions über einen Lebenszyklus (open→acknowledged→
-// mitigated→resolved). MTTA/MTTR sind aus den Timestamps ableitbar.
+// Incident is the umbrella over a single event: it ties together alerts, Copilot
+// investigations and actions across a lifecycle (open→acknowledged→
+// mitigated→resolved). MTTA/MTTR are derivable from the timestamps.
 type Incident struct {
 	ID             uuid.UUID  `json:"id"`
 	OrgID          uuid.UUID  `json:"orgId"`
@@ -471,16 +471,16 @@ type Incident struct {
 	Postmortem     string     `json:"postmortem"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	UpdatedAt      time.Time  `json:"updatedAt"`
-	// Eskalation (Round 3): zugeordnete Policy + nächster fälliger Schritt.
+	// Escalation (Round 3): assigned policy + next step due.
 	EscalationPolicyID *uuid.UUID `json:"escalationPolicyId,omitempty"`
 	EscalationStep     int        `json:"escalationStep"`
 	NextEscalationAt   *time.Time `json:"nextEscalationAt,omitempty"`
-	// Aggregat für die Listenansicht (nicht in der Detail-Query):
+	// Aggregate for the list view (not in the detail query):
 	EventCount int `json:"eventCount,omitempty"`
 }
 
-// APIToken ist ein programmatischer Zugang (Service-Account) zu einem Org.
-// Secret wird nur bei Erstellung zurückgegeben (danach nur der Prefix).
+// APIToken is programmatic access (service account) to an org.
+// Secret is only returned at creation (afterwards only the prefix).
 type APIToken struct {
 	ID            uuid.UUID  `json:"id"`
 	OrgID         uuid.UUID  `json:"orgId"`
@@ -497,7 +497,7 @@ type APIToken struct {
 	Secret        string     `json:"secret,omitempty"`
 }
 
-// EscalationPolicy ist eine geordnete Notification-Kette (org-weit).
+// EscalationPolicy is an ordered notification chain (org-wide).
 type EscalationPolicy struct {
 	ID        uuid.UUID        `json:"id"`
 	OrgID     uuid.UUID        `json:"orgId"`
@@ -507,13 +507,13 @@ type EscalationPolicy struct {
 	UpdatedAt time.Time        `json:"updatedAt"`
 }
 
-// EscalationStep feuert nach AfterMinutes über die genannten Provider.
+// EscalationStep fires after AfterMinutes via the named providers.
 type EscalationStep struct {
 	AfterMinutes int         `json:"afterMinutes"`
 	ProviderIDs  []uuid.UUID `json:"providerIds"`
 }
 
-// IncidentEvent ist ein Eintrag in der Incident-Timeline.
+// IncidentEvent is an entry in the incident timeline.
 type IncidentEvent struct {
 	ID         uuid.UUID       `json:"id"`
 	IncidentID uuid.UUID       `json:"incidentId"`
@@ -527,7 +527,7 @@ type IncidentEvent struct {
 	Metadata   json.RawMessage `json:"metadata,omitempty"`
 }
 
-// MetricDefinition ist eine Derived Metric: Logs/Spans → benannte Zeitreihe.
+// MetricDefinition is a derived metric: logs/spans → named time series.
 type MetricDefinition struct {
 	ID          uuid.UUID `json:"id"`
 	ClusterID   uuid.UUID `json:"clusterId"`
@@ -541,7 +541,7 @@ type MetricDefinition struct {
 	Pattern     string    `json:"pattern"`
 	Agg         string    `json:"agg"`
 	Unit        string    `json:"unit"`
-	// Query: PromQL-Ausdruck (source='promql') — Recording-Rule-Muster.
+	// Query: PromQL expression (source='promql') — recording-rule pattern.
 	Query     string    `json:"query"`
 	CreatedAt time.Time `json:"createdAt"`
 }

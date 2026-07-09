@@ -13,10 +13,10 @@ import { SEVERITY, STATUS, SEVERITY_ORDER, incidentRank, fmtDuration } from '@/l
 import { timeAgo } from '@/lib/format';
 import { EscalationManager } from '@/components/app/escalation-manager';
 
-// Incidents — die Response-Zentrale: erstklassige Vorfälle, die Alerts, Copilot-
-// Investigations und Actions über einen Lebenszyklus (open→acknowledged→
-// mitigated→resolved) klammern. Auto-deklariert beim Feuern eines Alerts,
-// manuell per „Declare". Header zeigt offene Last + MTTA/MTTR. Live via SSE.
+// Incidents — the response hub: first-class incidents that bracket alerts, Copilot
+// investigations, and actions across a lifecycle (open→acknowledged→
+// mitigated→resolved). Auto-declared when an alert fires, or manually via
+// "Declare". Header shows open load + MTTA/MTTR. Live via SSE.
 
 type Filter = 'open' | 'all' | IncidentStatus;
 const FILTERS: { key: Filter; label: string }[] = [

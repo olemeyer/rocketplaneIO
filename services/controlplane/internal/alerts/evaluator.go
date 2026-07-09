@@ -1,8 +1,8 @@
-// Package alerts ist der Check-Evaluator der Control-Plane: alle 15s werden
-// die aktiven Rules gegen ClickHouse ausgewertet und durch die State-Machine
-// ok → pending (for-Dauer) → firing → resolved geführt. Übergänge erzeugen
-// Events, feuern Notifications an die Provider und ein SSE-Signal — die UI
-// ist ohne Reload auf Stand.
+// Package alerts is the control plane's check evaluator: every 15s the active
+// rules are evaluated against ClickHouse and driven through the state machine
+// ok → pending (for-duration) → firing → resolved. Transitions produce
+// events, fire notifications to the providers and an SSE signal — the UI
+// stays current without a reload.
 package alerts
 
 import (
@@ -40,7 +40,7 @@ func New(st *store.Store, tele *telemetry.Store, broker *events.Broker, eng *pro
 	return &Evaluator{store: st, tele: tele, broker: broker, promql: eng, http: &http.Client{Timeout: 10 * time.Second}}
 }
 
-// Run evaluiert bis ctx endet.
+// Run evaluates until ctx ends.
 func (e *Evaluator) Run(ctx context.Context) {
 	log.Printf("alerts: evaluator started (every %s)", evalInterval)
 	t := time.NewTicker(evalInterval)
@@ -85,7 +85,7 @@ func (e *Evaluator) evalRule(ctx context.Context, r *model.AlertRule) {
 	if r.Kind == "promql" {
 		value, err = e.evalPromQLMax(ctx, r.ClusterID, r.Query)
 	} else if r.Kind == "derived" {
-		// Custom-Metrik als Alert-Quelle: Definition laden + Fenster-Skalar.
+		// Custom metric as alert source: load definition + window scalar.
 		defID, perr := uuid.Parse(params["definitionId"])
 		if perr != nil {
 			err = fmt.Errorf("derived rule needs params.definitionId")
@@ -93,7 +93,7 @@ func (e *Evaluator) evalRule(ctx context.Context, r *model.AlertRule) {
 			var def *model.MetricDefinition
 			def, err = e.store.GetMetricDefinition(ctx, r.ClusterID, defID)
 			if err == nil && def.Source == "promql" {
-				// PromQL-Metrik: Instant-Auswertung, Alert-Wert = max über Serien.
+				// PromQL metric: instant evaluation, alert value = max across series.
 				value, err = e.evalPromQLMax(ctx, r.ClusterID, def.Query)
 			} else if err == nil {
 				value, err = e.tele.EvalDerivedScalar(ctx, r.ClusterID, telemetry.DerivedDef{
@@ -110,8 +110,8 @@ func (e *Evaluator) evalRule(ctx context.Context, r *model.AlertRule) {
 		return
 	}
 
-	// Wert-Historie: die Rule-Karten zeigen als Sparkline EXAKT die Werte,
-	// die der Evaluator gesehen hat (Scope 'alert', Name = Rule-ID).
+	// Value history: the rule cards show as a sparkline EXACTLY the values
+	// the evaluator saw (Scope 'alert', Name = rule ID).
 	_ = e.tele.InsertInfraPoints(ctx, r.ClusterID, []telemetry.InfraPoint{
 		{Scope: "alert", Name: r.ID.String(), Metric: "value", Value: value},
 	})
@@ -148,21 +148,21 @@ func (e *Evaluator) evalRule(ctx context.Context, r *model.AlertRule) {
 		if evID != uuid.Nil {
 			evPtr = &evID
 		}
-		// Snooze: State-Machine + Events laufen weiter, Notifications pausieren.
+		// Snooze: the state machine + events keep running, notifications pause.
 		muted := r.MutedUntil != nil && r.MutedUntil.After(now)
 		if newState == "firing" {
 			if !muted {
 				e.notify(ctx, r, "firing", value)
 			}
-			// AUTO-INCIDENT: firing deklariert (oder dedupliziert) einen Incident —
-			// die Klammer, an die sich Investigations und Actions hängen.
+			// AUTO-INCIDENT: firing declares (or deduplicates) an incident —
+			// the bracket that investigations and actions attach to.
 			if _, _, err := e.store.DeclareIncidentFromAlert(ctx, r.ID, r.ClusterID, r.Name, r.Severity, value, evPtr); err != nil {
 				log.Printf("alerts: declare incident for %s: %v", r.Name, err)
 			} else {
 				e.broker.Publish(r.ClusterID, "incidents", 0)
 			}
-			// AUTO-REMEDIATION: firing dispatcht den konfigurierten Workflow —
-			// der Agent führt ihn als verifizierte Pipeline aus.
+			// AUTO-REMEDIATION: firing dispatches the configured workflow —
+			// the agent runs it as a verified pipeline.
 			if r.ActionDefinitionID != nil {
 				e.dispatchRemediation(ctx, r, value)
 			}
@@ -170,7 +170,7 @@ func (e *Evaluator) evalRule(ctx context.Context, r *model.AlertRule) {
 			if !muted {
 				e.notify(ctx, r, "resolved", value)
 			}
-			// Auto-Incident schließt sich mit dem geklärten Alert.
+			// The auto-incident closes together with the cleared alert.
 			if _, err := e.store.ResolveIncidentFromAlert(ctx, r.ID, r.ClusterID, r.Name, evPtr); err != nil {
 				log.Printf("alerts: resolve incident for %s: %v", r.Name, err)
 			} else {
@@ -191,7 +191,7 @@ func opWord(op string) string {
 
 /* ── Notifier ───────────────────────────────────────────────────────────── */
 
-// Payload ist das Webhook-Format (und die Datenbasis für Slack/E-Mail-Text).
+// Payload is the webhook format (and the data basis for Slack/email text).
 type Payload struct {
 	Rule      string    `json:"rule"`
 	State     string    `json:"state"` // firing | resolved | test
@@ -223,8 +223,8 @@ func (e *Evaluator) notify(ctx context.Context, r *model.AlertRule, state string
 	}
 }
 
-// SendNotification verschickt eine Payload über einen Provider — auch vom
-// „send test"-Endpoint genutzt.
+// SendNotification sends a payload through a provider — also used by the
+// "send test" endpoint.
 func SendNotification(ctx context.Context, client *http.Client, prov *model.AlertProvider, p *Payload) error {
 	var cfg map[string]string
 	_ = json.Unmarshal(prov.Config, &cfg)
@@ -290,7 +290,7 @@ func sendMail(cfg map[string]string, p *Payload) error {
 	return smtp.SendMail(host+":"+port, auth, from, strings.Split(to, ","), []byte(msg))
 }
 
-// evalPromQLMax: Instant-Query, Wert = Maximum über alle Ergebnis-Serien.
+// evalPromQLMax: instant query, value = maximum across all result series.
 func (e *Evaluator) evalPromQLMax(ctx context.Context, clusterID uuid.UUID, query string) (float64, error) {
 	res, closeFn, err := e.promql.QueryInstant(ctx, clusterID, query, time.Now().UTC())
 	if err != nil {
@@ -311,16 +311,16 @@ func (e *Evaluator) evalPromQLMax(ctx context.Context, clusterID uuid.UUID, quer
 	return max, nil
 }
 
-// dispatchRemediation legt die Auto-Remediation-Action an (Source-Snapshot
-// wie beim manuellen Dispatch — der Audit zeigt exakt, was lief).
+// dispatchRemediation creates the auto-remediation action (source snapshot
+// like a manual dispatch — the audit shows exactly what ran).
 func (e *Evaluator) dispatchRemediation(ctx context.Context, r *model.AlertRule, value float64) {
 	def, err := e.store.GetActionDefinitionForCluster(ctx, r.ClusterID, *r.ActionDefinitionID)
 	if err != nil {
 		log.Printf("alerts: remediation def for %s: %v", r.Name, err)
 		return
 	}
-	// Defaults der Definition mergen — Rule-Args überschreiben nur explizit
-	// Gesetztes, fehlende Werte fallen auf den Definition-Default zurück.
+	// Merge the definition's defaults — rule args override only explicitly
+	// set values, missing ones fall back to the definition default.
 	args := map[string]string{}
 	var dparams []struct {
 		Name    string `json:"name"`

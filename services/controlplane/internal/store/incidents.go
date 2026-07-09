@@ -14,20 +14,20 @@ import (
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/model"
 )
 
-// incidents.go — Persistenz des Incident-Lebenszyklus. Ein Incident klammert
-// Alerts, Copilot-Investigations und Actions über open→acknowledged→mitigated→
-// resolved. Die Timeline (incident_events) ist die kanonische Chronik; Alert-
-// Feuern/Klären, Statuswechsel, Notizen und verlinkte Investigations/Actions
-// schreiben je einen Eintrag. Der Alert-Evaluator dedupliziert offene Auto-
-// Incidents über dedup_key = "alert:<ruleId>".
+// incidents.go — persistence for the incident lifecycle. An incident brackets
+// alerts, Copilot investigations and actions across open→acknowledged→mitigated→
+// resolved. The timeline (incident_events) is the canonical chronicle; alert
+// firing/clearing, status changes, notes and linked investigations/actions
+// each write an entry. The alert evaluator deduplicates open auto-incidents
+// via dedup_key = "alert:<ruleId>".
 
-// execer wird von *pgxpool.Pool und pgx.Tx erfüllt — erlaubt, Timeline-Einträge
-// sowohl direkt als auch innerhalb einer Transaktion zu schreiben.
+// execer is satisfied by both *pgxpool.Pool and pgx.Tx — lets us write timeline
+// entries either directly or inside a transaction.
 type execer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// Statusränge für den Lebenszyklus (open < acknowledged < mitigated < resolved).
+// Status ranks for the lifecycle (open < acknowledged < mitigated < resolved).
 func incidentStatusValid(s string) bool {
 	switch s {
 	case "open", "acknowledged", "mitigated", "resolved":
@@ -64,8 +64,8 @@ func scanIncident(row pgx.Row, inc *model.Incident) error {
 		&inc.EscalationPolicyID, &inc.EscalationStep, &inc.NextEscalationAt)
 }
 
-// ListIncidents liefert die Incidents eines Clusters (neueste zuerst). status
-// filtert optional; "open" fasst alle nicht-resolved zusammen.
+// ListIncidents returns a cluster's incidents (newest first). status is an
+// optional filter; "open" groups together everything not yet resolved.
 func (s *Store) ListIncidents(ctx context.Context, clusterID uuid.UUID, status string, limit int) ([]model.Incident, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 100
@@ -99,7 +99,7 @@ func (s *Store) ListIncidents(ctx context.Context, clusterID uuid.UUID, status s
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// Timeline-Länge je Incident (ein Roundtrip).
+	// Timeline length per incident (one roundtrip).
 	if len(ids) > 0 {
 		counts := map[uuid.UUID]int{}
 		crows, err := s.pool.Query(ctx, `SELECT incident_id, count(*) FROM incident_events WHERE incident_id = ANY($1) GROUP BY incident_id`, ids)
@@ -120,7 +120,7 @@ func (s *Store) ListIncidents(ctx context.Context, clusterID uuid.UUID, status s
 	return out, nil
 }
 
-// GetIncident liefert einen Incident (Cluster-scoped).
+// GetIncident returns a single incident (cluster-scoped).
 func (s *Store) GetIncident(ctx context.Context, clusterID, id uuid.UUID) (*model.Incident, error) {
 	var inc model.Incident
 	err := scanIncident(s.pool.QueryRow(ctx, `SELECT `+incidentSelect+`
@@ -134,7 +134,7 @@ func (s *Store) GetIncident(ctx context.Context, clusterID, id uuid.UUID) (*mode
 	return &inc, nil
 }
 
-// ListIncidentEvents liefert die Timeline chronologisch (älteste zuerst).
+// ListIncidentEvents returns the timeline in chronological order (oldest first).
 func (s *Store) ListIncidentEvents(ctx context.Context, incidentID uuid.UUID) ([]model.IncidentEvent, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, incident_id, at, kind, actor_id, actor_email, message, ref_type, ref_id, metadata
@@ -155,8 +155,8 @@ func (s *Store) ListIncidentEvents(ctx context.Context, incidentID uuid.UUID) ([
 	return out, rows.Err()
 }
 
-// writeIncidentEvent hängt einen Timeline-Eintrag an (pool oder tx) und stupst
-// updated_at des Incidents nach.
+// writeIncidentEvent appends a timeline entry (pool or tx) and bumps the
+// incident's updated_at.
 func writeIncidentEvent(ctx context.Context, q execer, incidentID uuid.UUID, kind string, actorID *uuid.UUID, actorEmail, message, refType string, refID *uuid.UUID, metadata []byte) error {
 	if len(metadata) == 0 {
 		metadata = []byte(`{}`)
@@ -171,7 +171,7 @@ func writeIncidentEvent(ctx context.Context, q execer, incidentID uuid.UUID, kin
 	return nil
 }
 
-// nextIncidentNumber liefert die nächste pro-Org fortlaufende Nummer (atomar).
+// nextIncidentNumber returns the next per-org sequential number (atomically).
 func nextIncidentNumber(ctx context.Context, tx pgx.Tx, orgID uuid.UUID) (int, error) {
 	var n int
 	err := tx.QueryRow(ctx, `
@@ -181,9 +181,9 @@ func nextIncidentNumber(ctx context.Context, tx pgx.Tx, orgID uuid.UUID) (int, e
 	return n, err
 }
 
-// setupIncidentEscalation hängt die Default-Policy des Clusters an einen frisch
-// deklarierten Incident und plant den ersten Schritt (next_escalation_at =
-// Deklaration + steps[0].afterMinutes). Ohne Policy/Steps ein No-op.
+// setupIncidentEscalation attaches the cluster's default policy to a freshly
+// declared incident and schedules the first step (next_escalation_at =
+// declaration + steps[0].afterMinutes). A no-op when there is no policy/steps.
 func setupIncidentEscalation(ctx context.Context, tx pgx.Tx, incidentID, clusterID uuid.UUID) error {
 	var policyID *uuid.UUID
 	err := tx.QueryRow(ctx, `SELECT policy_id FROM cluster_escalation WHERE cluster_id=$1`, clusterID).Scan(&policyID)
@@ -213,7 +213,7 @@ func setupIncidentEscalation(ctx context.Context, tx pgx.Tx, incidentID, cluster
 	return err
 }
 
-// CreateIncident deklariert einen Incident manuell.
+// CreateIncident declares an incident manually.
 func (s *Store) CreateIncident(ctx context.Context, orgID, clusterID uuid.UUID, title, summary, severity string, actorID *uuid.UUID, actorEmail string) (*model.Incident, error) {
 	if !incidentSeverityValid(severity) {
 		severity = "high"
@@ -249,10 +249,10 @@ func (s *Store) CreateIncident(ctx context.Context, orgID, clusterID uuid.UUID, 
 	return s.GetIncident(ctx, clusterID, id)
 }
 
-// DeclareIncidentFromAlert deklariert (oder dedupliziert) einen Incident, wenn
-// eine Alert-Regel nach `firing` wechselt. Aufruf aus dem Evaluator; org_id
-// wird aus dem Cluster aufgelöst. Gibt die Incident-ID und created=true zurück,
-// wenn ein neuer Incident entstand.
+// DeclareIncidentFromAlert declares (or deduplicates) an incident when an alert
+// rule transitions to `firing`. Called from the evaluator; org_id is resolved
+// from the cluster. Returns the incident ID and created=true when a new incident
+// was created.
 func (s *Store) DeclareIncidentFromAlert(ctx context.Context, ruleID, clusterID uuid.UUID, ruleName, severity string, value float64, alertEventID *uuid.UUID) (uuid.UUID, bool, error) {
 	if !incidentSeverityValid(severity) {
 		severity = "high"
@@ -264,7 +264,7 @@ func (s *Store) DeclareIncidentFromAlert(ctx context.Context, ruleID, clusterID 
 	}
 	defer tx.Rollback(ctx)
 
-	// Offener Incident für diese Regel?
+	// Any open incident for this rule?
 	var id uuid.UUID
 	err = tx.QueryRow(ctx, `SELECT id FROM incidents WHERE dedup_key=$1 AND status<>'resolved' FOR UPDATE`, dedup).Scan(&id)
 	created := false
@@ -304,7 +304,7 @@ func (s *Store) DeclareIncidentFromAlert(ctx context.Context, ruleID, clusterID 
 		fmt.Sprintf("Alert %q firing (value %.2f)", ruleName, value), "alert_event", alertEventID, meta); err != nil {
 		return uuid.Nil, false, err
 	}
-	// Alert-Event mit dem Incident verknüpfen.
+	// Link the alert event to the incident.
 	if alertEventID != nil {
 		_, _ = tx.Exec(ctx, `UPDATE alert_events SET incident_id=$1 WHERE id=$2`, id, *alertEventID)
 	}
@@ -314,9 +314,9 @@ func (s *Store) DeclareIncidentFromAlert(ctx context.Context, ruleID, clusterID 
 	return id, created, nil
 }
 
-// ResolveIncidentFromAlert schließt einen Auto-Incident, wenn seine Alert-Regel
-// nach `ok` zurückfällt. Manuell deklarierte Incidents bleiben offen (nur ein
-// Timeline-Eintrag). Gibt die betroffene Incident-ID zurück (Nil, falls keiner).
+// ResolveIncidentFromAlert closes an auto-incident when its alert rule falls
+// back to `ok`. Manually declared incidents stay open (just a timeline entry).
+// Returns the affected incident ID (Nil if there is none).
 func (s *Store) ResolveIncidentFromAlert(ctx context.Context, ruleID, clusterID uuid.UUID, ruleName string, alertEventID *uuid.UUID) (uuid.UUID, error) {
 	dedup := "alert:" + ruleID.String()
 	tx, err := s.pool.Begin(ctx)
@@ -341,9 +341,9 @@ func (s *Store) ResolveIncidentFromAlert(ctx context.Context, ruleID, clusterID 
 	if alertEventID != nil {
 		_, _ = tx.Exec(ctx, `UPDATE alert_events SET incident_id=$1 WHERE id=$2`, id, *alertEventID)
 	}
-	// Auto-Incidents (source='alert') schließen sich mit dem Alert; dedup_key
-	// wird geleert, damit ein späteres Re-Open nicht mit einem neuen Auto-
-	// Incident kollidiert.
+	// Auto-incidents (source='alert') close together with the alert; dedup_key
+	// is cleared so that a later re-open does not collide with a new auto-
+	// incident.
 	if source == "alert" {
 		if _, err := tx.Exec(ctx, `
 			UPDATE incidents SET status='resolved', resolved_at=now(), dedup_key=NULL,
@@ -362,8 +362,8 @@ func (s *Store) ResolveIncidentFromAlert(ctx context.Context, ruleID, clusterID 
 	return id, nil
 }
 
-// UpdateIncidentStatus fährt den Lebenszyklus weiter und setzt die passenden
-// Timestamps (acknowledged_at/mitigated_at/resolved_at). Schreibt Timeline.
+// UpdateIncidentStatus advances the lifecycle and sets the matching timestamps
+// (acknowledged_at/mitigated_at/resolved_at). Writes the timeline.
 func (s *Store) UpdateIncidentStatus(ctx context.Context, clusterID, id uuid.UUID, status string, actorID *uuid.UUID, actorEmail string) (*model.Incident, error) {
 	if !incidentStatusValid(status) {
 		return nil, fmt.Errorf("invalid status %q", status)
@@ -384,8 +384,8 @@ func (s *Store) UpdateIncidentStatus(ctx context.Context, clusterID, id uuid.UUI
 	if prev == status {
 		return s.GetIncident(ctx, clusterID, id)
 	}
-	// Timestamp-Spalten setzen; Re-Open leert die Abschlussmarken nicht rückwirkend,
-	// setzt aber resolved_at zurück, damit MTTR sauber bleibt.
+	// Set timestamp columns; re-open does not retroactively clear the closing
+	// markers, but does reset resolved_at so MTTR stays clean.
 	set := "status=$1, updated_at=now()"
 	switch status {
 	case "acknowledged":
@@ -397,8 +397,8 @@ func (s *Store) UpdateIncidentStatus(ctx context.Context, clusterID, id uuid.UUI
 	case "open":
 		set += ", resolved_at=NULL, mitigated_at=NULL"
 	}
-	// Eskalation stoppt, sobald der Incident den open-Zustand verlässt (ack/
-	// mitigate/resolve). Reopen startet sie bewusst NICHT neu.
+	// Escalation stops as soon as the incident leaves the open state (ack/
+	// mitigate/resolve). Reopen deliberately does NOT restart it.
 	if status != "open" {
 		set += ", next_escalation_at=NULL"
 	}
@@ -422,8 +422,8 @@ func (s *Store) UpdateIncidentStatus(ctx context.Context, clusterID, id uuid.UUI
 	return s.GetIncident(ctx, clusterID, id)
 }
 
-// UpdateIncidentFields ändert Titel/Summary/Severity und protokolliert relevante
-// Änderungen. Leere Zeiger lassen das Feld unverändert.
+// UpdateIncidentFields changes title/summary/severity and logs the relevant
+// changes. Nil pointers leave the field unchanged.
 func (s *Store) UpdateIncidentFields(ctx context.Context, clusterID, id uuid.UUID, title, summary, severity *string, actorID *uuid.UUID, actorEmail string) (*model.Incident, error) {
 	cur, err := s.GetIncident(ctx, clusterID, id)
 	if err != nil {
@@ -461,7 +461,7 @@ func (s *Store) UpdateIncidentFields(ctx context.Context, clusterID, id uuid.UUI
 	return s.GetIncident(ctx, clusterID, id)
 }
 
-// AssignIncident setzt/entfernt die zuständige Person.
+// AssignIncident sets/removes the responsible person.
 func (s *Store) AssignIncident(ctx context.Context, clusterID, id uuid.UUID, assigneeID *uuid.UUID, actorID *uuid.UUID, actorEmail string) (*model.Incident, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -493,7 +493,7 @@ func (s *Store) AssignIncident(ctx context.Context, clusterID, id uuid.UUID, ass
 	return s.GetIncident(ctx, clusterID, id)
 }
 
-// AddIncidentNote hängt eine freie Notiz an die Timeline.
+// AddIncidentNote appends a free-form note to the timeline.
 func (s *Store) AddIncidentNote(ctx context.Context, clusterID, id uuid.UUID, note string, actorID *uuid.UUID, actorEmail string) error {
 	if _, err := s.GetIncident(ctx, clusterID, id); err != nil {
 		return err
@@ -501,7 +501,7 @@ func (s *Store) AddIncidentNote(ctx context.Context, clusterID, id uuid.UUID, no
 	return writeIncidentEvent(ctx, s.pool, id, "note", actorID, actorEmail, note, "", nil, nil)
 }
 
-// SetIncidentPostmortem speichert/aktualisiert das Postmortem.
+// SetIncidentPostmortem stores/updates the postmortem.
 func (s *Store) SetIncidentPostmortem(ctx context.Context, clusterID, id uuid.UUID, text string, actorID *uuid.UUID, actorEmail string) (*model.Incident, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -524,15 +524,15 @@ func (s *Store) SetIncidentPostmortem(ctx context.Context, clusterID, id uuid.UU
 	return s.GetIncident(ctx, clusterID, id)
 }
 
-// LinkInvestigationToIncident verknüpft eine Copilot-Investigation (über ihre
-// Chat-ID) mit einem Incident und schreibt einen Timeline-Eintrag.
+// LinkInvestigationToIncident links a Copilot investigation (via its chat ID)
+// to an incident and writes a timeline entry.
 func (s *Store) LinkInvestigationToIncident(ctx context.Context, clusterID, incidentID, chatID uuid.UUID, actorID *uuid.UUID, actorEmail string) error {
 	if _, err := s.GetIncident(ctx, clusterID, incidentID); err != nil {
 		return err
 	}
-	// Cluster-Scope erzwingen: die Investigation MUSS zum selben Cluster gehören
-	// wie der Incident — sonst ließe sich per fremder chat_id eine Investigation
-	// eines anderen Orgs/Clusters an einen Incident hängen (IDOR).
+	// Enforce cluster scope: the investigation MUST belong to the same cluster
+	// as the incident — otherwise a foreign chat_id could attach an investigation
+	// from another org/cluster to an incident (IDOR).
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE copilot_investigations SET incident_id=$1 WHERE chat_id=$2 AND cluster_id=$3`,
 		incidentID, chatID, clusterID)
@@ -547,7 +547,7 @@ func (s *Store) LinkInvestigationToIncident(ctx context.Context, clusterID, inci
 		"Copilot investigation linked", "chat", &chatID, meta)
 }
 
-// AttachActionToIncident verknüpft eine ausgeführte Action mit einem Incident.
+// AttachActionToIncident links an executed action to an incident.
 func (s *Store) AttachActionToIncident(ctx context.Context, incidentID, actionID uuid.UUID, title string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE cluster_actions SET incident_id=$1 WHERE id=$2`, incidentID, actionID)
 	if err != nil {
@@ -558,8 +558,8 @@ func (s *Store) AttachActionToIncident(ctx context.Context, incidentID, actionID
 		"Action taken: "+title, "action", &actionID, meta)
 }
 
-// IncidentStats liefert Kennzahlen für den Listen-Header (offene Incidents,
-// MTTA/MTTR über resolved Incidents der letzten 30 Tage in Sekunden).
+// IncidentStats returns metrics for the list header (open incidents,
+// MTTA/MTTR over resolved incidents from the last 30 days, in seconds).
 func (s *Store) IncidentStats(ctx context.Context, clusterID uuid.UUID) (map[string]float64, error) {
 	out := map[string]float64{}
 	row := s.pool.QueryRow(ctx, `

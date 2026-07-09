@@ -1,4 +1,4 @@
-// Contract-Typen (docs/architecture.md §5). JSON der Control-Plane ist camelCase
+// Contract types (docs/architecture.md §5). The Control-Plane JSON is camelCase
 // (siehe /api/me: { user, orgs:[{id,name,slug,role,isPersonal}], currentOrgId }).
 
 export type OrgRole = 'owner' | 'admin' | 'member';
@@ -85,7 +85,7 @@ export interface AdminOrg {
   clusterCount: number;
 }
 
-/** Org wie sie in /api/me zurückkommt (inkl. Rolle des aktuellen Users). */
+/** Org as returned by /api/me (including the current user's role). */
 export interface OrgSummary {
   id: string;
   name: string;
@@ -106,12 +106,12 @@ export interface Cluster {
   id: string;
   orgId?: string;
   name: string;
-  /** UID des kube-system-Namespace = Cluster-Identität. NULL solange pending. */
+  /** UID of the kube-system namespace = cluster identity. NULL while pending. */
   k8sUid?: string | null;
   status: ClusterStatus;
   agentVersion?: string;
   lastSeenAt?: string | null;
-  /** Anzahl gesyncter Namespaces (falls die Liste sie mitliefert). */
+  /** Number of synced namespaces (if the list provides them). */
   namespaceCount?: number;
   createdAt?: string;
 }
@@ -126,19 +126,19 @@ export interface Namespace {
   lastSeenAt?: string;
 }
 
-/** Antwort von GET /api/orgs/{org}/clusters/{cluster}. */
+/** Response from GET /api/orgs/{org}/clusters/{cluster}. */
 export interface ClusterDetail {
   cluster: Cluster;
   namespaces: Namespace[];
 }
 
-/** Install-Wege für den Agenten — die UI lässt zwischen ihnen wählen. */
+/** Install methods for the agent — the UI lets you choose between them. */
 export interface InstallCommands {
   kubectl: string;
   helm: string;
 }
 
-/** Antwort von POST /api/orgs/{org}/clusters — Klartext-Token genau einmal. */
+/** Response from POST /api/orgs/{org}/clusters — plaintext token exactly once. */
 export interface ConnectClusterResponse {
   cluster: Cluster;
   enrollToken: string;
@@ -146,7 +146,7 @@ export interface ConnectClusterResponse {
   installCommands?: InstallCommands;
 }
 
-/** Antwort von POST …/{cluster}/reconnect — neuer Enroll-Token + Command. */
+/** Response from POST …/{cluster}/reconnect — new enroll token + command. */
 export interface ReconnectResponse {
   cluster?: Cluster;
   enrollToken: string;
@@ -158,7 +158,7 @@ export interface ReconnectResponse {
 
 export type WorkloadHealth = 'healthy' | 'degraded' | 'critical' | 'unknown';
 
-/** Ein Knoten der Service-Map (ein Workload). */
+/** A node in the service map (one workload). */
 export interface MapNode {
   id: string; // namespace/kind/name
   namespace: string;
@@ -168,29 +168,29 @@ export interface MapNode {
   podsReady: number;
   podsTotal: number;
   restarts: number;
-  /** Container-Image (Quelle der Tech-Auto-Erkennung) */
+  /** Container image (source of tech auto-detection) */
   image: string;
-  /** manueller Icon-Override (simple-icons slug), '' = auto */
+  /** manual icon override (simple-icons slug), '' = auto */
   icon: string;
 }
 
-/** Eine gerichtete, aggregierte Kante zwischen zwei Workloads. */
+/** A directed, aggregated edge between two workloads. */
 export interface MapEdge {
   from: string; // MapNode.id
   to: string;
   connCount: number;
-  /** Kantenherkunft: "trace" = eBPF-L7-Spans (mit RED) · "flow" = eBPF-L4-
-   *  Netzwerk-Flows (nur Bytes; Protokolle ohne L7-Parsing wie NATS) ·
-   *  "conntrack" = Kernel-Fallback. Leer bei alten Control-Planes. */
+  /** Edge origin: "trace" = eBPF L7 spans (with RED) · "flow" = eBPF L4
+   *  network flows (bytes only; protocols without L7 parsing such as NATS) ·
+   *  "conntrack" = kernel fallback. Empty on older Control-Planes. */
   source?: 'trace' | 'flow' | 'conntrack';
   protocol?: string; // http | grpc | postgresql | … | tcp (flow)
-  reqRate?: number; // req/s über das Fenster (nur trace)
-  errRate?: number; // Fehleranteil 0..1 (nur trace)
-  p95Ms?: number; // p95-Latenz in ms (nur trace)
-  bytesRate?: number; // Bytes/s (nur flow)
+  reqRate?: number; // req/s over the window (trace only)
+  errRate?: number; // error ratio 0..1 (trace only)
+  p95Ms?: number; // p95 latency in ms (trace only)
+  bytesRate?: number; // bytes/s (flow only)
 }
 
-/** Antwort von GET …/clusters/{id}/service-map. */
+/** Response from GET …/clusters/{id}/service-map. */
 export interface ServiceMap {
   namespaces: string[];
   nodes: MapNode[];
@@ -224,18 +224,18 @@ export interface LogsResponse {
 }
 
 export interface LogsParams {
-  since?: string; // Go-Duration ("15m") oder RFC3339
-  until?: string; // RFC3339 (Brush-Fenster)
+  since?: string; // Go duration ("15m") or RFC3339
+  until?: string; // RFC3339 (brush window)
   namespace?: string;
   workload?: string;
   workloads?: string[];
   pod?: string;
   minSeverity?: number;
   search?: string;
-  regexes?: string[]; // RE2-Pattern (max 5); regexMode kombiniert sie
+  regexes?: string[]; // RE2 patterns (max 5); regexMode combines them
   regexMode?: 'any' | 'all';
-  exclude?: string[]; // NOT-Substrings (max 5)
-  fuzzy?: string; // tippfehlertolerante ngram-Suche
+  exclude?: string[]; // NOT substrings (max 5)
+  fuzzy?: string; // typo-tolerant ngram search
   limit?: number;
 }
 
@@ -349,15 +349,15 @@ export interface ClusterAction {
   params: Record<string, unknown>;
   status: ActionStatus;
   result: string;
-  /** Live-Zeile des laufenden Schritts, z.B. "rollout: 1/3 available". */
+  /** Live line of the running step, e.g. "rollout: 1/3 available". */
   progress: string;
-  /** Ablauf-Schritte (trigger → observe → verify), live vom Agenten. */
+  /** Execution steps (trigger → observe → verify), live from the agent. */
   steps: ActionStep[];
-  /** Inverse Katalog-Action mit Before-Snapshot (nur bei succeeded) — Revert-Button. */
+  /** Inverse catalog action with before-snapshot (only when succeeded) — revert button. */
   revert?: { kind: string; targetNamespace: string; targetKind: string; targetName: string; params: Record<string, unknown> };
-  /** Gestripptes Zielobjekt VOR der Mutation (generischer Before-Snapshot). */
+  /** Stripped target object BEFORE the mutation (generic before-snapshot). */
   snapshot?: Record<string, unknown>;
-  /** User hat Abbruch angefordert; Engine rollt zurück → cancelled. */
+  /** User requested cancellation; engine rolls back → cancelled. */
   cancelRequested: boolean;
   createdAt: string;
   updatedAt: string;
@@ -373,7 +373,7 @@ export interface WorkloadPod {
   namespace: string;
   name: string;
   nodeName: string;
-  /** inkl. "Terminating" — der Pod fährt gerade raus. */
+  /** incl. "Terminating" — the pod is currently shutting down. */
   phase: string;
   ready: boolean;
   restarts: number;
@@ -381,7 +381,7 @@ export interface WorkloadPod {
   firstSeenAt: string;
 }
 
-/* ── Action-Definitionen (Custom-Workflows, Starlark) ─────────────────────── */
+/* ── Action definitions (custom workflows, Starlark) ─────────────────────── */
 
 export interface ActionDefParam {
   name: string;
@@ -407,7 +407,7 @@ export interface ActionDefinition {
   updatedAt: string;
 }
 
-/* ── Infrastruktur (Nodes + PVCs) ─────────────────────────────────────────── */
+/* ── Infrastructure (nodes + PVCs) ─────────────────────────────────────────── */
 
 export interface InfraNode {
   name: string;
@@ -417,16 +417,16 @@ export interface InfraNode {
   arch: string;
   internalIp: string;
   ready: boolean;
-  /** cordoned — Node nimmt keine neuen Pods an */
+  /** cordoned — node accepts no new pods */
   unschedulable: boolean;
-  /** "", "memory", "disk", "pid" (kommasepariert) */
+  /** "", "memory", "disk", "pid" (comma-separated) */
   pressure: string;
   cpuCapacityM: number;
   cpuAllocatableM: number;
   memCapacity: number;
   memAllocatable: number;
   podCapacity: number;
-  /** -1 = unbekannt (kubelet-Stats nicht erreichbar) */
+  /** -1 = unknown (kubelet stats unreachable) */
   cpuUsageM: number;
   memUsage: number;
   fsUsed: number;
@@ -444,7 +444,7 @@ export interface InfraPVC {
   volumeName: string;
   requestedBytes: number;
   capacityBytes: number;
-  /** -1 = unbekannt (nicht gemountet / keine Stats) */
+  /** -1 = unknown (not mounted / no stats) */
   usedBytes: number;
   mountedBy: string[];
 }
@@ -454,7 +454,7 @@ export interface InfraResponse {
   pvcs: InfraPVC[];
 }
 
-/* ── Metriken + Alerts ────────────────────────────────────────────────────── */
+/* ── Metrics + Alerts ────────────────────────────────────────────────────── */
 
 export interface SeriesPoint {
   t: number; // Unix ms
@@ -500,11 +500,11 @@ export interface AlertRule {
   severity: 'warning' | 'critical';
   providerIds: string[];
   enabled: boolean;
-  /** PromQL-Bedingung (kind='promql') */
+  /** PromQL condition (kind='promql') */
   query: string;
-  /** Snooze: Benachrichtigungen stumm bis zu diesem Zeitpunkt */
+  /** Snooze: mute notifications until this timestamp */
   mutedUntil: string | null;
-  /** Auto-Remediation: Workflow, der bei firing dispatcht wird */
+  /** Auto-remediation: workflow dispatched when firing */
   actionDefinitionId: string | null;
   actionArgs: Record<string, string>;
   state: RuleState;
@@ -532,7 +532,7 @@ export type IncidentSeverity = 'critical' | 'high' | 'medium' | 'low';
 export type IncidentStatus = 'open' | 'acknowledged' | 'mitigated' | 'resolved';
 export type IncidentSource = 'manual' | 'alert' | 'copilot';
 
-/** Incident — die Klammer über einen Vorfall (Alerts + Investigations + Actions). */
+/** Incident — the umbrella over an event (alerts + investigations + actions). */
 export interface Incident {
   id: string;
   orgId: string;
@@ -560,7 +560,7 @@ export interface Incident {
   eventCount?: number;
 }
 
-/** Eskalations-Policy: geordnete Notification-Kette (org-weit). */
+/** Escalation policy: ordered notification chain (org-wide). */
 export interface EscalationStep {
   afterMinutes: number;
   providerIds: string[];
@@ -574,7 +574,7 @@ export interface EscalationPolicy {
   updatedAt: string;
 }
 
-/** Ein Eintrag der Incident-Timeline. */
+/** One entry in the incident timeline. */
 export interface IncidentEvent {
   id: string;
   incidentId: string;
@@ -607,7 +607,7 @@ export interface IncidentStats {
   mttrSeconds: number;
 }
 
-/** Derived Metric: Logs/Spans → benannte Zeitreihe (Better-Stack-Muster). */
+/** Derived metric: logs/spans → named time series (Better Stack pattern). */
 export interface MetricDefinition {
   id: string;
   clusterId: string;
@@ -621,7 +621,7 @@ export interface MetricDefinition {
   pattern: string;
   agg: 'rate' | 'avg' | 'sum' | 'max' | 'p50' | 'p95' | 'p99';
   unit: string;
-  /** PromQL-Ausdruck (source='promql') */
+  /** PromQL expression (source='promql') */
   query: string;
   createdAt: string;
 }

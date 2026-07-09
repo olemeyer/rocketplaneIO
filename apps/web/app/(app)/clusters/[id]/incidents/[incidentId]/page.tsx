@@ -19,10 +19,10 @@ import type { Incident, IncidentEvent, IncidentStatus, Member } from '@/lib/api/
 import { SEVERITY, STATUS, SEVERITY_ORDER, fmtDuration, durationBetween } from '@/lib/incidents';
 import { timeAgo } from '@/lib/format';
 
-// Incident-Detail — die Response-Konsole: Lebenszyklus-Steuerung
-// (acknowledge/mitigate/resolve/reopen), Severity + Zuweisung, die
-// chronologische Timeline aus Alerts, Statuswechseln, Notizen, verlinkten
-// Investigations und Actions, sowie der Postmortem-Editor. Live via SSE.
+// Incident detail — the response console: lifecycle controls
+// (acknowledge/mitigate/resolve/reopen), severity + assignment, the
+// chronological timeline of alerts, status changes, notes, linked
+// investigations and actions, plus the postmortem editor. Live via SSE.
 
 const NEXT: Record<IncidentStatus, { to: IncidentStatus; label: string }[]> = {
   open: [
@@ -37,7 +37,7 @@ const NEXT: Record<IncidentStatus, { to: IncidentStatus; label: string }[]> = {
   resolved: [{ to: 'open', label: 'Reopen' }],
 };
 
-// Timeline-Glyphen je Ereignistyp (colorblind-tauglich, RETICLE-Statusfarben).
+// Timeline glyphs per event type (colorblind-safe, RETICLE status colors).
 function eventStyle(kind: IncidentEvent['kind']): { glyph: string; fg: string } {
   switch (kind) {
     case 'declared':
@@ -234,7 +234,7 @@ export default function IncidentDetailPage() {
 function SummaryBlock({ incident, onSave }: { incident: Incident; onSave: (s: string) => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(incident.summary);
-  // Live-Refresh darf einen offenen Editor NICHT überschreiben.
+  // A live refresh must NOT overwrite an open editor.
   useEffect(() => {
     if (!editing) setDraft(incident.summary);
   }, [incident.summary, editing]);
@@ -526,8 +526,8 @@ function MetaCard({
   );
 }
 
-// EscalationLine zeigt den Eskalationszustand: aktiv (nächster Schritt in Xm),
-// gestoppt (nach acknowledge), oder keine Policy.
+// EscalationLine shows the escalation state: active (next step in Xm),
+// stopped (after acknowledge), or no policy.
 function EscalationLine({ incident }: { incident: Incident }) {
   if (!incident.escalationPolicyId) return null;
   const active = incident.status === 'open' && !!incident.nextEscalationAt;

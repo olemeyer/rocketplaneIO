@@ -14,10 +14,10 @@ import {
 } from '@/lib/api/controlplane';
 import type { AlertProvider, EscalationPolicy, EscalationStep } from '@/lib/api/types';
 
-// EscalationManager — org-weite Eskalations-Policies verwalten und die
-// Default-Policy dieses Clusters wählen. Eine Policy ist eine geordnete Kette
-// von Notification-Schritten (afterMinutes + Provider-Auswahl). Reused die
-// bestehenden Alert-Provider als Kanäle. Modal-Overlay, RETICLE-konform.
+// EscalationManager — manage org-wide escalation policies and pick this
+// cluster's default policy. A policy is an ordered chain of notification
+// steps (afterMinutes + provider selection). Reuses the existing alert
+// providers as channels. Modal overlay, RETICLE-compliant.
 
 export function EscalationManager({
   orgId,
@@ -59,7 +59,7 @@ export function EscalationManager({
       await setClusterEscalation(orgId, clusterId, id);
       setErr(null);
     } catch {
-      setDefaultId(prev); // Rollback der optimistischen Auswahl
+      setDefaultId(prev); // roll back the optimistic selection
       setErr('Failed to set default policy.');
     }
   };

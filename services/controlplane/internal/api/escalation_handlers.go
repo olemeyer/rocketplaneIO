@@ -10,17 +10,17 @@ import (
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/store"
 )
 
-// escalation_handlers.go — Eskalations-Policies (org-weit) + Cluster-Default.
-// Lesen erfordert Org-Mitgliedschaft, Mutationen die Admin-Rolle (wie Alert-
-// Provider, da org-weite Config). Der Cluster-Default gate't auf Cluster-Admin.
+// escalation_handlers.go — escalation policies (org-wide) + cluster default.
+// Reads require org membership, mutations require the admin role (like alert
+// providers, since this is org-wide config). The cluster default gates on cluster-admin.
 
 type escalationPolicyReq struct {
 	Name  string                 `json:"name"`
 	Steps []model.EscalationStep `json:"steps"`
 }
 
-// validatePolicySteps stellt sicher, dass alle referenzierten Provider zum Org
-// gehören (kein Cross-Org-Leak) und die Schritte plausibel sind.
+// validatePolicySteps ensures that all referenced providers belong to the org
+// (no cross-org leak) and that the steps are plausible.
 func (s *Server) validatePolicySteps(r *http.Request, orgID uuid.UUID, steps []model.EscalationStep) (bool, string) {
 	if len(steps) > 20 {
 		return false, "too many steps (max 20)"
@@ -172,7 +172,7 @@ func (s *Server) handleSetClusterEscalation(w http.ResponseWriter, r *http.Reque
 			writeErr(w, http.StatusBadRequest, "invalid policyId")
 			return
 		}
-		// Policy muss zum selben Org gehören.
+		// Policy must belong to the same org.
 		if _, err := s.store.GetEscalationPolicy(r.Context(), orgID, id); err != nil {
 			writeErr(w, http.StatusBadRequest, "policy not found in this org")
 			return

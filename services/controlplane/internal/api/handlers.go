@@ -26,8 +26,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "failed to load orgs")
 		return
 	}
-	// Ein API-Token ist auf EIN Org begrenzt — die volle Org-Liste des
-	// erstellenden Nutzers darf es nicht sehen (Cross-Org-Info-Leak).
+	// An API token is scoped to a SINGLE org — it must not see the full org
+	// list of the user who created it (cross-org info leak).
 	if tp, ok := auth.TokenFrom(r.Context()); ok {
 		scoped := orgs[:0]
 		for _, o := range orgs {
@@ -317,8 +317,8 @@ func (s *Server) resolveOrg(w http.ResponseWriter, r *http.Request) (uuid.UUID, 
 		return uuid.Nil, false
 	}
 
-	// API-Token: strikt auf das Token-Org begrenzt — die Mitgliedschaft des
-	// erstellenden Nutzers darf NICHT als Zugang zu einem anderen Org dienen.
+	// API token: strictly scoped to the token's org — the creating user's
+	// membership must NOT serve as access to a different org.
 	if tp, ok := auth.TokenFrom(r.Context()); ok {
 		if tp.OrgID != org.ID {
 			writeErr(w, http.StatusForbidden, "token is not scoped to this org")
@@ -349,22 +349,22 @@ func parseClusterID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	return id, true
 }
 
-// kubectlInstallCommand: ein Befehl — kubectl (auf dem Laptop) holt das fertig
-// gerenderte Manifest von der Control-Plane (PublicURL, für den Laptop
-// erreichbar) und wendet es auf den aktuellen Context an. Token + Cluster-Name
-// sind eingesetzt; das Manifest selbst zeigt auf AgentControlPlaneURL.
+// kubectlInstallCommand: a single command — kubectl (on the laptop) fetches the
+// fully rendered manifest from the control plane (PublicURL, reachable from the
+// laptop) and applies it to the current context. Token + cluster name are
+// filled in; the manifest itself points at AgentControlPlaneURL.
 func (s *Server) kubectlInstallCommand(token, clusterName string) string {
 	q := url.Values{"token": {token}, "name": {clusterName}}
 	return fmt.Sprintf("kubectl apply -f %q", s.cfg.PublicURL+"/api/agent/manifest?"+q.Encode())
 }
 
-// helmInstallCommand: der Helm-Weg über das veröffentlichte OCI-Chart.
+// helmInstallCommand: the Helm route via the published OCI chart.
 //
-// --devel ist zwingend: das Chart wird (wie das Produkt) als Pre-Release
-// publiziert (z.B. 0.1.0-alpha). Ohne --devel ignoriert `helm install`
-// Pre-Releases bei der "latest"-Auflösung und bricht mit "could not locate a
-// version matching provided version string" ab — der generierte Befehl schlägt
-// dann bei jedem Nutzer fehl. --devel lässt Pre-Releases als latest zu.
+// --devel is mandatory: the chart is published (like the product) as a
+// pre-release (e.g. 0.1.0-alpha). Without --devel, `helm install` ignores
+// pre-releases during "latest" resolution and aborts with "could not locate a
+// version matching provided version string" — the generated command would then
+// fail for every user. --devel allows pre-releases to count as latest.
 func (s *Server) helmInstallCommand(token, clusterName string) string {
 	return fmt.Sprintf(
 		"helm install rocketplane-agent %s --devel "+
@@ -373,8 +373,8 @@ func (s *Server) helmInstallCommand(token, clusterName string) string {
 		s.cfg.AgentChart, s.cfg.AgentControlPlaneURL, token, clusterName)
 }
 
-// installCommands liefert BEIDE Wege — die UI bietet kubectl (YAML apply) und
-// Helm zur Auswahl an, damit jedes Team seinen bevorzugten Pfad nehmen kann.
+// installCommands returns BOTH routes — the UI offers kubectl (YAML apply) and
+// Helm as a choice so each team can take its preferred path.
 func (s *Server) installCommands(token, clusterName string) map[string]string {
 	return map[string]string{
 		"kubectl": s.kubectlInstallCommand(token, clusterName),
@@ -382,8 +382,8 @@ func (s *Server) installCommands(token, clusterName string) map[string]string {
 	}
 }
 
-// installCommand ist der konfigurierte Default-Weg (Back-Compat für Clients,
-// die nur einen Befehl erwarten).
+// installCommand is the configured default route (back-compat for clients that
+// expect only a single command).
 func (s *Server) installCommand(token, clusterName string) string {
 	if s.cfg.AgentInstallMethod == "kubectl" {
 		return s.kubectlInstallCommand(token, clusterName)

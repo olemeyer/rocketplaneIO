@@ -15,11 +15,11 @@ import (
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/store"
 )
 
-// escalation_live_test.go — end-to-end Runner-Test des Escalators gegen echtes
-// Postgres (RP_LIVE_PG-gated). Prüft, dass Process() fällige Schritte feuert,
-// den Zustand vorschiebt und bei erschöpfter Kette next_escalation_at leert.
-// Der Provider zeigt auf einen toten Port — Senden schlägt fehl (wird geloggt),
-// die Zustandsmaschine läuft trotzdem korrekt weiter.
+// escalation_live_test.go — end-to-end runner test of the escalator against a real
+// Postgres (RP_LIVE_PG-gated). Verifies that Process() fires due steps,
+// advances state, and clears next_escalation_at once the chain is exhausted.
+// The provider points at a dead port — sending fails (and is logged),
+// but the state machine still advances correctly.
 func TestEscalatorProcessLive(t *testing.T) {
 	dsn := os.Getenv("RP_LIVE_PG")
 	if dsn == "" {
@@ -56,11 +56,11 @@ func TestEscalatorProcessLive(t *testing.T) {
 		t.Fatalf("declare: %v", err)
 	}
 
-	// Process feuert DB-global; deshalb prüfen wir NICHT den globalen Zähler
-	// (die geteilte Test-DB enthält Alt-Incidents), sondern die Progression
-	// GENAU dieses Incidents.
+	// Process fires DB-globally; so we do NOT check the global counter
+	// (the shared test DB contains old incidents), but rather the progression
+	// of EXACTLY this incident.
 
-	// Tick 1: step0 (after 0) fällig → feuert, step→1, next = +5m.
+	// Tick 1: step0 (after 0) is due → fires, step→1, next = +5m.
 	t1 := time.Now().UTC().Add(time.Minute)
 	esc.Process(ctx, t1)
 	got, _ := st.GetIncident(ctx, cl.ID, inc.ID)
@@ -68,21 +68,21 @@ func TestEscalatorProcessLive(t *testing.T) {
 		t.Fatalf("after tick1: step=%d next=%v", got.EscalationStep, got.NextEscalationAt)
 	}
 
-	// Tick 2 zur selben Zeit: dieser Incident darf NICHT weiter (next liegt +5m).
+	// Tick 2 at the same time: this incident must NOT advance (next is +5m out).
 	esc.Process(ctx, t1)
 	got, _ = st.GetIncident(ctx, cl.ID, inc.ID)
 	if got.EscalationStep != 1 {
 		t.Fatalf("tick2 must not advance this incident, step=%d", got.EscalationStep)
 	}
 
-	// Tick 3: nach 6 Min → step1 feuert, step→2, next=NULL (Kette Ende).
+	// Tick 3: after 6 min → step1 fires, step→2, next=NULL (end of chain).
 	esc.Process(ctx, t1.Add(6*time.Minute))
 	got, _ = st.GetIncident(ctx, cl.ID, inc.ID)
 	if got.EscalationStep != 2 || got.NextEscalationAt != nil {
 		t.Fatalf("after tick3: step=%d next=%v (want step=2 next=nil)", got.EscalationStep, got.NextEscalationAt)
 	}
 
-	// Timeline enthält genau zwei escalated-Events.
+	// Timeline contains exactly two escalated events.
 	events, _ := st.ListIncidentEvents(ctx, inc.ID)
 	var n int
 	for _, e := range events {

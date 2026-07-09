@@ -9,16 +9,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// incidents_live_test.go verifiziert die Incident-Auto-Glue gegen ein echtes
-// Postgres (Migrationen müssen angewandt sein). Läuft NUR mit RP_LIVE_PG:
+// incidents_live_test.go verifies the incident auto-glue against a real
+// Postgres (migrations must be applied). Runs ONLY with RP_LIVE_PG:
 //
 //	RP_LIVE_PG='postgres://rocketplane:rocketplane@localhost:5433/rocketplane?sslmode=disable' \
 //	go test ./services/controlplane/internal/store -run TestIncidentAutoGlueLive -v
 //
-// Geprüft: (1) firing deklariert genau EINEN Incident, erneutes firing
-// dedupliziert (created=false, gleiche ID); (2) Klären eines Alert-Incidents
-// auto-resolved ihn; (3) manuell deklarierte Incidents bleiben bei Alert-Klärung
-// offen; (4) MTTA/MTTR-Anker und Timeline stimmen.
+// Checks: (1) firing declares exactly ONE incident, a repeated firing
+// dedups (created=false, same ID); (2) clearing an alert incident
+// auto-resolves it; (3) manually declared incidents stay open when an alert
+// clears; (4) MTTA/MTTR anchors and timeline are correct.
 func TestIncidentAutoGlueLive(t *testing.T) {
 	dsn := os.Getenv("RP_LIVE_PG")
 	if dsn == "" {
@@ -32,7 +32,7 @@ func TestIncidentAutoGlueLive(t *testing.T) {
 	defer pool.Close()
 	st := New(pool)
 
-	// Frischer Nutzer + Org + Cluster.
+	// Fresh user + org + cluster.
 	u, err := st.UpsertUserFromOIDC(ctx, "sub-"+uuid.NewString(), uuid.NewString()+"@test.local", "Glue Tester", "")
 	if err != nil {
 		t.Fatalf("user: %v", err)
@@ -57,7 +57,7 @@ func TestIncidentAutoGlueLive(t *testing.T) {
 		t.Fatalf("first firing should create an incident")
 	}
 
-	// (1b) erneutes firing → dedup (kein neuer Incident, gleiche ID).
+	// (1b) repeated firing → dedup (no new incident, same ID).
 	id2, created2, err := st.DeclareIncidentFromAlert(ctx, ruleID, cl.ID, "High error ratio", "critical", 0.55, nil)
 	if err != nil {
 		t.Fatalf("declare 2: %v", err)
@@ -77,7 +77,7 @@ func TestIncidentAutoGlueLive(t *testing.T) {
 		t.Fatalf("unexpected incident: source=%s status=%s sev=%s", inc.Source, inc.Status, inc.Severity)
 	}
 
-	// Timeline: declared + zwei alert-Events.
+	// Timeline: declared + two alert events.
 	events, err := st.ListIncidentEvents(ctx, id1)
 	if err != nil {
 		t.Fatalf("events: %v", err)
@@ -95,7 +95,7 @@ func TestIncidentAutoGlueLive(t *testing.T) {
 		t.Fatalf("timeline mismatch: declared=%d alerts=%d", declared, alerts)
 	}
 
-	// (2) Klären → auto-resolve.
+	// (2) clear → auto-resolve.
 	rid, err := st.ResolveIncidentFromAlert(ctx, ruleID, cl.ID, "High error ratio", nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -108,8 +108,8 @@ func TestIncidentAutoGlueLive(t *testing.T) {
 		t.Fatalf("alert incident should auto-resolve, got status=%s resolvedAt=%v", inc.Status, inc.ResolvedAt)
 	}
 
-	// (2b) Nach dem Klären startet ein neues firing einen FRISCHEN Incident
-	// (dedup_key wurde beim Resolve geleert).
+	// (2b) After clearing, a new firing starts a FRESH incident
+	// (dedup_key was cleared on resolve).
 	id3, created3, err := st.DeclareIncidentFromAlert(ctx, ruleID, cl.ID, "High error ratio", "high", 0.9, nil)
 	if err != nil {
 		t.Fatalf("declare 3: %v", err)
@@ -118,7 +118,7 @@ func TestIncidentAutoGlueLive(t *testing.T) {
 		t.Fatalf("re-firing after resolve should create a fresh incident (created=%v id=%s)", created3, id3)
 	}
 
-	// (3) Manueller Incident bleibt bei fremder Alert-Klärung unberührt.
+	// (3) Manual incident stays untouched when an unrelated alert clears.
 	man, err := st.CreateIncident(ctx, org.ID, cl.ID, "manual sev", "", "medium", &u.ID, u.Email)
 	if err != nil {
 		t.Fatalf("manual: %v", err)
@@ -127,7 +127,7 @@ func TestIncidentAutoGlueLive(t *testing.T) {
 		t.Fatalf("manual incident wrong: %s/%s", man.Status, man.Source)
 	}
 
-	// (4) Stats plausibel (>=2 offen: id3 + manual).
+	// (4) Stats are plausible (>=2 open: id3 + manual).
 	stats, err := st.IncidentStats(ctx, cl.ID)
 	if err != nil {
 		t.Fatalf("stats: %v", err)

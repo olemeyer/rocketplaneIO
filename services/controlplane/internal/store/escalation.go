@@ -13,10 +13,10 @@ import (
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/model"
 )
 
-// escalation.go — Eskalations-Policies (org-weit) + der Datenzugriff des
-// Escalators. Policies sind geordnete Notification-Ketten aus Alert-Providern;
-// der Escalator (alerts/escalation.go) scannt fällige offene Incidents und
-// feuert den nächsten Schritt.
+// escalation.go — escalation policies (org-wide) plus the data access for the
+// escalator. Policies are ordered notification chains of alert providers; the
+// escalator (alerts/escalation.go) scans due open incidents and fires the next
+// step.
 
 func scanPolicy(row pgx.Row, p *model.EscalationPolicy) error {
 	var stepsRaw []byte
@@ -30,7 +30,7 @@ func scanPolicy(row pgx.Row, p *model.EscalationPolicy) error {
 
 const policyCols = `id, org_id, name, steps, created_at, updated_at`
 
-// ListEscalationPolicies liefert alle Policies eines Orgs.
+// ListEscalationPolicies returns all policies of an org.
 func (s *Store) ListEscalationPolicies(ctx context.Context, orgID uuid.UUID) ([]model.EscalationPolicy, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+policyCols+` FROM escalation_policies WHERE org_id=$1 ORDER BY name`, orgID)
 	if err != nil {
@@ -48,7 +48,7 @@ func (s *Store) ListEscalationPolicies(ctx context.Context, orgID uuid.UUID) ([]
 	return out, rows.Err()
 }
 
-// GetEscalationPolicy lädt eine Policy (org-scoped).
+// GetEscalationPolicy loads a policy (org-scoped).
 func (s *Store) GetEscalationPolicy(ctx context.Context, orgID, id uuid.UUID) (*model.EscalationPolicy, error) {
 	var p model.EscalationPolicy
 	err := scanPolicy(s.pool.QueryRow(ctx, `SELECT `+policyCols+` FROM escalation_policies WHERE id=$1 AND org_id=$2`, id, orgID), &p)
@@ -61,8 +61,8 @@ func (s *Store) GetEscalationPolicy(ctx context.Context, orgID, id uuid.UUID) (*
 	return &p, nil
 }
 
-// EscalationPolicyStepsByID liefert nur die Schritte (Escalator-Pfad, ohne
-// Org-Scope, da über die Incident-FK bereits autorisiert).
+// EscalationPolicyStepsByID returns just the steps (escalator path, without
+// org scope, since it is already authorized via the incident FK).
 func (s *Store) EscalationPolicyStepsByID(ctx context.Context, id uuid.UUID) ([]model.EscalationStep, error) {
 	var raw []byte
 	if err := s.pool.QueryRow(ctx, `SELECT steps FROM escalation_policies WHERE id=$1`, id).Scan(&raw); err != nil {
@@ -84,7 +84,7 @@ func normalizeSteps(steps []model.EscalationStep) []model.EscalationStep {
 		if steps[i].AfterMinutes < 0 {
 			steps[i].AfterMinutes = 0
 		}
-		// Auf 7 Tage begrenzen — verhindert time.Duration-Overflow im Escalator.
+		// Cap at 7 days — prevents time.Duration overflow in the escalator.
 		if steps[i].AfterMinutes > 7*24*60 {
 			steps[i].AfterMinutes = 7 * 24 * 60
 		}
@@ -95,7 +95,7 @@ func normalizeSteps(steps []model.EscalationStep) []model.EscalationStep {
 	return steps
 }
 
-// CreateEscalationPolicy legt eine Policy an.
+// CreateEscalationPolicy creates a policy.
 func (s *Store) CreateEscalationPolicy(ctx context.Context, orgID uuid.UUID, name string, steps []model.EscalationStep) (*model.EscalationPolicy, error) {
 	raw, _ := json.Marshal(normalizeSteps(steps))
 	var id uuid.UUID
@@ -107,7 +107,7 @@ func (s *Store) CreateEscalationPolicy(ctx context.Context, orgID uuid.UUID, nam
 	return s.GetEscalationPolicy(ctx, orgID, id)
 }
 
-// UpdateEscalationPolicy ersetzt Name + Schritte.
+// UpdateEscalationPolicy replaces name + steps.
 func (s *Store) UpdateEscalationPolicy(ctx context.Context, orgID, id uuid.UUID, name string, steps []model.EscalationStep) (*model.EscalationPolicy, error) {
 	raw, _ := json.Marshal(normalizeSteps(steps))
 	tag, err := s.pool.Exec(ctx, `
@@ -122,10 +122,10 @@ func (s *Store) UpdateEscalationPolicy(ctx context.Context, orgID, id uuid.UUID,
 	return s.GetEscalationPolicy(ctx, orgID, id)
 }
 
-// DeleteEscalationPolicy entfernt eine Policy. Die FKs setzen die Referenzen auf
-// NULL; damit kein Incident mit gesetztem next_escalation_at aber ohne Policy
-// zurückbleibt (inkonsistent, würde bei Reopen nie mehr feuern), räumen wir die
-// laufenden Eskalations-Timer betroffener Incidents in derselben Transaktion ab.
+// DeleteEscalationPolicy removes a policy. The FKs set the references to NULL;
+// to make sure no incident is left with next_escalation_at set but no policy
+// (inconsistent, would never fire again on reopen), we clear the running
+// escalation timers of the affected incidents in the same transaction.
 func (s *Store) DeleteEscalationPolicy(ctx context.Context, orgID, id uuid.UUID) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -147,7 +147,7 @@ func (s *Store) DeleteEscalationPolicy(ctx context.Context, orgID, id uuid.UUID)
 	return tx.Commit(ctx)
 }
 
-// GetClusterEscalationPolicy liefert die Default-Policy-ID eines Clusters (oder nil).
+// GetClusterEscalationPolicy returns the default policy ID of a cluster (or nil).
 func (s *Store) GetClusterEscalationPolicy(ctx context.Context, clusterID uuid.UUID) (*uuid.UUID, error) {
 	var pid *uuid.UUID
 	err := s.pool.QueryRow(ctx, `SELECT policy_id FROM cluster_escalation WHERE cluster_id=$1`, clusterID).Scan(&pid)
@@ -160,7 +160,7 @@ func (s *Store) GetClusterEscalationPolicy(ctx context.Context, clusterID uuid.U
 	return pid, nil
 }
 
-// SetClusterEscalationPolicy setzt (oder löscht, policyID=nil) die Default-Policy.
+// SetClusterEscalationPolicy sets (or clears, policyID=nil) the default policy.
 func (s *Store) SetClusterEscalationPolicy(ctx context.Context, clusterID uuid.UUID, policyID *uuid.UUID) error {
 	if policyID == nil {
 		_, err := s.pool.Exec(ctx, `DELETE FROM cluster_escalation WHERE cluster_id=$1`, clusterID)
@@ -172,7 +172,7 @@ func (s *Store) SetClusterEscalationPolicy(ctx context.Context, clusterID uuid.U
 	return err
 }
 
-// EscalationDue beschreibt einen fälligen Eskalationsschritt.
+// EscalationDue describes a due escalation step.
 type EscalationDue struct {
 	IncidentID uuid.UUID
 	ClusterID  uuid.UUID
@@ -183,7 +183,7 @@ type EscalationDue struct {
 	Step       int
 }
 
-// DueEscalationIncidents liefert offene Incidents, deren nächster Schritt fällig ist.
+// DueEscalationIncidents returns open incidents whose next step is due.
 func (s *Store) DueEscalationIncidents(ctx context.Context, now time.Time) ([]EscalationDue, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, cluster_id, number, title, severity, escalation_policy_id, escalation_step
@@ -206,16 +206,15 @@ func (s *Store) DueEscalationIncidents(ctx context.Context, now time.Time) ([]Es
 	return out, rows.Err()
 }
 
-// AdvanceEscalation ist der ATOMARE Claim eines Eskalationsschritts: die UPDATE
-// ist mit `status='open' AND escalation_step=expectedStep AND next_escalation_at
-// <= now` bewacht, sodass ein zwischenzeitliches acknowledge/resolve ODER ein
-// bereits erfolgter Vorschub (anderer Tick) den Claim verlieren lässt (0 Zeilen
-// → returns false). Der Aufrufer (Escalator) claimt ZUERST und benachrichtigt
-// DANACH — schlägt der Versand fehl, ist der Schritt trotzdem vorgeschoben und
-// wird nicht erneut gefeuert (verhindert Doppel-Paging). Ein Timeline-Eintrag
-// wird nur bei einem echten Schritt (newStep != expectedStep) geschrieben; das
-// erlaubt, mit newStep==expectedStep+0 auch nur `next_escalation_at` zu leeren
-// (erschöpfte Kette) ohne Event.
+// AdvanceEscalation is the ATOMIC claim of an escalation step: the UPDATE is
+// guarded with `status='open' AND escalation_step=expectedStep AND
+// next_escalation_at <= now`, so that an intervening acknowledge/resolve OR an
+// advance that already happened (another tick) loses the claim (0 rows →
+// returns false). The caller (escalator) claims FIRST and notifies AFTERWARDS —
+// if the send fails, the step is advanced anyway and is not fired again
+// (prevents double paging). A timeline entry is only written on a real step
+// (newStep != expectedStep); this allows clearing just `next_escalation_at`
+// with newStep==expectedStep+0 (exhausted chain) without an event.
 func (s *Store) AdvanceEscalation(ctx context.Context, incidentID uuid.UUID, expectedStep, newStep int, nextAt *time.Time, now time.Time, providerNames []string) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -231,9 +230,9 @@ func (s *Store) AdvanceEscalation(ctx context.Context, incidentID uuid.UUID, exp
 		return false, err
 	}
 	if tag.RowsAffected() == 0 {
-		return false, nil // acknowledged/resolved oder bereits vorgeschoben — kein Claim
+		return false, nil // acknowledged/resolved or already advanced — no claim
 	}
-	// Nur bei einem tatsächlich gefeuerten Schritt einen Timeline-Eintrag.
+	// Only write a timeline entry when a step was actually fired.
 	if newStep != expectedStep {
 		namesRaw, _ := json.Marshal(providerNames)
 		if providerNames == nil {

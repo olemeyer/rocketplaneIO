@@ -11,12 +11,12 @@ import (
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/store"
 )
 
-// incident_handlers.go — REST für den Incident-Lebenszyklus. Lesen erfordert
-// Org-Mitgliedschaft (resolveClusterScope), Mutationen mindestens die Member-
-// Rolle (requireClusterRole "member"). Alle mutierenden Endpunkte schreiben in
-// die Timeline und ins Org-Audit.
+// incident_handlers.go — REST for the incident lifecycle. Reads require org
+// membership (resolveClusterScope), mutations require at least the member
+// role (requireClusterRole "member"). Every mutating endpoint writes to the
+// timeline and the org audit log.
 
-// actor liefert ID + E-Mail des eingeloggten Nutzers (für Timeline/Audit).
+// actor returns the ID + email of the logged-in user (for timeline/audit).
 func (s *Server) actor(r *http.Request) (*uuid.UUID, string) {
 	user, ok := auth.UserFrom(r.Context())
 	if !ok || user == nil {
@@ -56,7 +56,7 @@ func (s *Server) handleIncidentStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"stats": stats})
 }
 
-// handleGetIncident — GET …/incidents/{id} (Incident + Timeline).
+// handleGetIncident — GET …/incidents/{id} (incident + timeline).
 func (s *Server) handleGetIncident(w http.ResponseWriter, r *http.Request) {
 	_, clusterID, ok := s.resolveClusterScope(w, r)
 	if !ok {
@@ -79,7 +79,7 @@ func (s *Server) handleGetIncident(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"incident": inc, "timeline": events})
 }
 
-// handleCreateIncident — POST …/incidents (manuelle Deklaration).
+// handleCreateIncident — POST …/incidents (manual declaration).
 func (s *Server) handleCreateIncident(w http.ResponseWriter, r *http.Request) {
 	orgID, clusterID, ok := s.requireClusterRole(w, r, "member")
 	if !ok {
@@ -153,7 +153,7 @@ func (s *Server) handleIncidentStatus(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	// Status im Handler validieren (kein roher Store-/DB-Fehler an den Client).
+	// Validate the status in the handler (don't leak a raw store/DB error to the client).
 	switch req.Status {
 	case "open", "acknowledged", "mitigated", "resolved":
 	default:
@@ -198,7 +198,7 @@ func (s *Server) handleAssignIncident(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "invalid userId")
 			return
 		}
-		// Nur Org-Mitglieder dürfen zugewiesen werden.
+		// Only org members may be assigned.
 		if _, rerr := s.store.RoleInOrg(r.Context(), uid, orgID); rerr != nil {
 			writeErr(w, http.StatusBadRequest, "assignee is not a member of this org")
 			return

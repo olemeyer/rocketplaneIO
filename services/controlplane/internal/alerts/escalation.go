@@ -11,12 +11,12 @@ import (
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/store"
 )
 
-// escalation.go — der Incident-Escalator: scannt fällige offene Incidents und
-// feuert den nächsten Notification-Schritt ihrer Eskalations-Policy über die
-// bestehenden Alert-Provider. Läuft wie der Evaluator unter dem Leader-Lock, in
-// kurzem Intervall (der erste Schritt eines frisch deklarierten Incidents soll
-// zeitnah paged werden). Acknowledge/mitigate/resolve stoppt die Kette (die
-// Query filtert status='open' und der Status-Handler nullt next_escalation_at).
+// escalation.go — the incident escalator: scans due open incidents and fires the
+// next notification step of their escalation policy through the existing alert
+// providers. Runs like the evaluator under the leader lock, on a short interval
+// (the first step of a freshly declared incident should be paged promptly).
+// Acknowledge/mitigate/resolve stops the chain (the query filters status='open'
+// and the status handler nulls next_escalation_at).
 
 const escalationInterval = 15 * time.Second
 
@@ -30,7 +30,7 @@ func NewEscalator(st *store.Store, broker *events.Broker) *Escalator {
 	return &Escalator{store: st, broker: broker, http: &http.Client{Timeout: 10 * time.Second}}
 }
 
-// Run tickt bis ctx endet.
+// Run ticks until ctx ends.
 func (e *Escalator) Run(ctx context.Context) {
 	log.Printf("alerts: escalator started (every %s)", escalationInterval)
 	t := time.NewTicker(escalationInterval)
@@ -47,8 +47,8 @@ func (e *Escalator) Run(ctx context.Context) {
 	}
 }
 
-// Process feuert alle bis `now` fälligen Eskalationsschritte und gibt die Anzahl
-// zurück. Öffentlich, damit Tests deterministisch einen Tick auslösen können.
+// Process fires all escalation steps due by `now` and returns the count. Public
+// so that tests can trigger a tick deterministically.
 func (e *Escalator) Process(ctx context.Context, now time.Time) int {
 	due, err := e.store.DueEscalationIncidents(ctx, now)
 	if err != nil {
@@ -62,15 +62,15 @@ func (e *Escalator) Process(ctx context.Context, now time.Time) int {
 			log.Printf("alerts: escalation policy %s: %v", d.PolicyID, err)
 			continue
 		}
-		// Kette erschöpft: nur next_escalation_at leeren (guarded, kein Event).
+		// Chain exhausted: just clear next_escalation_at (guarded, no event).
 		if d.Step >= len(steps) {
 			_, _ = e.store.AdvanceEscalation(ctx, d.IncidentID, d.Step, d.Step, nil, now, nil)
 			continue
 		}
-		// Provider + Namen VORHER auflösen, dann Schritt ATOMAR claimen, dann
-		// benachrichtigen. So verhindert ein zwischenzeitliches acknowledge den
-		// Page (Claim schlägt fehl) und ein Versandfehler feuert den Schritt
-		// nicht erneut (Zustand ist bereits vorgeschoben).
+		// Resolve providers + names FIRST, then claim the step ATOMICALLY, then
+		// notify. This way an intervening acknowledge prevents the page (the
+		// claim fails) and a delivery error does not re-fire the step (the state
+		// has already been advanced).
 		step := steps[d.Step]
 		provs, err := e.store.ProvidersByIDs(ctx, step.ProviderIDs)
 		if err != nil {
@@ -91,7 +91,7 @@ func (e *Escalator) Process(ctx context.Context, now time.Time) int {
 			continue
 		}
 		if !claimed {
-			continue // acknowledged/resolved oder anderer Tick war schneller
+			continue // acknowledged/resolved or another tick beat us to it
 		}
 		p := &Payload{
 			Rule:      incidentRuleLabel(d.Number, d.Title),
@@ -113,8 +113,8 @@ func (e *Escalator) Process(ctx context.Context, now time.Time) int {
 	return fired
 }
 
-// clampMinutes begrenzt afterMinutes defensiv auf [0, 7 Tage], damit die
-// time.Duration-Multiplikation nie überläuft (int-Minuten * 60e9 ns).
+// clampMinutes defensively bounds afterMinutes to [0, 7 days] so that the
+// time.Duration multiplication never overflows (int minutes * 60e9 ns).
 func clampMinutes(m int) time.Duration {
 	if m < 0 {
 		m = 0

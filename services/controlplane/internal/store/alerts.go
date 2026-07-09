@@ -13,7 +13,7 @@ import (
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/model"
 )
 
-// alerts.go — Provider (Kanäle), Rules (typed Checks) und Events.
+// alerts.go — Providers (channels), Rules (typed checks) and Events.
 
 /* ── Provider ───────────────────────────────────────────────────────────── */
 
@@ -64,8 +64,8 @@ func (s *Store) DeleteAlertProvider(ctx context.Context, orgID, id uuid.UUID) er
 	return nil
 }
 
-// ProvidersByIDs lädt Provider für den Versand (evaluatorseitig, ohne Org-Scope-
-// Check — die IDs kommen aus der Rule, die bereits org-geprüft angelegt wurde).
+// ProvidersByIDs loads providers for dispatch (evaluator-side, without an org-scope
+// check — the IDs come from the rule, which was already created with an org check).
 func (s *Store) ProvidersByIDs(ctx context.Context, ids []uuid.UUID) ([]model.AlertProvider, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -123,7 +123,7 @@ func (s *Store) ListAlertRules(ctx context.Context, clusterID uuid.UUID) ([]mode
 	return out, rows.Err()
 }
 
-// ListEnabledRulesAll: alle aktiven Rules (Evaluator, über alle Cluster).
+// ListEnabledRulesAll: all active rules (evaluator, across all clusters).
 func (s *Store) ListEnabledRulesAll(ctx context.Context) ([]model.AlertRule, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+ruleCols+` FROM alert_rules WHERE enabled ORDER BY cluster_id, name`)
 	if err != nil {
@@ -172,7 +172,7 @@ func (s *Store) DeleteAlertRule(ctx context.Context, clusterID, id uuid.UUID) er
 	return nil
 }
 
-// UpdateRuleEval schreibt das Evaluationsergebnis (State-Machine-Übergang).
+// UpdateRuleEval writes the evaluation result (state-machine transition).
 func (s *Store) UpdateRuleEval(ctx context.Context, id uuid.UUID, state string, stateSince time.Time, lastValue float64, lastError string) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE alert_rules SET state=$2, state_since=$3, last_value=$4, last_eval_at=now(), last_error=$5
@@ -182,8 +182,8 @@ func (s *Store) UpdateRuleEval(ctx context.Context, id uuid.UUID, state string, 
 
 /* ── Events ─────────────────────────────────────────────────────────────── */
 
-// InsertAlertEvent schreibt einen State-Übergang und gibt die Event-ID zurück
-// (der Evaluator verknüpft sie mit dem auto-deklarierten Incident).
+// InsertAlertEvent writes a state transition and returns the event ID
+// (the evaluator links it to the auto-declared incident).
 func (s *Store) InsertAlertEvent(ctx context.Context, ruleID, clusterID uuid.UUID, from, to string, value float64, msg string) (uuid.UUID, error) {
 	var id uuid.UUID
 	err := s.pool.QueryRow(ctx, `
@@ -215,7 +215,7 @@ func (s *Store) ListAlertEvents(ctx context.Context, clusterID uuid.UUID, limit 
 	return out, rows.Err()
 }
 
-// SetRuleMute setzt/löscht die Snooze-Frist einer Rule.
+// SetRuleMute sets/clears the snooze deadline of a rule.
 func (s *Store) SetRuleMute(ctx context.Context, clusterID, id uuid.UUID, until *time.Time) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE alert_rules SET muted_until=$3 WHERE cluster_id=$1 AND id=$2`, clusterID, id, until)
@@ -228,8 +228,8 @@ func (s *Store) SetRuleMute(ctx context.Context, clusterID, id uuid.UUID, until 
 	return nil
 }
 
-// GetActionDefinitionForCluster löst eine Workflow-Definition über die Org des
-// Clusters auf (Auto-Remediation im Evaluator — kein Session-Kontext).
+// GetActionDefinitionForCluster resolves a workflow definition via the cluster's
+// org (auto-remediation in the evaluator — no session context).
 func (s *Store) GetActionDefinitionForCluster(ctx context.Context, clusterID, defID uuid.UUID) (*model.ActionDefinition, error) {
 	return scanDef(s.pool.QueryRow(ctx, `
 		SELECT d.id, d.org_id, d.name, d.description, d.params, d.source, d.timeout_seconds, d.created_at, d.updated_at
@@ -238,7 +238,7 @@ func (s *Store) GetActionDefinitionForCluster(ctx context.Context, clusterID, de
 		WHERE c.id=$1 AND d.id=$2`, clusterID, defID))
 }
 
-// CreateSystemAction legt eine Action ohne User an (Auto-Remediation).
+// CreateSystemAction creates an action without a user (auto-remediation).
 func (s *Store) CreateSystemAction(ctx context.Context, clusterID uuid.UUID, kind, ns, targetKind, targetName string, params json.RawMessage) (*model.Action, error) {
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
