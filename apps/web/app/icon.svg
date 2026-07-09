@@ -1,15 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="rocketplaneIO">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1a1a1e"/>
-      <stop offset="1" stop-color="#0e0e11"/>
-    </linearGradient>
-  </defs>
-  <rect width="32" height="32" rx="7" fill="url(#g)"/>
-  <rect x="0.5" y="0.5" width="31" height="31" rx="6.5" fill="none" stroke="rgba(255,255,255,0.09)"/>
-  <path fill="#f4f4f5" d="M16 4.6 C18.9 7 20.1 10.6 20.1 14 L20.1 17.4 C20.1 18.8 19.1 19.8 17.7 19.8 L14.3 19.8 C12.9 19.8 11.9 18.8 11.9 17.4 L11.9 14 C11.9 10.6 13.1 7 16 4.6 Z"/>
-  <path fill="#f4f4f5" d="M11.9 15 C9.6 16 8.7 18.2 9 20.6 L11.9 18.7 Z"/>
-  <path fill="#f4f4f5" d="M20.1 15 C22.4 16 23.3 18.2 23 20.6 L20.1 18.7 Z"/>
-  <circle cx="16" cy="12.4" r="1.7" fill="#0e0e11"/>
-  <path d="M7.5 25 H12 L13.5 23 L16 27.2 L18.5 23.4 L19.6 25 H24.5" stroke="#ff6a3d" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <rect width="32" height="32" rx="7" fill="#0b0b0d"/>
+  <rect x="0.5" y="0.5" width="31" height="31" rx="6.5" fill="none" stroke="rgba(255,255,255,0.10)"/>
+  <path d="M9 23 L16 7 L23 23 L16 19 Z" fill="#ff6a3d"/>
 </svg>
