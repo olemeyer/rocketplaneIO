@@ -1,5 +1,5 @@
 // Contract types (docs/architecture.md §5). The Control-Plane JSON is camelCase
-// (siehe /api/me: { user, orgs:[{id,name,slug,role,isPersonal}], currentOrgId }).
+// (see /api/me: { user, orgs:[{id,name,slug,role,isPersonal}], currentOrgId }).
 
 export type OrgRole = 'owner' | 'admin' | 'member';
 
@@ -605,6 +605,21 @@ export interface IncidentStats {
   critical: number;
   mttaSeconds: number;
   mttrSeconds: number;
+}
+
+/** A planned maintenance window that suppresses alert notifications + auto-incidents. */
+export interface MaintenanceWindow {
+  id: string;
+  orgId: string;
+  clusterId: string;
+  title: string;
+  scopeNamespace: string;
+  startsAt: string;
+  endsAt: string;
+  createdBy?: string;
+  createdByName?: string;
+  createdAt: string;
+  status: 'active' | 'scheduled' | 'ended';
 }
 
 /** Derived metric: logs/spans → named time series (Better Stack pattern). */

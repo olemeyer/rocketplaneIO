@@ -7,11 +7,12 @@ import { Spinner } from '@/components/ui';
 import { useMe } from '@/components/app/me-context';
 import { PageHeader } from '@/components/app/page-header';
 import { useClusterEvents } from '@/lib/hooks/use-cluster-events';
-import { createIncident, getIncidents, getIncidentStats } from '@/lib/api/controlplane';
+import { createIncident, getIncidents, getIncidentStats, getMaintenanceWindows } from '@/lib/api/controlplane';
 import type { Incident, IncidentStats, IncidentStatus } from '@/lib/api/types';
 import { SEVERITY, STATUS, SEVERITY_ORDER, incidentRank, fmtDuration } from '@/lib/incidents';
 import { timeAgo } from '@/lib/format';
 import { EscalationManager } from '@/components/app/escalation-manager';
+import { MaintenanceManager } from '@/components/app/maintenance-manager';
 
 // Incidents — the response hub: first-class incidents that bracket alerts, Copilot
 // investigations, and actions across a lifecycle (open→acknowledged→
@@ -47,12 +48,15 @@ export default function IncidentsPage() {
   const router = useRouter();
   const { currentOrg } = useMe();
   const orgId = currentOrg?.id;
+  const canManage = currentOrg ? currentOrg.role === 'owner' || currentOrg.role === 'admin' : false;
 
   const [incidents, setIncidents] = useState<Incident[] | null>(null);
   const [stats, setStats] = useState<IncidentStats | null>(null);
   const [filter, setFilter] = useState<Filter>('open');
   const [declaring, setDeclaring] = useState(false);
   const [escalation, setEscalation] = useState(false);
+  const [maintenance, setMaintenance] = useState(false);
+  const [maintActive, setMaintActive] = useState(0);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -60,6 +64,9 @@ export default function IncidentsPage() {
     const status = filter === 'all' ? '' : filter;
     getIncidents(orgId, clusterId, status, 150).then((r) => setIncidents(r.incidents)).catch(() => setIncidents([]));
     getIncidentStats(orgId, clusterId).then((r) => setStats(r.stats)).catch(() => {});
+    getMaintenanceWindows(orgId, clusterId)
+      .then((r) => setMaintActive(r.windows.filter((wnd) => wnd.status === 'active').length))
+      .catch(() => {});
   }, [orgId, clusterId, filter]);
 
   const loadRef = useRef(load);
@@ -111,6 +118,17 @@ export default function IncidentsPage() {
             />
             {live ? 'live' : 'poll'}
           </span>
+          <button
+            type="button"
+            onClick={() => setMaintenance(true)}
+            className="rp-focus h-8 rounded-skin-sm border px-3 font-mono text-[11.5px] transition-colors hover:bg-hover"
+            style={maintActive > 0
+              ? { color: 'var(--rp-tone-yellow-fg)', borderColor: 'color-mix(in oklab, var(--rp-tone-yellow-fg) 45%, var(--rp-line))' }
+              : { color: 'var(--rp-ink-mid)', borderColor: 'var(--rp-line)' }}
+            title={maintActive > 0 ? `${maintActive} active maintenance window(s) — alerts suppressed` : 'Maintenance windows'}
+          >
+            {maintActive > 0 ? `◈ Maintenance · ${maintActive}` : 'Maintenance'}
+          </button>
           <button
             type="button"
             onClick={() => setEscalation(true)}
@@ -206,6 +224,16 @@ export default function IncidentsPage() {
 
       {escalation && orgId ? (
         <EscalationManager orgId={orgId} clusterId={clusterId} onClose={() => setEscalation(false)} />
+      ) : null}
+
+      {maintenance && orgId ? (
+        <MaintenanceManager
+          orgId={orgId}
+          clusterId={clusterId}
+          canManage={canManage}
+          onClose={() => setMaintenance(false)}
+          onChange={() => loadRef.current()}
+        />
       ) : null}
     </div>
   );

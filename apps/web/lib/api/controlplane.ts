@@ -551,6 +551,28 @@ export function linkInvestigation(
   });
 }
 
+/* ── Maintenance windows ───────────────────────────────────────────────── */
+
+export function getMaintenanceWindows(
+  orgId: string,
+  clusterId: string,
+): Promise<{ windows: import('./types').MaintenanceWindow[] }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/maintenance`);
+}
+export function createMaintenanceWindow(
+  orgId: string,
+  clusterId: string,
+  body: { title: string; scopeNamespace: string; startsAt: string; endsAt: string },
+): Promise<import('./types').MaintenanceWindow> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/maintenance`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+export function deleteMaintenanceWindow(orgId: string, clusterId: string, id: string): Promise<unknown> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/maintenance/${enc(id)}`, { method: 'DELETE' });
+}
+
 /* ── Escalation policies ───────────────────────────────────────────────── */
 
 type EscalationPolicyT = import('./types').EscalationPolicy;
