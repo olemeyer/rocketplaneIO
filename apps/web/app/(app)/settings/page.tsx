@@ -7,9 +7,9 @@ import { Spinner } from '@/components/ui';
 import { PageHeader } from '@/components/app/page-header';
 import { useMe } from '@/components/app/me-context';
 import {
-  createAPIToken, createInvitation, deleteAPIToken, deleteOrg, listAPITokens, listAudit,
-  listInvitations, listMembers, removeMember, renameOrg, revokeAPIToken, revokeInvitation,
-  transferOwnership, updateMemberRole,
+  changePassword, createAPIToken, createInvitation, deleteAPIToken, deleteOrg, listAPITokens,
+  listAudit, listInvitations, listMembers, removeMember, renameOrg, revokeAPIToken,
+  revokeInvitation, transferOwnership, updateMemberRole,
 } from '@/lib/api/controlplane';
 import type { APIToken, AuditEntry, Invitation, Member, OrgRole } from '@/lib/api/types';
 import { ApiError } from '@/lib/api/client';
@@ -19,7 +19,7 @@ import { ApiError } from '@/lib/api/client';
 // delete). Gated by the caller's role: members read, admins manage people,
 // owners manage the org. Mirrors the control-plane RBAC exactly.
 
-type Tab = 'members' | 'api keys' | 'audit' | 'organization';
+type Tab = 'members' | 'api keys' | 'account' | 'audit' | 'organization';
 const ROLE_RANK: Record<OrgRole, number> = { owner: 3, admin: 2, member: 1 };
 
 function relTime(iso: string): string {
@@ -70,7 +70,7 @@ export default function SettingsPage() {
       </PageHeader>
 
       <div className="mt-3 flex shrink-0 gap-1">
-        {(['members', 'api keys', 'audit', 'organization'] as Tab[]).map((t) => (
+        {(['members', 'api keys', 'account', 'audit', 'organization'] as Tab[]).map((t) => (
           <button
             key={t}
             type="button"
@@ -90,6 +90,9 @@ export default function SettingsPage() {
         {tab === 'api keys' ? (
           // API keys work for both personal and team orgs (solo automation too).
           <ApiKeysTab orgId={currentOrg.id} isAdmin={isAdmin} />
+        ) : tab === 'account' ? (
+          // Account (password) is per-user, so it works regardless of org kind.
+          <AccountTab />
         ) : currentOrg.isPersonal ? (
           <PersonalNotice />
         ) : tab === 'members' ? (
@@ -478,6 +481,62 @@ function ApiKeysTab({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// AccountTab — self-service password change for local (email+password) accounts.
+// Complements the `reset-password` CLI (locked-out recovery). SSO-only users can
+// set an initial password by leaving the current-password field blank.
+function AccountTab() {
+  const [cur, setCur] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const submit = async () => {
+    setMsg(null);
+    setErr(null);
+    if (next.length < 8) { setErr('New password must be at least 8 characters.'); return; }
+    if (next !== confirm) { setErr('New password and confirmation do not match.'); return; }
+    setBusy(true);
+    try {
+      await changePassword(cur, next);
+      setMsg('Password updated.');
+      setCur(''); setNext(''); setConfirm('');
+    } catch (e) {
+      setErr(e instanceof ApiError ? String(e.message) : 'Could not update password.');
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="max-w-[440px] space-y-3">
+      <section className="rounded-skin border border-line bg-raised p-4" style={{ boxShadow: 'var(--rp-rim)' }}>
+        <p className="rp-micro !text-[10px] mb-1">change password</p>
+        <p className="mb-3 font-mono text-[10.5px] leading-relaxed text-faint">
+          For local (email + password) accounts. If you signed in with SSO and have no password yet, leave “current password” blank to set one.
+        </p>
+        <label className="block font-mono text-[10px] uppercase tracking-[0.05em] text-muted">Current password</label>
+        <input type="password" autoComplete="current-password" value={cur} onChange={(e) => setCur(e.target.value)}
+          className="rp-focus mt-1 h-9 w-full rounded-skin-sm border border-line bg-inset px-3 font-mono text-[12px] text-ink" />
+        <label className="mt-3 block font-mono text-[10px] uppercase tracking-[0.05em] text-muted">New password</label>
+        <input type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)}
+          className="rp-focus mt-1 h-9 w-full rounded-skin-sm border border-line bg-inset px-3 font-mono text-[12px] text-ink" />
+        <label className="mt-3 block font-mono text-[10px] uppercase tracking-[0.05em] text-muted">Confirm new password</label>
+        <input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+          className="rp-focus mt-1 h-9 w-full rounded-skin-sm border border-line bg-inset px-3 font-mono text-[12px] text-ink" />
+        {err ? <p className="mt-2 font-mono text-[10.5px]" style={{ color: 'var(--rp-tone-red-fg)' }}>{err}</p> : null}
+        {msg ? <p className="mt-2 font-mono text-[10.5px]" style={{ color: 'var(--rp-tone-green-fg)' }}>✓ {msg}</p> : null}
+        <button type="button" disabled={busy || !next || !confirm} onClick={submit}
+          className="rp-focus mt-4 h-9 rounded-skin-sm px-4 font-mono text-[11.5px] font-semibold transition-opacity hover:opacity-90 disabled:opacity-40"
+          style={{ background: 'var(--rp-btn-bg)', color: 'var(--rp-btn-fg)' }}>
+          {busy ? 'updating…' : 'Update password'}
+        </button>
+      </section>
     </div>
   );
 }

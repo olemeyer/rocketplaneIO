@@ -74,6 +74,7 @@ func (s *Server) Handler() http.Handler {
 	// strictly to its org+role and refuses platform-admin/owner/token-management.
 	sess := s.auth.WithSessionOrToken
 	mux.Handle("GET /api/me", sess(http.HandlerFunc(s.handleMe)))
+	mux.Handle("POST /api/me/password", sess(http.HandlerFunc(s.auth.ChangePassword)))
 	mux.Handle("POST /api/orgs", sess(http.HandlerFunc(s.handleCreateOrg)))
 	mux.Handle("POST /api/session/org", sess(http.HandlerFunc(s.handleSetOrg)))
 

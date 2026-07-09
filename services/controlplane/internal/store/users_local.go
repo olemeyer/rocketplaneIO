@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/model"
@@ -40,6 +41,48 @@ func (s *Store) CreateLocalUser(ctx context.Context, email, name, passwordHash s
 		return nil, fmt.Errorf("insert local user: %w", err)
 	}
 	return &u, nil
+}
+
+// GetPasswordHashByID loads a user's stored password hash (empty = SSO-only, no
+// local password set). Used by the self-service change-password flow.
+func (s *Store) GetPasswordHashByID(ctx context.Context, userID uuid.UUID) (string, error) {
+	var hash *string
+	err := s.pool.QueryRow(ctx, `SELECT password_hash FROM users WHERE id=$1`, userID).Scan(&hash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("get password hash: %w", err)
+	}
+	if hash == nil {
+		return "", nil
+	}
+	return *hash, nil
+}
+
+// SetPasswordByID stores a new bcrypt password hash for a user.
+func (s *Store) SetPasswordByID(ctx context.Context, userID uuid.UUID, passwordHash string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE users SET password_hash=$2 WHERE id=$1`, userID, passwordHash)
+	if err != nil {
+		return fmt.Errorf("set password: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetPasswordByEmail stores a new bcrypt password hash for the account with the
+// given email (used by the `reset-password` CLI for locked-out recovery).
+func (s *Store) SetPasswordByEmail(ctx context.Context, email, passwordHash string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE users SET password_hash=$2 WHERE lower(email)=lower($1)`, email, passwordHash)
+	if err != nil {
+		return fmt.Errorf("set password by email: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // GetUserForLogin loads a user by email together with the stored password hash.

@@ -111,6 +111,56 @@ func (a *Auth) LoginLocal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"user": user})
 }
 
+// ChangePassword lets a signed-in local user change their own password. If the
+// account already has a password the current one must be supplied and match; an
+// SSO-only account (no password yet) can set an initial one. Refused for API
+// tokens — a token must not change its creator's password.
+func (a *Auth) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	if _, isToken := TokenFrom(r.Context()); isToken {
+		writeErr(w, http.StatusForbidden, "changing your password requires an interactive session")
+		return
+	}
+	user, ok := UserFrom(r.Context())
+	if !ok || user == nil {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	var body struct {
+		CurrentPassword string `json:"currentPassword"`
+		NewPassword     string `json:"newPassword"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if len(body.NewPassword) < 8 {
+		writeErr(w, http.StatusBadRequest, "new password must be at least 8 characters")
+		return
+	}
+	cur, err := a.store.GetPasswordHashByID(r.Context(), user.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	// If a password is already set, require and verify the current one.
+	if cur != "" {
+		if bcrypt.CompareHashAndPassword([]byte(cur), []byte(body.CurrentPassword)) != nil {
+			writeErr(w, http.StatusUnauthorized, "current password is incorrect")
+			return
+		}
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(body.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if err := a.store.SetPasswordByID(r.Context(), user.ID, string(hash)); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not update password")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // finishLogin ensures the personal org exists and sets the session cookie.
 func (a *Auth) finishLogin(ctx context.Context, w http.ResponseWriter, userID uuid.UUID, email string) error {
 	org, err := a.store.EnsurePersonalOrg(ctx, userID, email)

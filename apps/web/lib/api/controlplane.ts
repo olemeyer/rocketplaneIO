@@ -40,6 +40,14 @@ export function logout(): Promise<unknown> {
   return apiFetch('/auth/logout', { method: 'POST' });
 }
 
+/** Change the signed-in user's local password (currentPassword blank if none set yet). */
+export function changePassword(currentPassword: string, newPassword: string): Promise<unknown> {
+  return apiFetch('/api/me/password', {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+}
+
 /* ── Orgs ───────────────────────────────────────────────────────────────── */
 
 export function createOrg(name: string): Promise<OrgSummary> {

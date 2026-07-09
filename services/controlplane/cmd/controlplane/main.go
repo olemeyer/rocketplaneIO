@@ -4,12 +4,19 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/api"
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/auth"
@@ -20,9 +27,63 @@ import (
 )
 
 func main() {
+	// Admin subcommands (recovery, run via `kubectl exec deploy/controlplane -- …`).
+	if len(os.Args) > 1 && os.Args[1] == "reset-password" {
+		if err := resetPassword(os.Args[2:]); err != nil {
+			log.Fatalf("reset-password: %v", err)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		log.Fatalf("controlplane: %v", err)
 	}
+}
+
+// resetPassword sets a local account's password from the CLI — the self-hosted
+// recovery path when the last admin is locked out. Usage:
+//
+//	controlplane reset-password <email> [new-password]
+//
+// If no password is given a strong one is generated and printed. Uses the same
+// DATABASE_URL as the server; does NOT start the HTTP server.
+func resetPassword(args []string) error {
+	if len(args) < 1 || strings.TrimSpace(args[0]) == "" {
+		return errors.New("usage: controlplane reset-password <email> [new-password]")
+	}
+	email := strings.TrimSpace(strings.ToLower(args[0]))
+	pw := ""
+	if len(args) > 1 {
+		pw = args[1]
+	}
+	if pw == "" {
+		b := make([]byte, 12)
+		if _, err := rand.Read(b); err != nil {
+			return err
+		}
+		pw = "Rp-" + base64.RawURLEncoding.EncodeToString(b)
+	}
+	if len(pw) < 8 {
+		return errors.New("password must be at least 8 characters")
+	}
+
+	cfg := config.Load()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	pool, err := db.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	if err := store.New(pool).SetPasswordByEmail(ctx, email, string(hash)); err != nil {
+		return fmt.Errorf("no local account for %q: %w", email, err)
+	}
+	fmt.Printf("password reset for %s\nnew password: %s\n", email, pw)
+	return nil
 }
 
 func run() error {
