@@ -2,7 +2,7 @@
 // Endpoints, also lässt sich (fast) jeder Provider per base-URL + Key einhängen.
 // Das ist der „own your data / kein Lock-in"-Wedge — inkl. lokal/air-gapped.
 
-export type LLMProviderId = 'anthropic' | 'glm' | 'openai' | 'openrouter' | 'ollama' | 'custom';
+export type LLMProviderId = 'anthropic' | 'glm' | 'openai' | 'openrouter' | 'local' | 'custom';
 export type LLMApi = 'anthropic' | 'openai';
 
 export type LLMPreset = {
@@ -65,15 +65,15 @@ export const PROVIDER_PRESETS: LLMPreset[] = [
     note: 'Route to almost any model with a single key — handy for trying providers.',
   },
   {
-    id: 'ollama',
-    name: 'Local · Ollama',
-    tagline: 'Self-hosted, air-gapped — data never leaves your box',
+    id: 'local',
+    name: 'Local · self-hosted',
+    tagline: 'Air-gapped — data never leaves your infrastructure',
     api: 'openai',
     baseUrl: 'http://localhost:11434/v1',
-    defaultModel: 'llama3.1',
+    defaultModel: '',
     keyLabel: '(no key needed)',
     local: true,
-    note: 'Runs on your own hardware. Matches own-your-data / regulated / air-gapped setups.',
+    note: 'Point at any OpenAI-compatible model server running on your own hardware — own-your-data, regulated and air-gapped setups. No key, nothing leaves your box.',
   },
   {
     id: 'custom',
