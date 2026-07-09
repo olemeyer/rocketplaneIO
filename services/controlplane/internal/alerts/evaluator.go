@@ -142,7 +142,13 @@ func (e *Evaluator) evalRule(ctx context.Context, r *model.AlertRule) {
 	stateSince := r.StateSince
 	if newState != r.State {
 		stateSince = now
+		// Maintenance windows suppress notifications AND auto-incident declaration
+		// for the matching scope (still tracks state + writes events).
+		maint, _ := e.store.InMaintenance(ctx, r.ClusterID, params["namespace"], now)
 		msg := fmt.Sprintf("%s: value %.2f %s threshold %.2f (window %ds)", r.Name, value, opWord(r.Op), r.Threshold, r.WindowSeconds)
+		if maint {
+			msg += " [maintenance: suppressed]"
+		}
 		evID, _ := e.store.InsertAlertEvent(ctx, r.ID, r.ClusterID, r.State, newState, value, msg)
 		var evPtr *uuid.UUID
 		if evID != uuid.Nil {
@@ -151,23 +157,26 @@ func (e *Evaluator) evalRule(ctx context.Context, r *model.AlertRule) {
 		// Snooze: the state machine + events keep running, notifications pause.
 		muted := r.MutedUntil != nil && r.MutedUntil.After(now)
 		if newState == "firing" {
-			if !muted {
+			if !muted && !maint {
 				e.notify(ctx, r, "firing", value)
 			}
 			// AUTO-INCIDENT: firing declares (or deduplicates) an incident —
-			// the bracket that investigations and actions attach to.
-			if _, _, err := e.store.DeclareIncidentFromAlert(ctx, r.ID, r.ClusterID, r.Name, r.Severity, value, evPtr); err != nil {
-				log.Printf("alerts: declare incident for %s: %v", r.Name, err)
-			} else {
-				e.broker.Publish(r.ClusterID, "incidents", 0)
+			// the bracket that investigations and actions attach to. Skipped while
+			// the scope is under an active maintenance window.
+			if !maint {
+				if _, _, err := e.store.DeclareIncidentFromAlert(ctx, r.ID, r.ClusterID, r.Name, r.Severity, value, evPtr); err != nil {
+					log.Printf("alerts: declare incident for %s: %v", r.Name, err)
+				} else {
+					e.broker.Publish(r.ClusterID, "incidents", 0)
+				}
 			}
 			// AUTO-REMEDIATION: firing dispatches the configured workflow —
-			// the agent runs it as a verified pipeline.
-			if r.ActionDefinitionID != nil {
+			// the agent runs it as a verified pipeline. Suppressed in maintenance.
+			if r.ActionDefinitionID != nil && !maint {
 				e.dispatchRemediation(ctx, r, value)
 			}
 		} else if r.State == "firing" && newState == "ok" {
-			if !muted {
+			if !muted && !maint {
 				e.notify(ctx, r, "resolved", value)
 			}
 			// The auto-incident closes together with the cleared alert.

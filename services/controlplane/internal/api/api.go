@@ -153,6 +153,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/orgs/{org}/escalation-policies/{policy}", sess(http.HandlerFunc(s.handleDeleteEscalationPolicy)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/escalation", sess(http.HandlerFunc(s.handleGetClusterEscalation)))
 	mux.Handle("PUT /api/orgs/{org}/clusters/{cluster}/escalation", sess(http.HandlerFunc(s.handleSetClusterEscalation)))
+	// Maintenance windows — planned alert/incident suppression (Round 5).
+	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/maintenance", sess(http.HandlerFunc(s.handleListMaintenance)))
+	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/maintenance", sess(http.HandlerFunc(s.handleCreateMaintenance)))
+	mux.Handle("DELETE /api/orgs/{org}/clusters/{cluster}/maintenance/{window}", sess(http.HandlerFunc(s.handleDeleteMaintenance)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/logs", sess(http.HandlerFunc(s.handleQueryLogs)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/traces", sess(http.HandlerFunc(s.handleQueryTraces)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/traces/{traceId}", sess(http.HandlerFunc(s.handleTraceDetail)))

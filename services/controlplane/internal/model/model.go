@@ -527,6 +527,24 @@ type IncidentEvent struct {
 	Metadata   json.RawMessage `json:"metadata,omitempty"`
 }
 
+// MaintenanceWindow is a planned suppression period for a cluster (optionally a
+// single namespace). While active, the alert evaluator does not notify or
+// auto-declare incidents for the matching scope.
+type MaintenanceWindow struct {
+	ID             uuid.UUID  `json:"id"`
+	OrgID          uuid.UUID  `json:"orgId"`
+	ClusterID      uuid.UUID  `json:"clusterId"`
+	Title          string     `json:"title"`
+	ScopeNamespace string     `json:"scopeNamespace"`
+	StartsAt       time.Time  `json:"startsAt"`
+	EndsAt         time.Time  `json:"endsAt"`
+	CreatedBy      *uuid.UUID `json:"createdBy,omitempty"`
+	CreatedByName  string     `json:"createdByName,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	// Derived for the UI: active | scheduled | ended.
+	Status string `json:"status"`
+}
+
 // MetricDefinition is a derived metric: logs/spans → named time series.
 type MetricDefinition struct {
 	ID          uuid.UUID `json:"id"`
