@@ -1,11 +1,5 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/banner-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset=".github/assets/banner-light.png">
-  <img alt="rocketplaneIO" src=".github/assets/banner-dark.png" width="100%">
-</picture>
-
 <h2>An AI SRE for your Kubernetes cluster —<br>that can actually fix things, safely.</h2>
 
 <p><b>Self-hosted · Apache-2.0 · bring your own LLM · air-gapped capable</b></p>
@@ -23,14 +17,6 @@
 <a href=".github/assets/demo.mp4">
   <img alt="rocketplaneIO walkthrough: connect a cluster and the live service map draws itself in, then the Copilot investigates a checkout latency spike across logs, traces and metrics and names the root cause" src=".github/assets/demo.gif" width="100%">
 </a>
-<div align="center"><sub><b>▶ <a href=".github/assets/demo.mp4">Watch the full 75-second walkthrough with sound</a></b> — connect a cluster · the live service map draws itself in · logs, traces &amp; metrics · then the Copilot finds the root cause. <i>(the loop above is sped up and silent)</i></sub></div>
-
-<br>
-
-<img alt="The Copilot investigating a latency spike: evidence-based root cause, then a scale action waiting for one-click approval" src=".github/assets/shot-copilot.png" width="100%">
-<div align="center"><sub>You ask <i>“why is checkout slow?”</i>. The Copilot reads the service map and the logs itself,
-names the root cause with evidence, and proposes <b>one</b> fix — which runs only after you approve it,
-as a pipeline that verifies itself or rolls back.</sub></div>
 
 <br>
 
