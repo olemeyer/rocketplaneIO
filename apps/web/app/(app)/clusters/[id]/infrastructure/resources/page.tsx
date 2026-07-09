@@ -56,7 +56,7 @@ function KindTable({ kind, items }: { kind: string; items: Item[] }) {
     <div className="overflow-hidden rounded-skin border border-line bg-raised" style={{ boxShadow: 'var(--rp-rim)' }}>
       <div className="flex items-baseline gap-2 border-b border-line px-3 py-2">
         <span className="rp-micro !text-[10px]">{kind}</span>
-        <span className="font-mono text-[9.5px] text-faint tnum">{items.length}</span>
+        <span className="font-mono text-[10px] text-muted tnum">{items.length}</span>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full border-collapse font-mono text-[10.5px]">
@@ -144,11 +144,18 @@ export default function ResourcesPage() {
           onChange={(e) => setQ(e.target.value)}
           spellCheck={false}
           placeholder="search name / info…"
-          className="rp-focus h-8 w-56 rounded-skin-sm border border-line bg-inset px-2.5 font-mono text-[11px] text-ink placeholder:text-faint"
+          className="rp-focus h-8 w-44 max-w-full rounded-skin-sm border border-line bg-inset px-2.5 font-mono text-[11px] text-ink placeholder:text-faint md:w-56"
         />
       </PageHeader>
 
-      <div className="mt-3 flex gap-1 overflow-x-auto pb-1">
+      <div
+        className="mt-3 flex gap-1 overflow-x-auto pb-1 pr-6 lg:pr-0"
+        // Right fade mask so tabs clipped by horizontal scroll read as scrollable, not cut off (mobile/tablet only).
+        style={{
+          WebkitMaskImage: 'linear-gradient(to right, black 85%, transparent 100%)',
+          maskImage: 'linear-gradient(to right, black 85%, transparent 100%)',
+        }}
+      >
         {TABS.map((t) => {
           const on = tab === t.key;
           return (
@@ -160,7 +167,7 @@ export default function ResourcesPage() {
               style={on ? { boxShadow: 'inset 0 0 0 1px var(--rp-line-strong)' } : undefined}
             >
               {t.label}
-              <span className="text-[9.5px] text-faint tnum">{kinds ? tabCount(t) : '…'}</span>
+              <span className="text-[10px] text-muted tnum">{kinds ? tabCount(t) : '…'}</span>
             </button>
           );
         })}

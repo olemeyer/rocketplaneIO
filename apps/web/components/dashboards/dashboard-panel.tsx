@@ -82,11 +82,19 @@ export function DashboardPanel({
     <div className="overflow-hidden rounded-skin border border-line bg-raised p-3" style={{ boxShadow: 'var(--rp-rim)' }}>
       {err ? (
         <div className="flex h-[180px] flex-col">
-          <div className="font-mono text-[11.5px] font-semibold text-ink">{panel.title}</div>
-          <div className="flex flex-1 items-center justify-center px-2 text-center">
-            <span className="font-mono text-[10.5px] leading-relaxed" style={{ color: 'var(--rp-tone-red-fg)' }}>
+          <div className="flex items-center gap-1.5 font-mono text-[11.5px] font-semibold text-ink">
+            {/* Crimson error must carry a colorblind glyph (RETICLE law 4). */}
+            <span aria-hidden style={{ color: 'var(--rp-tone-red-fg)' }}>▲</span>
+            <span className="truncate">{panel.title}</span>
+          </div>
+          <div className="mt-1 flex flex-1 items-start overflow-hidden">
+            <p
+              className="max-h-full w-full overflow-y-auto break-words font-mono text-[10px] leading-relaxed"
+              style={{ color: 'var(--rp-tone-red-fg)' }}
+              title={err}
+            >
               {err}
-            </span>
+            </p>
           </div>
         </div>
       ) : series === null ? (

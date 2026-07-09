@@ -9,10 +9,10 @@ import { OrgSwitcher } from './org-switcher';
 import { ConnectClusterDialog } from './connect-cluster';
 import type { Cluster } from '@/lib/api/types';
 
-// scope-selector.tsx — der zentrale Scope-Breadcrumb oben: Org / Cluster / Namespace.
-// Cluster + Namespace sind First-Class-Selektoren; „Add cluster" und „New org"
-// (im OrgSwitcher) sitzen direkt in ihren Dropdowns, damit neue Ressourcen sofort
-// im Selektor auftauchen.
+// scope-selector.tsx — the central scope breadcrumb at the top: Org / Cluster /
+// Namespace. Cluster + Namespace are first-class selectors; "Add cluster" and
+// "New org" (in the OrgSwitcher) live inside their dropdowns so new resources
+// show up in the selector immediately.
 
 function Sep() {
   return <span className="px-0.5 text-[13px] text-faint" aria-hidden>/</span>;
@@ -212,10 +212,17 @@ function NamespacePill() {
 export function ScopeSelector() {
   return (
     <div className="flex min-w-0 items-center gap-1">
-      <OrgSwitcher />
-      <Sep />
+      {/* On phones the top bar shows only the CLUSTER (the active scope). Org and
+          namespace would squeeze the right-hand chrome (Copilot/theme/user) and
+          crush the Copilot button, so they move to the nav drawer / show at sm+. */}
+      <span className="hidden sm:contents">
+        <OrgSwitcher />
+        <Sep />
+      </span>
       <ClusterPill />
-      <NamespacePill />
+      <span className="hidden sm:contents">
+        <NamespacePill />
+      </span>
     </div>
   );
 }

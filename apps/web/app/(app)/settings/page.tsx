@@ -44,8 +44,10 @@ function expiryLabel(iso: string): string {
   return h >= 1 ? `expires in ${h}h` : 'expires soon';
 }
 
+// RETICLE: signal-orange (--rp-accent) is reserved for focus/selection chrome,
+// so the owner role uses the gold status tone (highlight without alerting).
 const ROLE_TONE: Record<OrgRole, string> = {
-  owner: 'var(--rp-accent)',
+  owner: 'var(--rp-tone-yellow-fg)',
   admin: 'var(--rp-ink)',
   member: 'var(--rp-ink-muted)',
 };
@@ -69,14 +71,14 @@ export default function SettingsPage() {
         </span>
       </PageHeader>
 
-      <div className="mt-3 flex shrink-0 gap-1">
+      <div className="mt-3 -mx-4 flex shrink-0 gap-1 overflow-x-auto px-4 sm:mx-0 sm:px-0">
         {(['members', 'api keys', 'account', 'audit', 'organization'] as Tab[]).map((t) => (
           <button
             key={t}
             type="button"
             onClick={() => setTab(t)}
             className={cn(
-              'rp-focus rounded-skin-sm px-3 py-1.5 font-mono text-[11.5px] capitalize transition-colors',
+              'rp-focus shrink-0 whitespace-nowrap rounded-skin-sm px-3 py-1.5 font-mono text-[11.5px] capitalize transition-colors',
               tab === t ? 'bg-hover text-ink' : 'text-muted hover:text-ink',
             )}
             style={tab === t ? { boxShadow: 'inset 0 0 0 1px var(--rp-line-strong)' } : undefined}
@@ -144,12 +146,12 @@ function MembersTab({ orgId, isAdmin, isOwner, myId, onLeave }: { orgId: string;
           <p className="rp-micro !text-[10px] mb-1.5">pending invitations</p>
           <div className="divide-y divide-line overflow-hidden rounded-skin border border-line">
             {invites.map((iv) => (
-              <div key={iv.id} className="flex items-center gap-3 bg-raised px-3 py-2">
-                <span className="grid h-7 w-7 place-items-center rounded-skin-sm border border-line bg-inset font-mono text-[10px] text-faint">✉</span>
+              <div key={iv.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 bg-raised px-3 py-2 sm:flex-nowrap">
+                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-skin-sm border border-line bg-inset font-mono text-[10px] text-faint">✉</span>
                 <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-ink">{iv.email}</span>
-                <span className="font-mono text-[9.5px] uppercase tracking-[0.05em]" style={{ color: ROLE_TONE[iv.role] }}>{iv.role}</span>
-                <span className="font-mono text-[9.5px] text-faint">expires {relTime(iv.expiresAt).replace(' ago', '')}</span>
-                <button type="button" onClick={() => act(() => revokeInvitation(orgId, iv.id))} className="rp-focus rounded-skin-chip border border-line px-2 py-0.5 font-mono text-[10px] text-muted transition-colors hover:bg-hover hover:text-ink">revoke</button>
+                <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.05em]" style={{ color: ROLE_TONE[iv.role] }}>{iv.role}</span>
+                <span className="shrink-0 font-mono text-[10px] text-muted">expires {relTime(iv.expiresAt).replace(' ago', '')}</span>
+                <button type="button" onClick={() => act(() => revokeInvitation(orgId, iv.id))} className="rp-focus ml-auto shrink-0 rounded-skin-chip border border-line px-2 py-0.5 font-mono text-[10px] text-muted transition-colors hover:bg-hover hover:text-ink sm:ml-0">revoke</button>
               </div>
             ))}
           </div>
@@ -178,18 +180,18 @@ function MemberRow({ m, orgId, isAdmin, isOwner, isSelf, onAct }: { m: Member; o
   const canEditRole = isAdmin && (m.role !== 'owner' || isOwner) && !isSelf;
   const roleOptions: OrgRole[] = isOwner ? ['owner', 'admin', 'member'] : ['admin', 'member'];
   return (
-    <div className="flex items-center gap-3 bg-raised px-3 py-2">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 bg-raised px-3 py-2 sm:flex-nowrap">
       <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-skin-sm border border-line bg-inset font-mono text-[10px] font-bold text-mid">
         {m.avatarUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={m.avatarUrl} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
         ) : initials(m.name || m.email)}
       </span>
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 basis-[calc(100%-2.5rem)] sm:basis-auto">
         <div className="truncate font-mono text-[11.5px] text-ink">{m.name || m.email}{isSelf ? <span className="text-faint"> (you)</span> : null}</div>
-        {m.name ? <div className="truncate font-mono text-[9.5px] text-faint">{m.email}</div> : null}
+        {m.name ? <div className="truncate font-mono text-[10px] text-muted">{m.email}</div> : null}
       </div>
-      <span className="font-mono text-[9px] text-faint">{relTime(m.joinedAt)}</span>
+      <span className="shrink-0 font-mono text-[10px] text-muted">{relTime(m.joinedAt)}</span>
       {canEditRole ? (
         <select
           value={m.role}
@@ -206,12 +208,12 @@ function MemberRow({ m, orgId, isAdmin, isOwner, isSelf, onAct }: { m: Member; o
           type="button"
           onClick={() => onAct(() => removeMember(orgId, m.userId))}
           title={isSelf ? 'leave this org' : 'remove member'}
-          className="rp-focus rounded-skin-chip border border-line px-2 py-0.5 font-mono text-[10px] text-muted transition-colors hover:bg-hover"
+          className="rp-focus ml-auto shrink-0 rounded-skin-chip border border-line px-2 py-0.5 font-mono text-[10px] text-muted transition-colors hover:bg-hover sm:ml-0"
           style={{ color: isSelf ? 'var(--rp-tone-red-fg)' : undefined }}
         >
           {isSelf ? 'leave' : 'remove'}
         </button>
-      ) : <span className="w-[52px]" />}
+      ) : <span className="hidden w-[52px] sm:block" />}
     </div>
   );
 }

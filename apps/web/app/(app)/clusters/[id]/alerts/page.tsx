@@ -333,7 +333,7 @@ function RuleCard({
 
   return (
     <div className="rounded-skin border border-line bg-raised p-3" style={{ boxShadow: 'var(--rp-rim)' }}>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <span
           className={cn('shrink-0 rounded-skin-chip px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.05em]', r.enabled && r.state !== 'ok' && !muted && 'rp-breath')}
           style={r.enabled ? { color: chip.fg, background: chip.bg } : { color: 'var(--rp-ink-faint)', background: 'var(--rp-tone-neutral-bg)' }}
@@ -343,17 +343,17 @@ function RuleCard({
         {r.enabled && r.state !== 'ok' && since ? (
           <span className="shrink-0 font-mono text-[9.5px] text-muted tnum">since {since}</span>
         ) : null}
-        <span className="min-w-0 truncate font-mono text-[12.5px] font-semibold text-ink">{r.name}</span>
-        <span className="rounded-skin-chip bg-inset px-1.5 py-0.5 font-mono text-[9px] text-muted">{k?.label ?? r.kind}</span>
+        <span className="min-w-[6rem] flex-1 truncate font-mono text-[12.5px] font-semibold text-ink">{r.name}</span>
+        <span className="shrink-0 rounded-skin-chip bg-inset px-1.5 py-0.5 font-mono text-[9px] text-muted">{k?.label ?? r.kind}</span>
         {r.severity === 'critical' ? (
-          <span className="rounded-skin-chip px-1.5 py-0.5 font-mono text-[9px] uppercase" style={{ color: 'var(--rp-tone-red-fg)', background: 'var(--rp-tone-red-bg)' }}>crit</span>
+          <span className="shrink-0 rounded-skin-chip px-1.5 py-0.5 font-mono text-[9px] uppercase" style={{ color: 'var(--rp-tone-red-fg)', background: 'var(--rp-tone-red-bg)' }}>crit</span>
         ) : null}
         {muted ? (
-          <span className="rounded-skin-chip px-1.5 py-0.5 font-mono text-[9px] uppercase text-muted" style={{ background: 'var(--rp-tone-neutral-bg)' }}>
+          <span className="shrink-0 rounded-skin-chip px-1.5 py-0.5 font-mono text-[9px] uppercase text-muted" style={{ background: 'var(--rp-tone-neutral-bg)' }}>
             ⏾ muted til {r.mutedUntil!.slice(11, 16)}
           </span>
         ) : null}
-        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+        <span className="flex w-full shrink-0 items-center justify-end gap-1.5 sm:ml-auto sm:w-auto">
           <button
             type="button"
             onClick={() => void onSnooze(muted ? 0 : 60)}
@@ -523,10 +523,10 @@ function RuleEditor({
   }, [r.kind]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Rule editor">
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-3" role="dialog" aria-modal="true" aria-label="Rule editor">
       <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0 cursor-default" style={{ backgroundColor: 'var(--rp-scrim)' }} />
       <div
-        className={cn('relative max-h-[92vh] overflow-y-auto rounded-skin border border-line bg-raised', r.kind === 'promql' ? 'w-[640px]' : 'w-[480px]')}
+        className={cn('relative max-h-[92vh] w-full overflow-y-auto rounded-skin border border-line bg-raised', r.kind === 'promql' ? 'sm:w-[640px]' : 'sm:w-[480px]')}
         style={{ boxShadow: 'var(--rp-rim), var(--rp-shadow-pop)', animation: 'reveal-up var(--rp-dur-med) var(--rp-ease-enter)' }}
       >
         <div className="border-b border-line px-4 py-3">
@@ -816,9 +816,9 @@ function ProviderEditor({
   const inputCls = 'rp-focus mt-1 h-9 w-full rounded-skin-sm border border-line bg-inset px-2.5 font-mono text-[12px] text-ink placeholder:text-faint';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Provider editor">
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-3" role="dialog" aria-modal="true" aria-label="Provider editor">
       <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0 cursor-default" style={{ backgroundColor: 'var(--rp-scrim)' }} />
-      <div className="relative w-[400px] rounded-skin border border-line bg-raised" style={{ boxShadow: 'var(--rp-rim), var(--rp-shadow-pop)', animation: 'reveal-up var(--rp-dur-med) var(--rp-ease-enter)' }}>
+      <div className="relative w-full max-w-[400px] rounded-skin border border-line bg-raised" style={{ boxShadow: 'var(--rp-rim), var(--rp-shadow-pop)', animation: 'reveal-up var(--rp-dur-med) var(--rp-ease-enter)' }}>
         <div className="border-b border-line px-4 py-3">
           <span className="font-mono text-[13px] font-semibold text-ink">New provider</span>
         </div>

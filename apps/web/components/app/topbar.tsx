@@ -7,9 +7,10 @@ import { UserMenu } from './user-menu';
 import { useNav } from './sidebar';
 import { CopilotButton } from './copilot';
 
-// Globale Kopfleiste — die Instrumenten-Blende: h-52, transluzent + backdrop-blur,
-// EINE 1px-Hairline unten (kein harter Strich mehr). Links mobil der Nav-Hamburger
-// (öffnet den Drawer) + Scope-Breadcrumb, rechts Theme + User. Rim-Light oben.
+// Global top bar — the instrument bezel: h-52, translucent + backdrop-blur, ONE
+// 1px hairline at the bottom (no hard rule). On mobile the left holds the nav
+// hamburger (opens the drawer) + scope breadcrumb; the right holds theme + user.
+// Rim light on top.
 export function Topbar() {
   const { setOpen } = useNav();
   return (

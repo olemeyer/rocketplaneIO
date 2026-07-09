@@ -307,12 +307,12 @@ export default function RunsPage() {
         {/* Graph + Filter */}
         <div className="shrink-0 rounded-skin border border-line bg-raised px-3 pb-2 pt-3" style={{ boxShadow: 'var(--rp-rim)' }}>
           <ActivityGraph runs={runs ?? []} />
-          <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-line pt-2">
+          <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-2 border-t border-line pt-2 sm:gap-y-1.5">
             {STATUS_FILTERS.map((s) => {
               const on = statusF === s;
               const tone = s === 'all' ? undefined : (STATUS[s] ?? FALLBACK);
               return (
-                <button key={s} type="button" onClick={() => setStatusF(s)} className={cn('rp-focus flex items-center gap-1 rounded-skin-chip border px-2 py-0.5 font-mono text-[10px] transition-colors', on ? 'border-line-strong bg-hover text-ink' : 'border-line text-muted hover:text-ink')}>
+                <button key={s} type="button" onClick={() => setStatusF(s)} className={cn('rp-focus flex items-center gap-1 rounded-skin-chip border px-2 py-1.5 font-mono text-[10px] transition-colors sm:py-0.5', on ? 'border-line-strong bg-hover text-ink' : 'border-line text-muted hover:text-ink')}>
                   {tone ? <span style={{ color: tone.fg }}>{tone.glyph}</span> : null}
                   {s}
                   <span className="text-[9px] text-faint tnum">{counts[s] ?? 0}</span>
@@ -323,12 +323,12 @@ export default function RunsPage() {
             {(['all', ...RISK_LEVELS] as const).map((l) => {
               const on = levelF === l;
               return (
-                <button key={l} type="button" onClick={() => setLevelF(l as RiskLevel | 'all')} className={cn('rp-focus flex items-center gap-1 rounded-skin-chip border px-2 py-0.5 font-mono text-[10px] transition-colors', on ? 'border-line-strong bg-hover text-ink' : 'border-line text-muted hover:text-ink')}>
+                <button key={l} type="button" onClick={() => setLevelF(l as RiskLevel | 'all')} className={cn('rp-focus flex items-center gap-1 rounded-skin-chip border px-2 py-1.5 font-mono text-[10px] transition-colors sm:py-0.5', on ? 'border-line-strong bg-hover text-ink' : 'border-line text-muted hover:text-ink')}>
                   {l === 'all' ? 'any level' : <><span style={{ color: levelColor(l) }}>{LEVEL_META[l as RiskLevel].glyph}</span>{LEVEL_META[l as RiskLevel].label}</>}
                 </button>
               );
             })}
-            <input value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false} placeholder="filter kind / target / user…" className="rp-focus ml-auto h-7 w-56 rounded-skin-sm border border-line bg-inset px-2 font-mono text-[10.5px] text-ink placeholder:text-faint" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false} placeholder="filter kind / target / user…" className="rp-focus h-7 w-full rounded-skin-sm border border-line bg-inset pl-2 pr-2.5 font-mono text-[10.5px] text-ink placeholder:text-faint md:ml-auto md:w-56" />
           </div>
           {presentCats.length > 1 ? (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">

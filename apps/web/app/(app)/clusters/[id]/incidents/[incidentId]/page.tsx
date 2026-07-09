@@ -161,9 +161,9 @@ export default function IncidentDetailPage() {
           ← incidents
         </button>
         <div className="rp-keyline mt-2 flex flex-wrap items-end justify-between gap-x-4 gap-y-2 pb-3">
-          <div className="flex min-w-0 items-baseline gap-2.5">
+          <div className="flex min-w-0 flex-col sm:flex-row sm:items-baseline sm:gap-2.5">
             <span className="font-mono text-[13px] tabular-nums text-faint">INC-{incident.number}</span>
-            <h1 className="truncate font-display text-[21px] font-bold leading-none tracking-tightest text-ink sm:text-[24px]">
+            <h1 className="break-words font-display text-[21px] font-bold leading-tight tracking-tightest text-ink sm:truncate sm:text-[24px] sm:leading-none">
               {incident.title}
             </h1>
           </div>
@@ -295,7 +295,7 @@ function Timeline({ events }: { events: IncidentEvent[] }) {
     return <div className="font-mono text-[11px] text-faint">No events yet.</div>;
   }
   return (
-    <ol className="relative space-y-0">
+    <ol className="relative space-y-0 pr-0.5">
       {events.map((e, i) => {
         const st = eventStyle(e.kind);
         const last = i === events.length - 1;
@@ -311,13 +311,13 @@ function Timeline({ events }: { events: IncidentEvent[] }) {
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline justify-between gap-2">
-                <span className="text-[12px] text-ink">{e.message}</span>
-                <span className="shrink-0 font-mono text-[9.5px] tabular-nums text-faint">{timeAgo(e.at)}</span>
+                <span className="min-w-0 truncate text-[12px] text-ink">{e.message}</span>
+                <span className="shrink-0 font-mono text-[10px] tabular-nums text-faint">{timeAgo(e.at)}</span>
               </div>
               {e.actorEmail ? (
-                <span className="font-mono text-[9.5px] text-faint">{e.actorEmail}</span>
+                <span className="font-mono text-[10px] text-faint">{e.actorEmail}</span>
               ) : e.kind === 'alert' || e.kind === 'alert_cleared' || e.kind === 'declared' ? (
-                <span className="font-mono text-[9.5px] text-faint">system</span>
+                <span className="font-mono text-[10px] text-faint">system</span>
               ) : null}
             </div>
           </li>

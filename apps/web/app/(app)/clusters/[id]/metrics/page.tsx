@@ -114,7 +114,7 @@ export default function MetricsPage() {
             <select
               value={service}
               onChange={(e) => setService(e.target.value)}
-              className="rp-focus h-8 rounded-skin-sm border border-line bg-inset px-2 font-mono text-[11px] text-ink"
+              className="rp-focus h-8 w-full min-w-0 flex-1 rounded-skin-sm border border-line bg-inset px-2 font-mono text-[11px] text-ink sm:w-auto sm:flex-none"
             >
               <option value="">all services</option>
               {services.map((n) => (

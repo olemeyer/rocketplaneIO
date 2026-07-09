@@ -79,7 +79,7 @@ export function EscalationManager({
           <button
             type="button"
             onClick={onClose}
-            className="rp-focus grid h-7 w-7 place-items-center rounded-skin-sm text-muted transition-colors hover:bg-hover hover:text-ink"
+            className="rp-focus grid h-8 w-8 place-items-center rounded-skin-sm text-muted transition-colors hover:bg-hover hover:text-ink lg:h-7 lg:w-7"
             aria-label="close"
           >
             ✕
@@ -88,15 +88,15 @@ export function EscalationManager({
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {/* Cluster default */}
-          <div className="flex items-center justify-between gap-3 rounded-skin-sm border border-line bg-inset px-3 py-2.5">
+          <div className="flex flex-col items-stretch gap-2 rounded-skin-sm border border-line bg-inset px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
             <div className="min-w-0">
               <div className="font-mono text-[11px] text-ink">Default for this cluster</div>
-              <div className="font-mono text-[9.5px] text-faint">new incidents here page along this policy</div>
+              <div className="font-mono text-[10.5px] text-muted">new incidents here page along this policy</div>
             </div>
             <select
               value={defaultId ?? ''}
               onChange={(e) => pickDefault(e.target.value || null)}
-              className="rp-focus h-8 max-w-[220px] rounded-skin-sm border border-line bg-raised px-2 font-mono text-[11px] text-ink"
+              className="rp-focus h-8 w-full rounded-skin-sm border border-line bg-raised px-2 font-mono text-[11px] text-ink sm:max-w-[220px]"
             >
               <option value="">none (no auto-paging)</option>
               {(policies ?? []).map((p) => (
@@ -121,7 +121,7 @@ export function EscalationManager({
               <button
                 type="button"
                 onClick={() => setEditing('new')}
-                className="rp-focus font-mono text-[10.5px] text-muted transition-colors hover:text-ink"
+                className="rp-focus -my-1 min-h-[30px] px-1 py-1 font-mono text-[10.5px] text-muted transition-colors hover:text-ink lg:my-0 lg:min-h-0 lg:p-0"
               >
                 + new policy
               </button>
@@ -211,21 +211,21 @@ function PolicyRow({
         <button
           type="button"
           onClick={onEdit}
-          className="rp-focus ml-auto font-mono text-[10px] text-muted transition-colors hover:text-ink"
+          className="rp-focus -my-1 ml-auto min-h-[30px] px-1 py-1 font-mono text-[10px] text-muted transition-colors hover:text-ink lg:my-0 lg:min-h-0 lg:p-0"
         >
           edit
         </button>
       </div>
       <div className="mt-1.5 space-y-0.5">
         {policy.steps.length === 0 ? (
-          <span className="font-mono text-[9.5px] text-faint">no steps</span>
+          <span className="font-mono text-[10.5px] text-muted">no steps</span>
         ) : (
           policy.steps.map((s, i) => (
-            <div key={i} className="flex items-center gap-2 font-mono text-[9.5px] text-muted">
+            <div key={i} className="flex min-w-0 items-center gap-2 font-mono text-[10.5px] text-muted">
               <span className="tabular-nums text-faint">{i + 1}.</span>
               <span className="tabular-nums">after {s.afterMinutes}m</span>
               <span className="text-faint">→</span>
-              <span className="truncate">{s.providerIds.map((id) => providerName(providers, id)).join(', ') || '(no channel)'}</span>
+              <span className="min-w-0 break-words sm:truncate">{s.providerIds.map((id) => providerName(providers, id)).join(', ') || '(no channel)'}</span>
             </div>
           ))
         )}
@@ -291,7 +291,7 @@ function PolicyEditor({
                 <button
                   type="button"
                   onClick={() => setSteps((prev) => prev.filter((_, j) => j !== i))}
-                  className="rp-focus ml-auto font-mono text-[10px] text-faint transition-colors hover:text-red"
+                  className="rp-focus -my-1 ml-auto min-h-[30px] px-1 py-1 font-mono text-[10px] text-faint transition-colors hover:text-red lg:my-0 lg:min-h-0 lg:p-0"
                 >
                   remove
                 </button>
@@ -324,7 +324,7 @@ function PolicyEditor({
       <button
         type="button"
         onClick={() => setSteps((prev) => [...prev, { afterMinutes: 5, providerIds: [] }])}
-        className="rp-focus mt-2 font-mono text-[10px] text-muted transition-colors hover:text-ink"
+        className="rp-focus mt-2 min-h-[30px] px-1 py-1 font-mono text-[10px] text-muted transition-colors hover:text-ink lg:min-h-0 lg:p-0"
       >
         + add step
       </button>

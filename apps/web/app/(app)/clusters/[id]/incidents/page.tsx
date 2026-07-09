@@ -96,22 +96,22 @@ export default function IncidentsPage() {
         title="Incidents"
         meta={
           stats ? (
-            <span className="flex items-center gap-2.5">
+            <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
               <span>
                 <span className={cn(stats.open > 0 ? 'text-ink' : 'text-muted')}>{stats.open}</span> open
               </span>
               {stats.critical > 0 ? (
-                <span style={{ color: 'var(--rp-tone-red-fg)' }}>▲ {stats.critical} critical</span>
+                <span className="whitespace-nowrap" style={{ color: 'var(--rp-tone-red-fg)' }}>▲ {stats.critical} critical</span>
               ) : null}
-              <span className="text-faint">·</span>
-              <span className="text-muted">MTTA {fmtDuration(stats.mttaSeconds)}</span>
-              <span className="text-muted">MTTR {fmtDuration(stats.mttrSeconds)}</span>
+              <span className="hidden text-faint sm:inline">·</span>
+              <span className="whitespace-nowrap text-muted">MTTA {fmtDuration(stats.mttaSeconds)}</span>
+              <span className="whitespace-nowrap text-muted">MTTR {fmtDuration(stats.mttrSeconds)}</span>
             </span>
           ) : undefined
         }
       >
-        <div className="flex items-center gap-2">
-          <span className={cn('inline-flex items-center gap-1.5 font-mono text-[10px]', live ? 'text-mid' : 'text-faint')}>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <span className={cn('inline-flex shrink-0 items-center gap-1.5 font-mono text-[10px]', live ? 'text-mid' : 'text-faint')}>
             <span
               className="h-1.5 w-1.5 rounded-full"
               style={{ background: live ? 'var(--rp-tone-green-fg)' : 'var(--rp-ink-faint)' }}
@@ -121,7 +121,7 @@ export default function IncidentsPage() {
           <button
             type="button"
             onClick={() => setMaintenance(true)}
-            className="rp-focus h-8 rounded-skin-sm border px-3 font-mono text-[11.5px] transition-colors hover:bg-hover"
+            className="rp-focus h-8 shrink-0 whitespace-nowrap rounded-skin-sm border px-3 font-mono text-[11.5px] transition-colors hover:bg-hover"
             style={maintActive > 0
               ? { color: 'var(--rp-tone-yellow-fg)', borderColor: 'color-mix(in oklab, var(--rp-tone-yellow-fg) 45%, var(--rp-line))' }
               : { color: 'var(--rp-ink-mid)', borderColor: 'var(--rp-line)' }}
@@ -132,14 +132,14 @@ export default function IncidentsPage() {
           <button
             type="button"
             onClick={() => setEscalation(true)}
-            className="rp-focus h-8 rounded-skin-sm border border-line px-3 font-mono text-[11.5px] text-mid transition-colors hover:bg-hover hover:text-ink"
+            className="rp-focus h-8 shrink-0 whitespace-nowrap rounded-skin-sm border border-line px-3 font-mono text-[11.5px] text-mid transition-colors hover:bg-hover hover:text-ink"
           >
             Escalation ↑
           </button>
           <button
             type="button"
             onClick={() => setDeclaring(true)}
-            className="rp-focus h-8 rounded-skin-sm px-3 font-mono text-[11.5px] font-semibold transition-opacity hover:opacity-90"
+            className="rp-focus h-8 shrink-0 whitespace-nowrap rounded-skin-sm px-3 font-mono text-[11.5px] font-semibold transition-opacity hover:opacity-90"
             style={{ background: 'var(--rp-btn-bg)', color: 'var(--rp-btn-fg)' }}
           >
             Declare incident

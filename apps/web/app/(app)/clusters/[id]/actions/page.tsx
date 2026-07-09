@@ -1063,7 +1063,7 @@ export default function ActionsPage() {
               placeholder={`search ${BUILTINS.length} actions…  ( / )`}
               className="rp-focus h-9 min-w-[220px] flex-1 rounded-skin-sm border border-line bg-inset px-3 font-mono text-[12px] text-ink placeholder:text-faint"
             />
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 overflow-x-auto pb-1">
               {(['all', ...RISK_LEVELS] as const).map((l) => {
                 const on = levelF === l;
                 const count =
@@ -1076,7 +1076,7 @@ export default function ActionsPage() {
                     type="button"
                     onClick={() => setLevelF(l as ActionClass | 'all')}
                     className={cn(
-                      'rp-focus flex items-center gap-1 rounded-skin-chip border px-2 py-1 font-mono text-[10px] transition-colors',
+                      'rp-focus flex shrink-0 items-center gap-1 whitespace-nowrap rounded-skin-chip border px-2 py-1 font-mono text-[10px] transition-colors',
                       on ? 'border-line-strong bg-hover text-ink' : 'border-line text-muted hover:text-ink',
                     )}
                   >

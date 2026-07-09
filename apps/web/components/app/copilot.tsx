@@ -42,19 +42,22 @@ export function CopilotButton() {
     <Link
       href={href}
       aria-label="Open Copilot"
-      className="rp-focus group inline-flex h-8 shrink-0 items-center gap-1.5 rounded-skin-sm border px-2.5 font-mono text-[11.5px] font-semibold transition-all"
+      // The Copilot is the primary feature — kept prominent (accent-tinted border
+      // + subtle accent wash + brand sparkle) and fully labelled at EVERY size,
+      // including mobile. We dropped only the heavy orange glow that read as an
+      // alarm; the accent stays as identity, not as a signal. Org + namespace are
+      // hidden from the phone top bar so this button always has room to fold.
+      className="rp-focus group inline-flex h-8 shrink-0 items-center gap-1.5 rounded-skin-sm border px-2.5 font-mono text-[11.5px] font-semibold text-ink transition-opacity hover:opacity-90"
       style={{
-        color: 'var(--rp-ink)',
-        borderColor: 'color-mix(in oklab, var(--rp-accent) 42%, var(--rp-line-strong))',
-        background: 'color-mix(in oklab, var(--rp-accent) 12%, var(--rp-bg-raised))',
-        boxShadow: '0 0 0 1px color-mix(in oklab, var(--rp-accent) 16%, transparent), 0 6px 18px -8px color-mix(in oklab, var(--rp-accent) 55%, transparent)',
+        borderColor: 'color-mix(in oklab, var(--rp-accent) 38%, var(--rp-line-strong))',
+        background: 'color-mix(in oklab, var(--rp-accent) 10%, var(--rp-bg-raised))',
       }}
     >
-      <span style={{ color: 'var(--rp-accent)' }} className="rp-breath">
+      <span style={{ color: 'var(--rp-accent)' }}>
         <Sparkle />
       </span>
       <span>Copilot</span>
-      <kbd className="ml-0.5 hidden rounded-skin-chip border px-1 py-px text-[8.5px] font-normal sm:inline" style={{ borderColor: 'color-mix(in oklab, var(--rp-accent) 30%, var(--rp-line))', color: 'var(--rp-ink-muted)' }}>
+      <kbd className="ml-0.5 hidden rounded-skin-chip border border-line px-1 py-px text-[8.5px] font-normal text-muted sm:inline">
         ⌘J
       </kbd>
     </Link>

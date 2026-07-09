@@ -90,7 +90,7 @@ function UsersTab({ myId }: { myId: string }) {
   };
 
   return (
-    <div className="max-w-[960px] space-y-3">
+    <div className="max-w-[960px] space-y-3 lg:max-w-[1200px]">
       <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="search users by email or name…" className="rp-focus h-9 w-full max-w-[360px] rounded-skin-sm border border-line bg-inset px-3 font-mono text-[12px] text-ink placeholder:text-faint" />
       {users === null ? (
         <div className="flex items-center gap-2 py-4 text-muted"><Spinner /> <span className="font-mono text-[11px]">loading…</span></div>
@@ -100,33 +100,38 @@ function UsersTab({ myId }: { myId: string }) {
             const suspended = !!u.suspendedAt;
             const isSelf = u.id === myId;
             return (
-              <div key={u.id} className="flex items-center gap-3 bg-raised px-3 py-2">
-                <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-skin-sm border border-line bg-inset font-mono text-[10px] font-bold text-mid" style={suspended ? { opacity: 0.5 } : undefined}>
-                  {u.avatarUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={u.avatarUrl} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
-                  ) : initials(u.name || u.email)}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="truncate font-mono text-[11.5px] text-ink">{u.name || u.email}{isSelf ? <span className="text-faint"> (you)</span> : null}</span>
-                    {u.isPlatformAdmin ? <span className="shrink-0 rounded-skin-chip px-1 py-px font-mono text-[8.5px] uppercase tracking-[0.05em]" style={{ color: 'var(--rp-accent)', background: 'color-mix(in oklab, var(--rp-accent) 12%, transparent)' }}>admin</span> : null}
-                    {suspended ? <span className="shrink-0 rounded-skin-chip px-1 py-px font-mono text-[8.5px] uppercase tracking-[0.05em]" style={{ color: 'var(--rp-tone-red-fg)', background: 'var(--rp-tone-red-bg)' }}>suspended</span> : null}
+              <div key={u.id} className="flex flex-col gap-2 bg-raised px-3 py-2 sm:flex-row sm:items-center sm:gap-3">
+                <div className="flex min-w-0 items-center gap-3 sm:flex-1">
+                  <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-skin-sm border border-line bg-inset font-mono text-[10px] font-bold text-mid" style={suspended ? { opacity: 0.5 } : undefined}>
+                    {u.avatarUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={u.avatarUrl} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                    ) : initials(u.name || u.email)}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate font-mono text-[11.5px] text-ink">{u.name || u.email}{isSelf ? <span className="text-faint"> (you)</span> : null}</span>
+                      {u.isPlatformAdmin ? <span className="shrink-0 rounded-skin-chip px-1 py-px font-mono text-[10px] uppercase tracking-[0.05em] text-mid" style={{ background: 'var(--rp-bg-inset)', boxShadow: 'inset 0 0 0 1px var(--rp-line-strong)' }}>◆ admin</span> : null}
+                      {suspended ? <span className="shrink-0 rounded-skin-chip px-1 py-px font-mono text-[10px] uppercase tracking-[0.05em]" style={{ color: 'var(--rp-tone-red-fg)', background: 'var(--rp-tone-red-bg)' }}>● suspended</span> : null}
+                    </div>
+                    {u.name ? <div className="truncate font-mono text-[10px] text-faint">{u.email}</div> : null}
                   </div>
-                  {u.name ? <div className="truncate font-mono text-[9.5px] text-faint">{u.email}</div> : null}
                 </div>
-                <span className="font-mono text-[9.5px] tabular-nums text-faint">{u.orgCount} orgs</span>
-                <span className="font-mono text-[9px] text-faint">{relTime(u.createdAt)}</span>
-                {!isSelf ? (
-                  <>
-                    <button type="button" onClick={() => flag(u.id, { platformAdmin: !u.isPlatformAdmin })} className="rp-focus rounded-skin-chip border border-line px-2 py-0.5 font-mono text-[10px] text-muted transition-colors hover:bg-hover hover:text-ink">
-                      {u.isPlatformAdmin ? 'revoke admin' : 'make admin'}
-                    </button>
-                    <button type="button" onClick={() => flag(u.id, { suspended: !suspended })} className="rp-focus rounded-skin-chip border border-line px-2 py-0.5 font-mono text-[10px] transition-colors hover:bg-hover" style={{ color: suspended ? 'var(--rp-tone-green-fg)' : 'var(--rp-tone-red-fg)' }}>
-                      {suspended ? 'reactivate' : 'suspend'}
-                    </button>
-                  </>
-                ) : <span className="font-mono text-[9px] text-faint">— you —</span>}
+                {/* Metadata + actions wrap onto a second line below sm; stay inline at sm+ to preserve the desktop row. */}
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pl-10 sm:shrink-0 sm:gap-3 sm:pl-0">
+                  <span className="font-mono text-[10px] tabular-nums text-faint">{u.orgCount} orgs</span>
+                  <span className="font-mono text-[10px] text-faint">{relTime(u.createdAt)}</span>
+                  {!isSelf ? (
+                    <>
+                      <button type="button" onClick={() => flag(u.id, { platformAdmin: !u.isPlatformAdmin })} className="rp-focus min-h-[30px] rounded-skin-chip border border-line px-2 py-1.5 font-mono text-[10px] text-muted transition-colors hover:bg-hover hover:text-ink sm:min-h-0 sm:py-0.5">
+                        {u.isPlatformAdmin ? 'revoke admin' : 'make admin'}
+                      </button>
+                      <button type="button" onClick={() => flag(u.id, { suspended: !suspended })} className="rp-focus min-h-[30px] rounded-skin-chip border border-line px-2 py-1.5 font-mono text-[10px] transition-colors hover:bg-hover sm:min-h-0 sm:py-0.5" style={{ color: suspended ? 'var(--rp-tone-green-fg)' : 'var(--rp-tone-red-fg)' }}>
+                        {suspended ? 'reactivate' : 'suspend'}
+                      </button>
+                    </>
+                  ) : <span className="font-mono text-[10px] text-faint">— you —</span>}
+                </div>
               </div>
             );
           })}
@@ -144,21 +149,24 @@ function OrgsTab() {
   useEffect(() => { adminListOrgs(q, 300).then((r) => setOrgs(r.orgs)).catch(() => setOrgs([])); }, [q]);
 
   return (
-    <div className="max-w-[960px] space-y-3">
+    <div className="max-w-[960px] space-y-3 lg:max-w-[1200px]">
       <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="search orgs…" className="rp-focus h-9 w-full max-w-[360px] rounded-skin-sm border border-line bg-inset px-3 font-mono text-[12px] text-ink placeholder:text-faint" />
       {orgs === null ? (
         <div className="flex items-center gap-2 py-4 text-muted"><Spinner /> <span className="font-mono text-[11px]">loading…</span></div>
       ) : (
         <div className="divide-y divide-line overflow-hidden rounded-skin border border-line">
           {orgs.map((o) => (
-            <div key={o.id} className="flex items-center gap-3 bg-raised px-3 py-2 font-mono text-[11.5px]">
-              <span className="min-w-0 flex-1 truncate text-ink">{o.name}
-                {o.isPersonal ? <span className="ml-1.5 rounded-skin-chip px-1 py-px text-[8.5px] uppercase tracking-[0.05em] text-faint" style={{ background: 'var(--rp-bg-inset)' }}>personal</span> : null}
+            <div key={o.id} className="flex flex-col gap-2 bg-raised px-3 py-2 font-mono text-[11.5px] sm:flex-row sm:items-center sm:gap-3">
+              <span className="min-w-0 truncate text-ink sm:flex-1">{o.name}
+                {o.isPersonal ? <span className="ml-1.5 rounded-skin-chip px-1 py-px text-[10px] uppercase tracking-[0.05em] text-faint" style={{ background: 'var(--rp-bg-inset)' }}>personal</span> : null}
               </span>
-              <span className="truncate text-[9.5px] text-faint">{o.slug}</span>
-              <span className="tabular-nums text-muted">{o.memberCount} members</span>
-              <span className="tabular-nums text-muted">{o.clusterCount} clusters</span>
-              <span className="text-[9px] text-faint">{relTime(o.createdAt)}</span>
+              {/* Metadata wraps onto a second line below sm; stays inline at sm+ to preserve the desktop row. */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 sm:shrink-0 sm:gap-3">
+                <span className="truncate text-[10px] text-faint">{o.slug}</span>
+                <span className="tabular-nums text-muted">{o.memberCount} members</span>
+                <span className="tabular-nums text-muted">{o.clusterCount} clusters</span>
+                <span className="text-[10px] text-faint">{relTime(o.createdAt)}</span>
+              </div>
             </div>
           ))}
         </div>

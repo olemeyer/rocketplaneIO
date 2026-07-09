@@ -101,7 +101,7 @@ function LLMSetup({
     <div className="relative min-h-0 flex-1 overflow-y-auto rounded-skin border border-line bg-raised" style={{ boxShadow: 'var(--rp-rim)' }}>
       <div className="pointer-events-none absolute inset-x-0 top-0 h-28" aria-hidden style={{ background: 'radial-gradient(60% 100% at 50% 0%, color-mix(in oklab, var(--rp-accent) 12%, transparent), transparent 70%)' }} />
 
-      <div className="relative mx-auto max-w-[820px] px-5 py-8 sm:px-8">
+      <div className="relative mx-auto max-w-[820px] px-5 py-6 sm:px-8 sm:py-8 lg:max-w-[980px]">
         <div className="flex items-center gap-2.5">
           <span className="flex h-9 w-9 items-center justify-center rounded-skin-sm border" style={{ borderColor: 'color-mix(in oklab, var(--rp-accent) 40%, var(--rp-line-strong))', background: 'color-mix(in oklab, var(--rp-accent) 12%, transparent)', color: 'var(--rp-accent)' }}>
             <Sparkle size={16} />
@@ -128,8 +128,8 @@ function LLMSetup({
               >
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-[12px] font-semibold text-ink">{p.name}</span>
-                  {p.id === 'glm' ? <span className="rounded-skin-chip px-1 py-px font-mono text-[8.5px] uppercase tracking-[0.05em]" style={{ color: 'var(--rp-accent)', background: 'color-mix(in oklab, var(--rp-accent) 14%, transparent)' }}>value</span> : null}
-                  {p.local ? <span className="rounded-skin-chip bg-inset px-1 py-px font-mono text-[8.5px] uppercase tracking-[0.05em] text-muted">local</span> : null}
+                  {p.id === 'glm' ? <span className="rounded-skin-chip bg-inset px-1 py-px font-mono text-[10px] uppercase tracking-[0.05em] text-muted">value</span> : null}
+                  {p.local ? <span className="rounded-skin-chip bg-inset px-1 py-px font-mono text-[10px] uppercase tracking-[0.05em] text-muted">local</span> : null}
                 </div>
                 <span className="mt-1 font-mono text-[10px] leading-relaxed text-muted">{p.tagline}</span>
               </button>
@@ -139,7 +139,7 @@ function LLMSetup({
 
         {/* Konfig-Form */}
         <div className="mt-5 rounded-skin border border-line bg-inset p-4">
-          <p className="mb-3 font-mono text-[10.5px] leading-relaxed text-muted">{preset.note}</p>
+          <p className="mb-3 font-mono text-[10.5px] leading-relaxed text-mid">{preset.note}</p>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block sm:col-span-2">
               <span className="rp-micro !text-[10px]">endpoint (base URL)</span>
@@ -153,7 +153,7 @@ function LLMSetup({
               <span className="flex items-center justify-between">
                 <span className="rp-micro !text-[10px]">{preset.keyLabel}</span>
                 {preset.keyUrl ? (
-                  <a href={preset.keyUrl} target="_blank" rel="noreferrer" className="font-mono text-[9.5px] text-accent underline underline-offset-2 hover:text-accent-hover">get one ↗</a>
+                  <a href={preset.keyUrl} target="_blank" rel="noreferrer" className="font-mono text-[10px] text-mid underline underline-offset-2 hover:text-ink">get one ↗</a>
                 ) : null}
               </span>
               <input

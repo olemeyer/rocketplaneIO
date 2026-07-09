@@ -7,6 +7,7 @@ import { cn } from '@/lib/cn';
 import { OnlineDot } from '@/components/ui';
 import { Lockup } from '@/components/brand/logo';
 import { useScope } from './scope-context';
+import { OrgSwitcher } from './org-switcher';
 
 // ── Mobile-Nav-Zustand (geteilt zwischen Topbar-Hamburger und Drawer) ──
 const NavContext = createContext<{ open: boolean; setOpen: (v: boolean) => void }>({
@@ -312,6 +313,10 @@ export function MobileNav() {
         }}
       >
         <BrandHeader />
+        {/* Org switcher lives here on mobile (hidden from the compact top bar). */}
+        <div className="px-3 pb-1 pt-2">
+          <OrgSwitcher />
+        </div>
         <nav className="flex-1 overflow-y-auto px-2 py-3">
           <SidebarNav onNavigate={() => setOpen(false)} />
         </nav>
