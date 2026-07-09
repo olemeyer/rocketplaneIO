@@ -66,9 +66,13 @@ logs:
   # container logs (the single Deployment can only see its own node and does not
   # mount host logs).
   enabled: true
-  # -- Also mount /var/lib/docker/containers (only needed on the Docker runtime,
-  # e.g. minikube; containerd keeps the real files under /var/log/pods).
-  dockerContainers: false
+  # -- Also mount /var/lib/docker/containers, where /var/log/pods symlinks point
+  # on the Docker runtime (e.g. minikube's docker driver). On containerd the dir
+  # is created empty and unused (real files live under /var/log/pods), so it is
+  # safe to leave on everywhere — hence it defaults to true: logs "just work"
+  # without the caller knowing the node runtime. Set false for strict clusters
+  # that forbid the extra hostPath.
+  dockerContainers: true
   # -- Resources for each log-collector pod. Slim — it tails files and ships batches.
   resources:
     requests:
