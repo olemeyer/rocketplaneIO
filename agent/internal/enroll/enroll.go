@@ -44,27 +44,46 @@ const (
 )
 
 // Enroll POSTs the enroll request, retrying with backoff until it succeeds or
-// ctx is done. baseURL is the control-plane root (trailing slash tolerated).
-func Enroll(ctx context.Context, baseURL string, req Request) (*Response, error) {
-	url := strings.TrimRight(baseURL, "/") + "/api/agent/enroll"
+// ctx is done. baseURL is the configured control-plane root (trailing slash
+// tolerated). If baseURL is not reachable from the pod, Enroll auto-discovers a
+// reachable control-plane among the host aliases (see resolve.go) so a local
+// trial "just works". It returns the base URL that actually worked — the caller
+// MUST use it for all further calls (sync, actions), since it may differ from
+// the configured one.
+func Enroll(ctx context.Context, baseURL string, req Request) (*Response, string, error) {
+	candidates := candidateURLs(baseURL)
+	if len(candidates) > 1 {
+		log.Printf("enroll: control-plane candidates: %s", strings.Join(candidates, ", "))
+	}
 	client := &http.Client{Timeout: requestTimeout}
 	backoff := initialBackoff
 
 	for attempt := 1; ; attempt++ {
-		resp, err := doEnroll(ctx, client, url, req)
+		// Pick a reachable base via a fast /healthz probe (falls back to the
+		// configured URL if nothing answers yet — the control-plane may still be
+		// starting, so we keep retrying).
+		base := pickReachable(ctx, candidates)
+		if base == "" {
+			base = candidates[0]
+		}
+
+		resp, err := doEnroll(ctx, client, strings.TrimRight(base, "/")+"/api/agent/enroll", req)
 		if err == nil {
+			if base != baseURL {
+				log.Printf("enroll: reached control-plane at %s (configured %s was not reachable from the pod)", base, baseURL)
+			}
 			log.Printf("enroll: success (clusterId=%s)", resp.ClusterID)
-			return resp, nil
+			return resp, base, nil
 		}
 
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, "", ctx.Err()
 		}
 
-		log.Printf("enroll: attempt %d failed: %v — retrying in %s", attempt, err, backoff)
+		log.Printf("enroll: attempt %d failed (via %s): %v — retrying in %s", attempt, base, err, backoff)
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, "", ctx.Err()
 		case <-time.After(backoff):
 		}
 
