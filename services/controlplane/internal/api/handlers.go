@@ -26,6 +26,17 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "failed to load orgs")
 		return
 	}
+	// Ein API-Token ist auf EIN Org begrenzt — die volle Org-Liste des
+	// erstellenden Nutzers darf es nicht sehen (Cross-Org-Info-Leak).
+	if tp, ok := auth.TokenFrom(r.Context()); ok {
+		scoped := orgs[:0]
+		for _, o := range orgs {
+			if o.ID == tp.OrgID {
+				scoped = append(scoped, o)
+			}
+		}
+		orgs = scoped
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user":         user,
 		"orgs":         orgs,
