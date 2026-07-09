@@ -130,6 +130,11 @@ spec:
               value: "https://rocketplane.example.com" # ANPASSEN: URL, unter der euer Browser die UI erreicht
             - name: RP_AGENT_CONTROLPLANE_URL
               value: "http://controlplane.rocketplane.svc.cluster.local:8090"
+            # OTLP target Beyla ships to in the observed cluster. In this all-in-one
+            # deployment the collector is a sibling Service, so set it explicitly
+            # (the host-derived default would point at the control plane instead).
+            - name: RP_AGENT_OTLP_ENDPOINT
+              value: "http://otel-collector:4318"
             - name: CLICKHOUSE_URL
               value: "http://clickhouse:8123"
             - name: CLICKHOUSE_USER

@@ -73,6 +73,10 @@ services:
       RP_LISTEN: :8090
       RP_PUBLIC_URL: ${RP_PUBLIC_URL:-http://localhost:8090}
       RP_AGENT_CONTROLPLANE_URL: ${RP_AGENT_CONTROLPLANE_URL:-}
+      # Empty → derived from RP_AGENT_CONTROLPLANE_URL host on port 4318 (the
+      # collector published above), which is exactly right for this co-located
+      # compose stack. Override only if your collector lives elsewhere.
+      RP_AGENT_OTLP_ENDPOINT: ${RP_AGENT_OTLP_ENDPOINT:-}
       RP_SESSION_SECRET: ${RP_SESSION_SECRET:?set a long random RP_SESSION_SECRET}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}

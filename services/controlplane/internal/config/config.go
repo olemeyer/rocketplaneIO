@@ -3,6 +3,7 @@
 package config
 
 import (
+	"net/url"
 	"os"
 	"strings"
 )
@@ -26,6 +27,8 @@ type Config struct {
 	AgentChart           string // RP_AGENT_CHART: OCI-Ref des Helm-Charts
 	AgentControlPlaneURL string // RP_AGENT_CONTROLPLANE_URL: URL, die der Agent-POD nutzt
 	// (≠ PublicURL: aus dem Cluster ist localhost nicht erreichbar)
+	AgentOTLPEndpoint string // RP_AGENT_OTLP_ENDPOINT: OTLP-Ziel für Beyla im Ziel-Cluster
+	// (leer = aus AgentControlPlaneURL abgeleitet: gleicher Host, :4318)
 	AgentFlows bool // RP_AGENT_FLOWS: DaemonSet + hostNetwork + NET_ADMIN (conntrack-Flows)
 
 	// ── Telemetrie-Store (ClickHouse) ──
@@ -52,6 +55,7 @@ func Load() *Config {
 		AgentChart:         env("RP_AGENT_CHART", "oci://ghcr.io/olemeyer/rocketplaneio/charts/rocketplane-agent"),
 		// Fällt auf PublicURL zurück, wenn nicht explizit gesetzt.
 		AgentControlPlaneURL: strings.TrimRight(env("RP_AGENT_CONTROLPLANE_URL", env("RP_PUBLIC_URL", "http://localhost:8090")), "/"),
+		AgentOTLPEndpoint:    strings.TrimRight(env("RP_AGENT_OTLP_ENDPOINT", ""), "/"),
 		AgentFlows:           env("RP_AGENT_FLOWS", "false") == "true",
 
 		ClickHouseURL:      env("CLICKHOUSE_URL", "http://localhost:8123"),
@@ -63,6 +67,28 @@ func Load() *Config {
 
 // IsDev reports whether the Control-Plane runs in dev mode.
 func (c *Config) IsDev() bool { return c.Env == "dev" }
+
+// AgentOTLP returns the OTLP endpoint Beyla exports to inside an enrolled
+// cluster — baked into every generated install command so copy-paste works in
+// every topology. Explicit RP_AGENT_OTLP_ENDPOINT wins (set it to the in-cluster
+// collector Service, e.g. http://otel-collector:4318, for an all-in-one prod
+// cluster, or to a public collector for a hosted control plane). Otherwise it is
+// derived from the agent-facing control-plane host with port 4318 — correct for
+// the common co-located deployment (docker-compose self-host) where the collector
+// sits next to the control plane on the same host.
+func (c *Config) AgentOTLP() string {
+	if c.AgentOTLPEndpoint != "" {
+		return c.AgentOTLPEndpoint
+	}
+	if u, err := url.Parse(c.AgentControlPlaneURL); err == nil && u.Hostname() != "" {
+		scheme := u.Scheme
+		if scheme == "" {
+			scheme = "http"
+		}
+		return scheme + "://" + u.Hostname() + ":4318"
+	}
+	return "http://otel-collector:4318"
+}
 
 // GoogleConfigured reports whether Google OIDC credentials are present.
 // When false (and IsDev), the dev-login bypass is enabled.

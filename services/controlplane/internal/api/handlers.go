@@ -358,19 +358,18 @@ func (s *Server) kubectlInstallCommand(token, clusterName string) string {
 	return fmt.Sprintf("kubectl apply -f %q", s.cfg.PublicURL+"/api/agent/manifest?"+q.Encode())
 }
 
-// helmInstallCommand: the Helm route via the published OCI chart.
-//
-// --devel is mandatory: the chart is published (like the product) as a
-// pre-release (e.g. 0.1.0-alpha). Without --devel, `helm install` ignores
-// pre-releases during "latest" resolution and aborts with "could not locate a
-// version matching provided version string" — the generated command would then
-// fail for every user. --devel allows pre-releases to count as latest.
+// helmInstallCommand: the Helm route via the published OCI chart. The chart ships
+// with a stable semver (e.g. 0.2.1) so `helm install` resolves it without --devel.
+// controlplane.url and beyla.otlpEndpoint are both baked in from THIS control
+// plane's config, so the copy-paste command works in every topology — self-hosted
+// compose (host IP), all-in-one prod cluster (Service names) or a hosted control
+// plane (public URLs) — with no manual edits.
 func (s *Server) helmInstallCommand(token, clusterName string) string {
 	return fmt.Sprintf(
-		"helm install rocketplane-agent %s --devel "+
+		"helm install rocketplane-agent %s "+
 			"--namespace rocketplane --create-namespace "+
-			"--set controlplane.url=%s --set enrollToken=%s --set clusterName=%s",
-		s.cfg.AgentChart, s.cfg.AgentControlPlaneURL, token, clusterName)
+			"--set controlplane.url=%s --set beyla.otlpEndpoint=%s --set enrollToken=%s --set clusterName=%s",
+		s.cfg.AgentChart, s.cfg.AgentControlPlaneURL, s.cfg.AgentOTLP(), token, clusterName)
 }
 
 // installCommands returns BOTH routes — the UI offers kubectl (YAML apply) and

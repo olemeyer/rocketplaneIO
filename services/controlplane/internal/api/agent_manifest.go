@@ -20,6 +20,7 @@ import (
 type manifestData struct {
 	Image           string
 	ControlPlaneURL string
+	OTLPEndpoint    string
 	EnrollToken     string
 	ClusterName     string
 	AgentVersion    string
@@ -435,7 +436,7 @@ spec:
             - name: BEYLA_KUBE_CLUSTER_NAME
               value: {{ y .ClusterName }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "http://otel-collector:4318"
+              value: {{ y .OTLPEndpoint }}
             - name: OTEL_EXPORTER_OTLP_PROTOCOL
               value: "http/protobuf"
             - name: BEYLA_METRICS_INTERVAL
@@ -465,6 +466,7 @@ func (s *Server) handleAgentManifest(w http.ResponseWriter, r *http.Request) {
 	data := manifestData{
 		Image:           s.cfg.AgentImage,
 		ControlPlaneURL: s.cfg.AgentControlPlaneURL,
+		OTLPEndpoint:    s.cfg.AgentOTLP(),
 		EnrollToken:     token,
 		ClusterName:     strings.TrimSpace(r.URL.Query().Get("name")),
 		AgentVersion:    agentVersion,
