@@ -276,8 +276,47 @@ type Action struct {
 	// before snapshot) — audit trail + restore_resource basis.
 	Snapshot        json.RawMessage `json:"snapshot,omitempty"`
 	CancelRequested bool            `json:"cancelRequested"`
-	CreatedAt       time.Time       `json:"createdAt"`
-	UpdatedAt       time.Time       `json:"updatedAt"`
+	// Safe Actions v2 grouping: every run belongs to exactly one ActionGroup
+	// (a lone action is a group of one). GroupSeq orders the run within the
+	// group's trace and drives reverse-order (LIFO) group revert.
+	GroupID             *uuid.UUID `json:"groupId,omitempty"`
+	GroupSeq            int        `json:"groupSeq"`
+	InvestigationNodeID *uuid.UUID `json:"investigationNodeId,omitempty"`
+	CreatedAt           time.Time  `json:"createdAt"`
+	UpdatedAt           time.Time  `json:"updatedAt"`
+}
+
+// ActionGroup is the "belong together" + revert-together unit for Safe Actions
+// v2: one per Copilot turn / Investigation / alert remediation / manual batch,
+// or a group-of-one for a lone action. The Runs view renders a group as one
+// trace of its member runs.
+type ActionGroup struct {
+	ID              uuid.UUID  `json:"id"`
+	ClusterID       uuid.UUID  `json:"clusterId"`
+	OrgID           uuid.UUID  `json:"orgId"`
+	Origin          string     `json:"origin"`
+	ChatID          *uuid.UUID `json:"chatId,omitempty"`
+	InvestigationID *uuid.UUID `json:"investigationId,omitempty"`
+	IncidentID      *uuid.UUID `json:"incidentId,omitempty"`
+	TurnID          string     `json:"turnId,omitempty"`
+	Title           string     `json:"title"`
+	RequestedBy     string     `json:"requestedBy"`
+	Atomicity       string     `json:"atomicity"`
+	OnFailure       string     `json:"onFailure"`
+	Status          string     `json:"status"`
+	RevertStatus    string     `json:"revertStatus"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
+	Actions         []Action   `json:"actions,omitempty"` // ordered member runs (by group_seq)
+}
+
+// ActionVerdictPayload back-references the action run a Copilot investigation
+// node spawned (bidirectional group ↔ investigation link), typed + validated.
+type ActionVerdictPayload struct {
+	ActionID uuid.UUID `json:"actionId"`
+	GroupID  uuid.UUID `json:"groupId"`
+	Kind     string    `json:"kind"`
+	Status   string    `json:"status,omitempty"`
 }
 
 // WorkloadPod is a pod row for the workload panel (incl. node).

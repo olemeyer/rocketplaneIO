@@ -136,6 +136,15 @@ func (s *Server) awaitAndRunAction(ctx context.Context, runID, callID, scope, or
 		"targetName":      strOf(input["targetName"]),
 		"params":          input["params"],
 	}
+	// Safe Actions v2 grouping: forward the per-turn linkage the master stamped
+	// into the input so the create handler opens/appends ONE group per turn and
+	// back-links the run to its investigation node.
+	if v := strOf(input["_grpChat"]); v != "" {
+		createBody["chatId"] = v
+		createBody["turnId"] = strOf(input["_grpTurn"])
+		createBody["investigationId"] = strOf(input["_grpInv"])
+		createBody["investigationNodeId"] = strOf(input["_grpNode"])
+	}
 	if strOf(input["kind"]) == "script" {
 		// Ad-hoc-Script (propose_script): Source + Args gehen als eigene Felder
 		// an den Create-Endpoint, der sie validiert und snapshottet.

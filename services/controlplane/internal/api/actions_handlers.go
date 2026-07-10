@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/auth"
+	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/model"
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/store"
 )
 
@@ -474,6 +475,16 @@ type createActionReq struct {
 	Title          string            `json:"title"`
 	TimeoutSeconds int               `json:"timeoutSeconds"`
 	ScriptArgs     map[string]string `json:"scriptArgs"`
+	// Safe Actions v2 grouping (optional). The Copilot passes chatId + turnId so
+	// all actions from one turn land in ONE group (a trace); investigationNodeId
+	// back-links the run to the Investigation node that spawned it. A caller may
+	// instead pass an explicit groupId (manual batch). When none are set, the
+	// action gets its own group-of-one.
+	GroupID             string `json:"groupId"`
+	ChatID              string `json:"chatId"`
+	InvestigationID     string `json:"investigationId"`
+	TurnID              string `json:"turnId"`
+	InvestigationNodeID string `json:"investigationNodeId"`
 }
 
 // handleCreateAction — POST /api/orgs/{org}/clusters/{cluster}/actions
@@ -604,7 +615,45 @@ func (s *Server) handleCreateAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, _ := auth.UserFrom(r.Context())
-	a, err := s.store.CreateAction(r.Context(), clusterID, user.ID, req.Kind, req.TargetNamespace, req.TargetKind, req.TargetName, req.Params)
+
+	// Safe Actions v2: resolve the group this run belongs to.
+	//   copilot turn (chatId+turnId) → one shared group per turn (idempotent),
+	//   explicit groupId            → append to that group,
+	//   neither                     → group-of-one (via CreateAction).
+	sourceKind := "builtin"
+	if req.Kind == "script" {
+		sourceKind = "script"
+	}
+	var invNodeID *uuid.UUID
+	if id, err := uuid.Parse(req.InvestigationNodeID); err == nil {
+		invNodeID = &id
+	}
+	var a *model.Action
+	var groupID *uuid.UUID
+	if chatID, err := uuid.Parse(req.ChatID); err == nil && req.TurnID != "" {
+		var invID *uuid.UUID
+		if id, e := uuid.Parse(req.InvestigationID); e == nil {
+			invID = &id
+		}
+		title := req.Kind
+		if req.TargetName != "" {
+			title = req.Kind + " " + req.TargetName
+		}
+		g, gerr := s.store.GetOrCreateTurnGroup(r.Context(), clusterID, user.ID, &chatID, invID, req.TurnID, title)
+		if gerr != nil {
+			writeErr(w, http.StatusInternalServerError, "failed to open action group")
+			return
+		}
+		groupID = &g.ID
+	} else if id, err := uuid.Parse(req.GroupID); err == nil {
+		groupID = &id
+	}
+	var err error
+	if groupID != nil {
+		a, err = s.store.AppendAction(r.Context(), *groupID, invNodeID, clusterID, user.ID, req.Kind, req.TargetNamespace, req.TargetKind, req.TargetName, sourceKind, req.Params)
+	} else {
+		a, err = s.store.CreateAction(r.Context(), clusterID, user.ID, req.Kind, req.TargetNamespace, req.TargetKind, req.TargetName, req.Params)
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "failed to create action")
 		return

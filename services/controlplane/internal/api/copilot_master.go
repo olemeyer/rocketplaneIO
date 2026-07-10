@@ -329,6 +329,15 @@ func (s *Server) runMasterLoop(ctx context.Context, runID string, userID uuid.UU
 				ab["nodeId"] = node.ID.String()
 				emit("node_started", map[string]any{"nodeId": node.ID.String(), "parentId": idStr(node.ParentID), "seq": node.Seq, "kind": "action", "hypothesis": node.Hypothesis, "task": json.RawMessage(task)})
 				emit("action", ab) // Loop hält an bis zur Freigabe (Stream bleibt offen).
+				// Safe Actions v2 grouping: every action from THIS turn lands in one
+				// group (a trace), back-linked to its investigation node. The create
+				// handler reads these to open/append the per-turn ActionGroup.
+				actionInput["_grpChat"] = chatID.String()
+				actionInput["_grpTurn"] = runID
+				actionInput["_grpNode"] = node.ID.String()
+				if graph.ok {
+					actionInput["_grpInv"] = graph.invID.String()
+				}
 				content := s.awaitAndRunAction(ctx, runID, c.ID, req.Scope, org, cluster, cookie, actionInput, emit)
 				verdict, _ := json.Marshal(map[string]any{"result": content})
 				status := "done"
