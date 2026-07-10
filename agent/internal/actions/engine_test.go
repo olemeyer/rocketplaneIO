@@ -56,10 +56,11 @@ type stubCP struct {
 }
 
 type reportBody struct {
-	Status   string          `json:"status"`
-	Result   string          `json:"result"`
-	Progress string          `json:"progress"`
-	Revert   json.RawMessage `json:"revert"`
+	Status    string          `json:"status"`
+	Result    string          `json:"result"`
+	Progress  string          `json:"progress"`
+	Revert    json.RawMessage `json:"revert"`
+	Snapshots json.RawMessage `json:"snapshots"`
 }
 
 func newStubCP() *stubCP {

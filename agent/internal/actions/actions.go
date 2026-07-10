@@ -198,6 +198,26 @@ func (r *Runner) poll(ctx context.Context) {
 
 // execute fährt die Step-Kette einer Aktion und meldet den Ablauf live.
 func (r *Runner) execute(ctx context.Context, a Action) {
+	// snapshot substrate: a Starlark action that snapshots what it touches; the
+	// engine reports captures durably + auto-rolls-back on failure. Generic.
+	if a.Kind == "snapshot_script" {
+		r.executeSnapshotScript(ctx, a)
+		return
+	}
+	// snapshot substrate: replay a durable snapshot list (reaper crash-restore or
+	// manual revert). Generic — no per-kind logic.
+	if a.Kind == "snapshot_restore" {
+		r.executeSnapshotRestore(ctx, a)
+		return
+	}
+	// snapshot substrate: dispatch a built-in kind to its embedded .star script
+	// (flag-gated per rollout; the released plan()/revert.go path is the default).
+	if actionsSnapshotDispatch {
+		if src, ok := builtinSnapshotScript(a.Kind); ok {
+			r.runSnapshotAction(ctx, a, src, snapshotArgs(a))
+			return
+		}
+	}
 	// Custom-Workflows (Starlark) erzeugen ihre Steps dynamisch.
 	if a.Kind == "script" {
 		r.executeScript(ctx, a)
