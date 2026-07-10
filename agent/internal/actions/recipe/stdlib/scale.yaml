@@ -1,0 +1,30 @@
+# The built-in `scale` recipe as an Effect Manifest. It declares — checkably, up
+# front — that scaling is reversible, how it compensates (the built-in inverse:
+# scale back to the captured replica count), its typed param, and its pipeline.
+# The steps mirror the audited pipeline the agent runs; a drift test keeps them
+# honest. A user fork is a copy of this file with an org_id.
+recipe: scale
+title: Scale a workload
+targets: [Deployment, StatefulSet]
+
+# Reversible — but parameter-aware: scaling to zero takes the workload down.
+reversibility: full
+compensation: builtin
+risk:
+  base: reversible
+  when: "params.replicas == 0"
+  then: destructive
+
+params:
+  - name: replicas
+    type: int
+    min: 0
+    max: 50
+    required: true
+
+# trigger → observe converge → pods settled on POD level → owned stability verify.
+steps:
+  - { name: trigger, kind: mutate }
+  - { name: scale, kind: observe }
+  - { name: pods settled, kind: observe }
+  - { name: verify, kind: verify }
