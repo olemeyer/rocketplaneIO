@@ -335,6 +335,24 @@ export type ActionKind =
   | 'evict_pod'
   | 'cleanup_jobs'
   | 'drain_preview'
+  // Batch 2/3 — professional read + generic mutation coverage
+  | 'get_resource'
+  | 'describe_resource'
+  | 'get_secret'
+  | 'helm_releases'
+  | 'exec_readonly'
+  | 'patch_secret'
+  | 'create_configmap'
+  | 'delete_configmap'
+  | 'pdb_set'
+  | 'patch_resource'
+  | 'restore_resource'
+  | 'pvc_expand'
+  | 'delete_job'
+  | 'pod_logs'
+  | 'list_events'
+  | 'net_probe'
+  | 'run_debug_pod'
   | 'script';
 export type ActionStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
