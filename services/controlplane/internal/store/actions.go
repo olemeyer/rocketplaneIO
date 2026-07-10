@@ -174,19 +174,25 @@ func (s *Store) ClaimPendingActions(ctx context.Context, clusterID uuid.UUID, li
 	return out, rows.Err()
 }
 
-// UpdateActionProgress aktualisiert die Live-Zeile + Steps einer laufenden
-// Aktion und liefert zurück, ob der User inzwischen CANCEL angefordert hat —
-// der outbound-only-Rückkanal an den Agenten.
-func (s *Store) UpdateActionProgress(ctx context.Context, clusterID, actionID uuid.UUID, progress string, steps json.RawMessage) (bool, error) {
+// UpdateActionProgress records a live progress tick. In v4 a running tick may
+// also carry the durable compensation: the agent reports the inverse the instant
+// a mutation commits (not only at completion), so a mid-action agent crash still
+// leaves a revertible row for ReapCrashedAgents. revert is COALESCEd — once set,
+// a later tick without one does not erase it.
+func (s *Store) UpdateActionProgress(ctx context.Context, clusterID, actionID uuid.UUID, progress string, steps, revert json.RawMessage) (bool, error) {
 	if len(steps) == 0 {
 		steps = json.RawMessage("[]")
 	}
+	var rev any
+	if len(revert) > 0 {
+		rev = revert
+	}
 	var cancel bool
 	err := s.pool.QueryRow(ctx, `
-		UPDATE cluster_actions SET progress = $3, steps = $4, updated_at = now()
+		UPDATE cluster_actions SET progress = $3, steps = $4, revert = COALESCE($5, revert), updated_at = now()
 		WHERE id = $2 AND cluster_id = $1 AND status = 'running'
 		RETURNING cancel_requested`,
-		clusterID, actionID, progress, steps).Scan(&cancel)
+		clusterID, actionID, progress, steps, rev).Scan(&cancel)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, ErrNotFound
@@ -247,6 +253,13 @@ func (s *Store) ForceCancel(ctx context.Context, clusterID, actionID uuid.UUID) 
 //     würde es unerwartet ausgeführt, wenn der Agent irgendwann zurückkommt.
 func (s *Store) ReapActions(ctx context.Context) (int64, error) {
 	var total int64
+	// v4: a run whose agent DIED mid-mutation. Because the inverse was persisted
+	// at commit, we finish the job for the operator — see ReapCrashedAgents.
+	crashed, err := s.ReapCrashedAgents(ctx)
+	if err != nil {
+		return 0, err
+	}
+	total += crashed
 	t1, err := s.pool.Exec(ctx, `
 		UPDATE cluster_actions SET status='cancelled',
 			result='cancel forced — the agent did not confirm within 90s (unreachable?)',
@@ -275,6 +288,100 @@ func (s *Store) ReapActions(ctx context.Context) (int64, error) {
 	}
 	total += t3.RowsAffected()
 	return total, nil
+}
+
+// ReapCrashedAgents handles what the stale-reaper cannot: a run that was
+// MID-MUTATION when its agent died. The 8-minute stale clause would only mark it
+// failed and leave the half-applied change standing. But in v4 the mutation's
+// inverse is persisted the instant it is armed (the durable revert), so we can
+// finish the job: mark the dead run crashed and enqueue its inverse as a fresh
+// pending action in the SAME group, which the restarted (or a peer) agent claims
+// and applies. The CP never touches the cluster — it only queues work
+// (outbound-only).
+//
+// The crash signal is action-level, not cluster-level: a live agent reports
+// progress every ~2s throughout observe/verify, so a `running` action that has
+// gone silent for >90s means THAT run's goroutine is dead — even if the agent
+// pod has already been restarted (k8s restarts it in seconds and its heartbeat
+// resumes, so a cluster-level signal would never fire on the common case). The
+// >90s window is far longer than any progress gap, so a mere GC pause is not
+// reaped; and because the run already produced a durable revert, it had reached
+// the point where a compensation is meaningful. A late report from a resurrected
+// agent hits status!=running and is discarded, so there is no double-apply.
+func (s *Store) ReapCrashedAgents(ctx context.Context) (int64, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT a.id, a.cluster_id, a.group_id, a.requested_by,
+		       a.target_namespace, a.revert
+		FROM cluster_actions a
+		WHERE a.status = 'running'
+		  AND a.revert IS NOT NULL
+		  AND a.updated_at < now() - interval '90 seconds'`)
+	if err != nil {
+		return 0, fmt.Errorf("scan crashed runs: %w", err)
+	}
+	type crashed struct {
+		id, clusterID, groupID uuid.UUID
+		requestedBy            *uuid.UUID
+		ns                     string
+		revert                 []byte
+	}
+	var list []crashed
+	for rows.Next() {
+		var c crashed
+		if err := rows.Scan(&c.id, &c.clusterID, &c.groupID, &c.requestedBy, &c.ns, &c.revert); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan crashed run: %w", err)
+		}
+		list = append(list, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	var n int64
+	for _, c := range list {
+		// Claim the crash transition atomically — if another CP replica or the
+		// agent's own late report got here first, status is no longer running
+		// and we skip (no double-enqueue).
+		tag, err := s.pool.Exec(ctx, `
+			UPDATE cluster_actions SET status='failed',
+				result='agent crashed mid-action — reverting from the durable compensation',
+				progress='', updated_at=now()
+			WHERE id=$1 AND status='running'`, c.id)
+		if err != nil {
+			return n, fmt.Errorf("mark crashed: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			continue
+		}
+		// revert_status is a GROUP-level field (0028) — flag the group so the UI
+		// shows the trace is being reverted.
+		_, _ = s.pool.Exec(ctx, `UPDATE action_groups SET revert_status='reverting' WHERE id=$1`, c.groupID)
+		var spec struct {
+			Kind            string          `json:"kind"`
+			TargetNamespace string          `json:"targetNamespace"`
+			TargetKind      string          `json:"targetKind"`
+			TargetName      string          `json:"targetName"`
+			Params          json.RawMessage `json:"params"`
+		}
+		if err := json.Unmarshal(c.revert, &spec); err != nil || spec.Kind == "" {
+			continue // no usable inverse — the run is marked failed, nothing to enqueue
+		}
+		ns := spec.TargetNamespace
+		if ns == "" {
+			ns = c.ns
+		}
+		if c.requestedBy == nil {
+			continue // no owner to attribute the inverse to — marked failed, not auto-reverted
+		}
+		if _, err := s.AppendAction(ctx, c.groupID, nil, c.clusterID, *c.requestedBy,
+			spec.Kind, ns, spec.TargetKind, spec.TargetName, "builtin", spec.Params); err != nil {
+			return n, fmt.Errorf("enqueue inverse: %w", err)
+		}
+		n++
+	}
+	return n, nil
 }
 
 // CompleteAction setzt das Ergebnis einer running-Aktion (Agent-Callback).

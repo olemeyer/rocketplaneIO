@@ -779,7 +779,10 @@ func (s *Server) handleAgentActionResult(w http.ResponseWriter, r *http.Request)
 	case "running":
 		// Zwischenstand — die Antwort trägt den Cancel-Wunsch zurück zum
 		// Agenten (outbound-only-Rückkanal).
-		cancel, err2 = s.store.UpdateActionProgress(r.Context(), clusterID, actionID, req.Progress, req.Steps)
+		// v4: a running tick may carry the durable compensation (reported the
+		// instant a mutation commits), so a mid-action crash leaves a revertible
+		// row for ReapCrashedAgents.
+		cancel, err2 = s.store.UpdateActionProgress(r.Context(), clusterID, actionID, req.Progress, req.Steps, req.Revert)
 	case "succeeded", "failed", "cancelled":
 		err2 = s.store.CompleteAction(r.Context(), clusterID, actionID, req.Status, req.Result, req.Steps, req.Revert)
 		if err2 == nil && len(req.Snapshot) > 0 {
