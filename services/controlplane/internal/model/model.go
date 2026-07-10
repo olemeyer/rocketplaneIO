@@ -319,6 +319,40 @@ type ActionVerdictPayload struct {
 	Status   string    `json:"status,omitempty"`
 }
 
+// ActionStep is a durable, timestamped step of a run (Safe Actions v2) — a span
+// on the group's trace. kind = trigger|observe|verify|mutate|read|effect|compensate;
+// effectClass = observe|reversible|irreversible|external.
+type ActionStep struct {
+	ActionID    uuid.UUID       `json:"actionId"`
+	GroupID     uuid.UUID       `json:"groupId"`
+	Seq         int             `json:"seq"`
+	ParentSeq   *int            `json:"parentSeq,omitempty"`
+	Name        string          `json:"name"`
+	Kind        string          `json:"kind"`
+	EffectClass string          `json:"effectClass"`
+	Status      string          `json:"status"`
+	Detail      string          `json:"detail,omitempty"`
+	Structured  json.RawMessage `json:"structured,omitempty"`
+	ErrorCode   string          `json:"errorCode,omitempty"`
+	StartedAt   *time.Time      `json:"startedAt,omitempty"`
+	EndedAt     *time.Time      `json:"endedAt,omitempty"`
+}
+
+// ActionEvent is one entry on the append-only live-step spine. Seq is globally
+// monotonic and drives SSE resume (?from=<lastSeq>).
+type ActionEvent struct {
+	Seq       int64           `json:"seq"`
+	ClusterID uuid.UUID       `json:"clusterId"`
+	GroupID   uuid.UUID       `json:"groupId"`
+	ActionID  uuid.UUID       `json:"actionId"`
+	StepSeq   *int            `json:"stepSeq,omitempty"`
+	Type      string          `json:"type"`
+	Status    string          `json:"status,omitempty"`
+	Detail    string          `json:"detail,omitempty"`
+	Payload   json.RawMessage `json:"payload,omitempty"`
+	At        time.Time       `json:"at"`
+}
+
 // WorkloadPod is a pod row for the workload panel (incl. node).
 // Phase additionally knows "Terminating" (pod is shutting down); FirstSeenAt lets
 // the UI mark fresh pods ("new").
