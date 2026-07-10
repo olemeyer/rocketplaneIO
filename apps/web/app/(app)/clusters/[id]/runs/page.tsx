@@ -352,26 +352,59 @@ export default function RunsPage() {
           ) : filtered.length === 0 ? (
             <div className="flex h-24 items-center justify-center font-mono text-[11px] text-faint">no runs match</div>
           ) : (
-            filtered.map((a) => (
-              <RunRow
-                key={a.id}
-                a={a}
-                open={open.has(a.id)}
-                onToggle={() => toggle(a.id)}
-                onCancel={(id) => { if (orgId) void cancelAction(orgId, clusterId, id).catch(() => {}); }}
-                onForceCancel={(id) => { if (orgId) void cancelAction(orgId, clusterId, id, true).catch(() => {}); }}
-                onRevert={(run) => {
-                  if (!orgId || !run.revert) return;
-                  void createAction(orgId, clusterId, {
-                    kind: run.revert.kind as ClusterAction['kind'],
-                    targetNamespace: run.revert.targetNamespace,
-                    targetKind: run.revert.targetKind,
-                    targetName: run.revert.targetName,
-                    params: run.revert.params ?? {},
-                  }).catch(() => {});
-                }}
-              />
-            ))
+            (() => {
+              // Safe Actions v2: render actions that were triggered together (one
+              // Copilot turn / manual batch) as a single grouped TRACE. A lone
+              // action (group of one) renders as a plain row, exactly as before.
+              const renderRow = (a: ClusterAction) => (
+                <RunRow
+                  key={a.id}
+                  a={a}
+                  open={open.has(a.id)}
+                  onToggle={() => toggle(a.id)}
+                  onCancel={(id) => { if (orgId) void cancelAction(orgId, clusterId, id).catch(() => {}); }}
+                  onForceCancel={(id) => { if (orgId) void cancelAction(orgId, clusterId, id, true).catch(() => {}); }}
+                  onRevert={(run) => {
+                    if (!orgId || !run.revert) return;
+                    void createAction(orgId, clusterId, {
+                      kind: run.revert.kind as ClusterAction['kind'],
+                      targetNamespace: run.revert.targetNamespace,
+                      targetKind: run.revert.targetKind,
+                      targetName: run.revert.targetName,
+                      params: run.revert.params ?? {},
+                    }).catch(() => {});
+                  }}
+                />
+              );
+              const order: string[] = [];
+              const byGroup = new Map<string, ClusterAction[]>();
+              for (const a of filtered) {
+                const g = a.groupId ?? a.id;
+                if (!byGroup.has(g)) { byGroup.set(g, []); order.push(g); }
+                byGroup.get(g)!.push(a);
+              }
+              return order.map((g) => {
+                const members = byGroup.get(g)!.slice().sort((x, y) => (x.groupSeq ?? 0) - (y.groupSeq ?? 0));
+                if (members.length <= 1) return members[0] ? renderRow(members[0]) : null;
+                const ok = members.filter((m) => m.status === 'succeeded').length;
+                const bad = members.filter((m) => m.status === 'failed' || m.status === 'cancelled').length;
+                return (
+                  <div key={g} className="rounded-skin-sm border border-line bg-raised/40">
+                    <div className="flex items-center gap-2 border-b border-line px-2.5 py-1.5">
+                      <span className="h-3 w-[2px] rounded-full bg-accent" />
+                      <span className="rp-micro text-muted">TRACE · {members.length} ACTIONS</span>
+                      <span className="ml-auto font-mono text-[10px] tabular-nums text-faint">
+                        {ok > 0 && <span className="text-[--rp-tone-green-fg]">{ok}✓</span>}
+                        {bad > 0 && <span className="ml-1.5 text-[--rp-tone-red-fg]">▲{bad}</span>}
+                      </span>
+                    </div>
+                    <div className="space-y-1.5 border-l-2 border-line/60 p-1.5 pl-2.5">
+                      {members.map(renderRow)}
+                    </div>
+                  </div>
+                );
+              });
+            })()
           )}
         </div>
       </div>

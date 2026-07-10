@@ -359,6 +359,11 @@ export interface ClusterAction {
   snapshot?: Record<string, unknown>;
   /** User requested cancellation; engine rolls back → cancelled. */
   cancelRequested: boolean;
+  /** Safe Actions v2 grouping: the ActionGroup this run belongs to (a lone action
+   *  is a group of one). groupSeq orders the run within the group's trace. */
+  groupId?: string;
+  groupSeq?: number;
+  investigationNodeId?: string;
   createdAt: string;
   updatedAt: string;
 }
