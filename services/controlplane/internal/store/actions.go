@@ -260,6 +260,12 @@ func (s *Store) ReapActions(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	total += crashed
+	// snapshot substrate: a run whose durable undo is the ordered snapshot list.
+	snapCrashed, err := s.ReapCrashedSnapshotRuns(ctx)
+	if err != nil {
+		return 0, err
+	}
+	total += snapCrashed
 	t1, err := s.pool.Exec(ctx, `
 		UPDATE cluster_actions SET status='cancelled',
 			result='cancel forced — the agent did not confirm within 90s (unreachable?)',

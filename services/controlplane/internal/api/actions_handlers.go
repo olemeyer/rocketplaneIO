@@ -753,6 +753,10 @@ func (s *Server) handleAgentActionResult(w http.ResponseWriter, r *http.Request)
 		Revert json.RawMessage `json:"revert"`
 		// Snapshot: das VOR der Mutation gestrippte Zielobjekt (generisch).
 		Snapshot json.RawMessage `json:"snapshot"`
+		// Snapshots: snapshot substrate — a batch of capture entries to APPEND to
+		// the run's ordered durable snapshot list (reported the instant each
+		// mutation commits, so a crash mid-run leaves a fully-restorable list).
+		Snapshots json.RawMessage `json:"snapshots"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -783,6 +787,11 @@ func (s *Server) handleAgentActionResult(w http.ResponseWriter, r *http.Request)
 		// instant a mutation commits), so a mid-action crash leaves a revertible
 		// row for ReapCrashedAgents.
 		cancel, err2 = s.store.UpdateActionProgress(r.Context(), clusterID, actionID, req.Progress, req.Steps, req.Revert)
+		// snapshot substrate: append any newly-committed captures to the durable
+		// ordered list so a crash mid-run is fully restorable.
+		if err2 == nil && len(req.Snapshots) > 0 {
+			_ = s.store.AppendActionSnapshots(r.Context(), clusterID, actionID, req.Snapshots)
+		}
 	case "succeeded", "failed", "cancelled":
 		err2 = s.store.CompleteAction(r.Context(), clusterID, actionID, req.Status, req.Result, req.Steps, req.Revert)
 		if err2 == nil && len(req.Snapshot) > 0 {
