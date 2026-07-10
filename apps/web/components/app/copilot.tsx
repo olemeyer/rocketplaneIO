@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useScope } from './scope-context';
 import { ToolResultView } from './copilot-panels';
+import { StepTimeline, normalizeSteps } from '@/components/actions/step-timeline';
 import { copilotStore, GREETING, type Item, type Block, type Activity, type ChatSummary } from './copilot-store';
 import { APPROVAL_MODES, LEVEL_META, RISK_LEVELS, actionCategoryOf, levelColor, loadApprovalPolicy, saveApprovalPolicy, type ApprovalMode, type ApprovalPolicy, type RiskLevel } from '@/lib/approval';
 import type { LLMConfig } from '@/lib/llm';
@@ -765,6 +766,27 @@ function ActionCard({ act, selected, onOpen, onDecide }: { act: Activity; select
           {`${act.kind} ${act.args?.targetKind ?? ''}/${act.args?.targetName ?? act.target}${paramStr ? ' ' + paramStr : ''}`}
         </code>
       </div>
+      {/* Live-TIMELINE inline im Chat — dieselbe kanonische Trace wie in Runs. */}
+      {(() => {
+        const tl = normalizeSteps(act.steps);
+        const running = act.status === 'running' || act.status === 'starting';
+        if (tl.length === 0) return null;
+        const ok = tl.filter((s) => s.status === 'ok').length;
+        const ratio = tl.length ? ok / tl.length : 0.08;
+        return (
+          <div className="border-t border-line px-3 py-2 font-mono text-[10.5px]">
+            {running ? (
+              <div className="mb-2 h-[3px] w-full overflow-hidden rounded-full bg-inset">
+                <div
+                  className="h-full rounded-full transition-all duration-500"
+                  style={{ width: `${Math.max(6, ratio * 100)}%`, background: 'var(--rp-green)' }}
+                />
+              </div>
+            ) : null}
+            <StepTimeline steps={tl} />
+          </div>
+        );
+      })()}
       <div className="flex items-center gap-2 border-t border-line px-3 py-2">
         {act.status === 'awaiting' ? (
           needsConfirm ? (
@@ -1002,18 +1024,8 @@ function ActionInspector({ act, onDecide }: { act: Activity; onDecide: (a: Activ
 
   const stepsBlock = steps.length > 0 && (!isRead || steps.length > 2 || failed) ? (
     <div>
-      <p className="rp-micro !text-[10px] mb-1">{isRead ? 'steps' : `pipeline · ${steps.filter((s) => s.status === 'ok').length}/${steps.length}`}</p>
-      <ol className="space-y-1">
-        {steps.map((s, i) => {
-          const ss = statusTone(s.status ?? '');
-          return (
-            <li key={i} className="flex items-start gap-2 font-mono text-[10.5px]">
-              <span className={ss.live ? 'rp-breath mt-px' : 'mt-px'} style={{ color: ss.color }}>{ss.glyph}</span>
-              <span className="min-w-0"><span className="text-ink">{s.name}</span>{s.detail ? <span className="text-faint"> — {s.detail}</span> : null}</span>
-            </li>
-          );
-        })}
-      </ol>
+      <p className="rp-micro !text-[10px] mb-1.5">{isRead ? 'steps' : `pipeline · ${steps.filter((s) => s.status === 'ok').length}/${steps.length}`}</p>
+      <StepTimeline steps={normalizeSteps(steps)} className="font-mono text-[10.5px]" />
     </div>
   ) : null;
 

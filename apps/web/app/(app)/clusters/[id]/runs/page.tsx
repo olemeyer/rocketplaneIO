@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/app/page-header';
 import { useClusterEvents } from '@/lib/hooks/use-cluster-events';
 import { cancelAction, createAction, getActions } from '@/lib/api/controlplane';
 import { CATEGORY_LABEL, LEVEL_META, RISK_LEVELS, actionCategoryOf, actionLevelOf, levelColor, type ActionCategory, type RiskLevel } from '@/lib/approval';
+import { StepTimeline } from '@/components/actions/step-timeline';
 import type { ClusterAction } from '@/lib/api/types';
 
 // Runs — der Audit-Trail aller Action-Ausführungen. Trace-Stil: eine Zeile pro
@@ -41,9 +42,6 @@ function relTime(iso: string): string {
 function durOf(a: ClusterAction): string {
   const ms = Math.max(0, new Date(a.updatedAt).getTime() - new Date(a.createdAt).getTime());
   return ms < 1000 ? `${ms}ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
-}
-function stepColor(status: string): string {
-  return status === 'ok' ? 'var(--rp-tone-green-fg)' : status === 'failed' ? 'var(--rp-tone-red-fg)' : status === 'running' ? 'var(--rp-ink-mid)' : 'var(--rp-ink-faint)';
 }
 function levelOf(a: ClusterAction): RiskLevel {
   return actionLevelOf(a.kind, (a.params as Record<string, unknown>) ?? {});
@@ -143,34 +141,7 @@ function RunRow({ a, open, onToggle, onCancel, onForceCancel, onRevert }: { a: C
             {steps.length === 0 ? (
               <p className="font-mono text-[10.5px] text-faint">{running ? 'waiting for the agent…' : 'no steps recorded'}</p>
             ) : (
-              <ol>
-                {steps.map((s, i) => {
-                  const c = stepColor(s.status);
-                  const last = i === steps.length - 1;
-                  return (
-                    <li key={`${s.name}-${i}`} className="relative flex gap-2.5 pb-1.5 last:pb-0">
-                      {!last ? <span className="absolute bottom-0 left-[4.5px] top-[11px] w-px" style={{ background: 'var(--rp-line-strong)' }} aria-hidden /> : null}
-                      <span className="relative z-10 mt-[3px] shrink-0">
-                        {s.status === 'ok' ? (
-                          <span className="flex h-2.5 w-2.5 items-center justify-center rounded-full" style={{ background: c }}>
-                            <svg width="6" height="6" viewBox="0 0 8 8" aria-hidden><path d="M1.5 4.2 3 5.7 6.5 2.2" stroke="var(--rp-bg-base)" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                          </span>
-                        ) : s.status === 'running' ? (
-                          <span className="animate-ping-slow flex h-2.5 w-2.5 rounded-full" style={{ background: c, color: c }} />
-                        ) : s.status === 'failed' ? (
-                          <span className="text-[10px] leading-none" style={{ color: c }}>▲</span>
-                        ) : (
-                          <span className="block h-2.5 w-2.5 rounded-full border" style={{ borderColor: 'var(--rp-line-strong)' }} />
-                        )}
-                      </span>
-                      <div className="min-w-0 flex-1 font-mono text-[10.5px] leading-snug">
-                        <span style={{ color: s.status === 'pending' ? 'var(--rp-ink-faint)' : 'var(--rp-ink)' }}>{s.name}</span>
-                        {s.detail ? <span className="text-faint"> · {s.detail}</span> : null}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
+              <StepTimeline steps={steps} className="font-mono text-[10.5px]" />
             )}
             {a.result ? (
               <div className="mt-2 break-all rounded-skin-sm border border-line bg-inset px-2 py-1.5 font-mono text-[10.5px] leading-snug" style={{ color: a.status === 'failed' ? 'var(--rp-tone-red-fg)' : 'var(--rp-ink-muted)' }}>

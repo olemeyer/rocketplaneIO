@@ -2,6 +2,7 @@
 
 import { cn } from '@/lib/cn';
 import type { ClusterAction } from '@/lib/api/types';
+import { StepTimeline } from './step-timeline';
 
 // run-card.tsx — die kanonische Darstellung EINES Action-Laufs: Status-Rail,
 // Live-Progress-Bar und eine verbundene Step-TIMELINE (Knoten + Linie). Gleiches
@@ -16,16 +17,6 @@ const STATUS: Record<string, Tone> = {
   failed: { fg: 'var(--rp-tone-red-fg)', bg: 'var(--rp-tone-red-bg)', glyph: '▲', rail: 'var(--rp-red)' },
   cancelled: { fg: 'var(--rp-tone-yellow-fg)', bg: 'var(--rp-tone-yellow-bg)', glyph: '⊘', rail: 'var(--rp-yellow)' },
 };
-
-function stepColor(status: string): string {
-  return status === 'ok'
-    ? 'var(--rp-tone-green-fg)'
-    : status === 'failed'
-      ? 'var(--rp-tone-red-fg)'
-      : status === 'running'
-        ? 'var(--rp-ink-mid)'
-        : 'var(--rp-ink-faint)';
-}
 
 export function ActionRunCard({
   action: a,
@@ -115,47 +106,8 @@ export function ActionRunCard({
           <div className="mt-1 truncate leading-snug text-mid">{a.progress}</div>
         ) : null}
 
-        {/* Step-TIMELINE — Knoten auf einer Linie */}
-        {steps.length > 0 ? (
-          <ol className="mt-2">
-            {steps.map((s, i) => {
-              const c = stepColor(s.status);
-              const last = i === steps.length - 1;
-              return (
-                <li key={`${s.name}-${i}`} className="relative flex gap-2.5 pb-1.5 last:pb-0">
-                  {!last ? (
-                    <span
-                      className="absolute bottom-0 left-[4.5px] top-[11px] w-px"
-                      style={{ background: 'var(--rp-line-strong)' }}
-                      aria-hidden
-                    />
-                  ) : null}
-                  <span className="relative z-10 mt-[3px] shrink-0">
-                    {s.status === 'ok' ? (
-                      <span className="flex h-2.5 w-2.5 items-center justify-center rounded-full" style={{ background: c }}>
-                        <svg width="6" height="6" viewBox="0 0 8 8" aria-hidden>
-                          <path d="M1.5 4.2 3 5.7 6.5 2.2" stroke="var(--rp-bg-base)" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      </span>
-                    ) : s.status === 'running' ? (
-                      <span className="animate-ping-slow flex h-2.5 w-2.5 rounded-full" style={{ background: c, color: c }} />
-                    ) : s.status === 'failed' ? (
-                      <span className="text-[10px] leading-none" style={{ color: c }}>▲</span>
-                    ) : (
-                      <span className="block h-2.5 w-2.5 rounded-full border" style={{ borderColor: 'var(--rp-line-strong)' }} />
-                    )}
-                  </span>
-                  <div className="min-w-0 flex-1 leading-snug">
-                    <span style={{ color: s.status === 'pending' ? 'var(--rp-ink-faint)' : 'var(--rp-ink)' }}>{s.name}</span>
-                    {s.detail ? (
-                      <span className="text-faint" title={s.detail}> · {s.detail}</span>
-                    ) : null}
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        ) : null}
+        {/* Step-TIMELINE — geteilte, kanonische Darstellung (auch im Copilot-Chat) */}
+        <StepTimeline steps={steps} className="mt-2" />
 
         {/* Ergebnis */}
         {!running && a.result ? (
