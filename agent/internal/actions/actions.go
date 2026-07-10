@@ -30,6 +30,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	"github.com/rocketplaneio/rocketplane/agent/internal/actions/recipe"
 )
 
 const (
@@ -199,6 +201,13 @@ func (r *Runner) execute(ctx context.Context, a Action) {
 	// Custom-Workflows (Starlark) erzeugen ihre Steps dynamisch.
 	if a.Kind == "script" {
 		r.executeScript(ctx, a)
+		return
+	}
+	// v4: every built-in kind is a declarative Effect manifest. If one exists,
+	// the manifest engine runs it (durable compensation, rollback on any
+	// failure). Kinds not yet migrated fall through to the native path below.
+	if m, ok, err := recipe.Builtin(a.Kind); err == nil && ok {
+		r.executeManifest(ctx, a, m)
 		return
 	}
 	// timeoutSeconds: JEDE Action akzeptiert einen eigenen Timeout (Copilot/UI
