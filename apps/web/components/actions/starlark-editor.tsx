@@ -9,6 +9,7 @@ import {
   autocompletion,
   closeBrackets,
   completeFromList,
+  snippetCompletion,
   type Completion,
 } from '@codemirror/autocomplete';
 import { bracketMatching, indentUnit, syntaxHighlighting, HighlightStyle } from '@codemirror/language';
@@ -21,35 +22,50 @@ import type { ActionDefParam } from '@/lib/api/types';
 // Vertrag: Builtins mit Signatur + Doku, k8s.-Member kontextsensitiv, und die
 // definierten Parameter als args["…"]-Vorschläge.
 
+// snip builds a snippet completion (tab-through placeholders) with a signature
+// (detail) and prose (info) — the full contract shown as you type.
+const snip = (label: string, template: string, detail: string, info: string, type = 'function'): Completion =>
+  snippetCompletion(template, { label, detail, info, type });
+
+// Top-level globals — mirror agent/internal/actions/script.go exactly.
 const BUILTIN_COMPLETIONS: Completion[] = [
-  { label: 'step', apply: 'step("")', type: 'function', detail: 'step(name)', info: 'Begin a new timeline step (shown live in the UI).' },
-  { label: 'report', apply: 'report("")', type: 'function', detail: 'report(detail)', info: 'Live progress line of the current step.' },
-  { label: 'fail', apply: 'fail("")', type: 'function', detail: 'fail(msg)', info: 'Abort the workflow as failed.' },
-  { label: 'sleep', apply: 'sleep(5)', type: 'function', detail: 'sleep(seconds)', info: 'Pause (max 30s per call).' },
-  { label: 'args', type: 'variable', detail: 'dict', info: 'Input parameters (all values are strings — cast with int()).' },
-  { label: 'k8s', type: 'namespace', detail: 'module', info: 'Cluster operations: get, pods, scale, rollout_restart, delete_pod.' },
-  {
-    label: 'wait_rollout',
-    apply: 'wait_rollout(ns, "Deployment", name, timeout=120)',
-    type: 'function',
-    detail: 'wait_rollout(namespace, kind, name, timeout=120) → bool',
-    info: 'Wait until the new generation is fully rolled out (pod-level). False on timeout.',
-  },
-  {
-    label: 'wait_ready',
-    apply: 'wait_ready(ns, "Deployment", name, timeout=120)',
-    type: 'function',
-    detail: 'wait_ready(namespace, kind, name, timeout=120) → bool',
-    info: 'Wait until pods == desired and every pod is ready. False on timeout.',
-  },
+  snip('step', 'step("${name}")', 'step(name)', 'Begin a new timeline step (shown live in the UI and Runs).'),
+  snip('report', 'report("${detail}")', 'report(detail)', 'Live progress line of the current step (e.g. "rollout 1/3 ready").'),
+  snip('fail', 'fail("${message}")', 'fail(message)', 'Abort the workflow as failed — triggers LIFO rollback of registered undos.'),
+  snip('sleep', 'sleep(${5})', 'sleep(seconds)', 'Pause (max 30s per call).'),
+  { label: 'args', type: 'variable', detail: 'dict[str,str]', info: 'Input parameters. All values are strings — cast with int()/float() as needed.' },
+  { label: 'k8s', type: 'namespace', detail: 'module', info: 'Cluster operations. Type "k8s." for the full method list.' },
+  snip('wait_rollout', 'wait_rollout(${ns}, "${Deployment}", ${name}, timeout=${120})', 'wait_rollout(namespace, kind, name, timeout=120) → bool', 'Wait until the new generation is fully rolled out on POD level (old gone, new ready). Returns False on timeout — you decide the rollback.'),
+  snip('wait_ready', 'wait_ready(${ns}, "${Deployment}", ${name}, timeout=${120})', 'wait_ready(namespace, kind, name, timeout=120) → bool', 'Wait until pods == desired and every pod is ready. Returns False on timeout.'),
 ];
 
+// k8s.<member> — every builtin the agent registers (script.go k8sModule +
+// script_raw.go rawMembers). Applied after the "k8s." prefix.
 const K8S_COMPLETIONS: Completion[] = [
-  { label: 'get', apply: 'get(ns, "Deployment", name)', type: 'method', detail: 'k8s.get(namespace, kind, name) → dict', info: 'Read workload state: {desired, ready, updated, available}.' },
-  { label: 'pods', apply: 'pods(ns)', type: 'method', detail: 'k8s.pods(namespace, selector="") → list', info: 'List pods: [{name, ready, phase, restarts, node}].' },
-  { label: 'scale', apply: 'scale(ns, "Deployment", name, 2)', type: 'method', detail: 'k8s.scale(namespace, kind, name, replicas)', info: 'Set replicas (0–50). Auto-registers a rollback entry.' },
-  { label: 'rollout_restart', apply: 'rollout_restart(ns, "Deployment", name)', type: 'method', detail: 'k8s.rollout_restart(namespace, kind, name)', info: 'Trigger a rolling restart.' },
-  { label: 'delete_pod', apply: 'delete_pod(ns, name)', type: 'method', detail: 'k8s.delete_pod(namespace, name)', info: 'Delete one pod (owner recreates it).' },
+  snip('get', 'get(${ns}, "${Deployment}", ${name})', 'k8s.get(namespace, kind, name) → dict', 'Read workload state: {desired, ready, updated, available, generationCaughtUp}.', 'method'),
+  snip('pods', 'pods(${ns})', 'k8s.pods(namespace, selector="") → list', 'List pods: [{name, ready, phase, restarts, node}].', 'method'),
+  snip('scale', 'scale(${ns}, "${Deployment}", ${name}, ${2})', 'k8s.scale(namespace, kind, name, replicas)', 'Set replicas (0–50). Auto-registers a rollback to the prior count.', 'method'),
+  snip('rollout_restart', 'rollout_restart(${ns}, "${Deployment}", ${name})', 'k8s.rollout_restart(namespace, kind, name)', 'Trigger a rolling restart (patches a restartedAt annotation).', 'method'),
+  snip('rollout_undo', 'rollout_undo(${ns}, ${name})', 'k8s.rollout_undo(namespace, name)', 'Roll a Deployment back to its previous revision.', 'method'),
+  snip('set_image', 'set_image(${ns}, "${Deployment}", ${name}, "${image}", container="${c}")', 'k8s.set_image(namespace, kind, name, image, container="")', 'Set a container image. container defaults to the sole container. Registers a rollback to the prior image.', 'method'),
+  snip('delete_pod', 'delete_pod(${ns}, ${name})', 'k8s.delete_pod(namespace, name)', 'Delete one pod (the owner recreates it). Irreversible.', 'method'),
+  snip('pause', 'pause(${ns}, ${name})', 'k8s.pause(namespace, name)', 'Pause a Deployment rollout. Rollback = resume.', 'method'),
+  snip('resume', 'resume(${ns}, ${name})', 'k8s.resume(namespace, name)', 'Resume a paused Deployment rollout.', 'method'),
+  snip('cordon', 'cordon(${node})', 'k8s.cordon(node)', 'Mark a node unschedulable. Rollback = uncordon.', 'method'),
+  snip('uncordon', 'uncordon(${node})', 'k8s.uncordon(node)', 'Mark a node schedulable again.', 'method'),
+  snip('hpa_set', 'hpa_set(${ns}, ${name}, ${min}, ${max})', 'k8s.hpa_set(namespace, name, min, max)', 'Set an HPA\'s min/max replica bounds. Registers a rollback to the prior bounds.', 'method'),
+  snip('cronjob_trigger', 'cronjob_trigger(${ns}, ${name})', 'k8s.cronjob_trigger(namespace, name)', 'Create a Job from a CronJob now. Irreversible.', 'method'),
+  snip('cronjob_suspend', 'cronjob_suspend(${ns}, ${name})', 'k8s.cronjob_suspend(namespace, name)', 'Suspend a CronJob. Rollback = resume.', 'method'),
+  snip('cronjob_resume', 'cronjob_resume(${ns}, ${name})', 'k8s.cronjob_resume(namespace, name)', 'Resume a suspended CronJob.', 'method'),
+  snip('taint', 'taint(${node}, "${key}", value="${v}", effect="${NoSchedule}")', 'k8s.taint(node, key, value="", effect="NoSchedule")', 'Add a node taint. Rollback = untaint.', 'method'),
+  snip('untaint', 'untaint(${node}, "${key}")', 'k8s.untaint(node, key)', 'Remove a node taint by key.', 'method'),
+  snip('events', 'events(${ns}, ${name})', 'k8s.events(namespace, name) → list', 'Recent events for an object: [{type, reason, message, count, age}].', 'method'),
+  // Generic escape hatch (script_raw.go) — any whitelisted GVR.
+  snip('raw_get', 'raw_get("${v1}", "${Pod}", ${ns}, ${name})', 'k8s.raw_get(apiVersion, kind, namespace, name) → dict', 'Read any whitelisted resource as a plain dict.', 'method'),
+  snip('raw_list', 'raw_list("${apps/v1}", "${ReplicaSet}", ${ns})', 'k8s.raw_list(apiVersion, kind, namespace) → list', 'List any whitelisted resource in a namespace.', 'method'),
+  snip('raw_apply', 'raw_apply("${apps/v1}", "${Deployment}", ${ns}, ${name}, ${obj})', 'k8s.raw_apply(apiVersion, kind, namespace, name, object)', 'Server-side apply an object (registers a rollback to the before-state).', 'method'),
+  snip('raw_patch', 'raw_patch("${apps/v1}", "${Deployment}", ${ns}, ${name}, ${patch})', 'k8s.raw_patch(apiVersion, kind, namespace, name, patch)', 'Strategic-merge patch (registers a rollback to the before-state).', 'method'),
+  snip('raw_delete', 'raw_delete("${v1}", "${Pod}", ${ns}, ${name})', 'k8s.raw_delete(apiVersion, kind, namespace, name)', 'Delete any whitelisted resource. Irreversible.', 'method'),
 ];
 
 // RETICLE-Syntax-Farben: ruhige, gedeckte Hues — Status-Farben bleiben Daten.
