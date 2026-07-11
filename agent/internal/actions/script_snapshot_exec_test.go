@@ -88,6 +88,44 @@ fail("verify failed")
 	}
 }
 
+// The script's step() calls become a structured step timeline on the run — the
+// same pipeline the UI shows (fixes "0/0 steps · no steps recorded").
+func TestExecuteSnapshotScriptRecordsSteps(t *testing.T) {
+	cp := newStubCP()
+	defer cp.Close()
+	r := snapExecRunner(t, cp.URL, dep("shop", "api", 2))
+	src := `
+step("scale")
+k8s.scale("shop", "Deployment", "api", 3)
+report("scaled to 3")
+step("verify")
+report("looks good")
+`
+	params, _ := json.Marshal(map[string]any{"source": src})
+	r.execute(context.Background(), Action{ID: "act-steps", Kind: "snapshot_script", Params: params})
+
+	// the terminal succeeded report must carry both declared steps, marked ok.
+	var names []string
+	sawSucceeded := false
+	for _, rep := range cp.snapshot() {
+		if rep.Status == "succeeded" && len(rep.Steps) > 0 {
+			sawSucceeded = true
+			var steps []struct{ Name, Status, Detail string }
+			_ = json.Unmarshal(rep.Steps, &steps)
+			names = nil
+			for _, s := range steps {
+				names = append(names, s.Name+":"+s.Status)
+			}
+		}
+	}
+	if !sawSucceeded {
+		t.Fatal("no terminal succeeded report with steps")
+	}
+	if len(names) != 2 || names[0] != "scale:ok" || names[1] != "verify:ok" {
+		t.Fatalf("expected [scale:ok verify:ok], got %v", names)
+	}
+}
+
 // A successful snapshot_script leaves mutations in place; the durable list still
 // exists on the CP for a later manual revert.
 func TestExecuteSnapshotScriptSuccessReportsSnapshots(t *testing.T) {

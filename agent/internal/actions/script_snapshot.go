@@ -46,8 +46,10 @@ func (r *Runner) applyPatch(ctx context.Context, kind, namespace, name string, p
 }
 
 // snapshotGlobals builds the Starlark surface backed by the capture log. The
-// mutators strict-capture before writing.
-func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report func(string)) starlark.StringDict {
+// mutators strict-capture before writing. report(msg) attaches a detail line to
+// the current step; onStep(name) opens a new structured pipeline step (so the run
+// emits the SAME step timeline the script declares — shown == executed).
+func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report func(string), onStep func(string)) starlark.StringDict {
 	rep := func(s string) {
 		if report != nil {
 			report(s)
@@ -122,7 +124,11 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 	stepFn := starlark.NewBuiltin("step", func(_ *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 		var name string
 		_ = starlark.UnpackArgs("step", args, kwargs, "name", &name)
-		rep("step: " + name)
+		if onStep != nil {
+			onStep(name)
+		} else {
+			rep("step: " + name)
+		}
 		return starlark.None, nil
 	})
 
@@ -592,8 +598,12 @@ func (r *Runner) runSnapshotAction(ctx context.Context, a Action, source string,
 	ctx, cancel := context.WithTimeout(ctx, monitorTimeout)
 	defer cancel()
 
-	var states []stepState
-	push := func(line string) { r.report(ctx, a.ID, "running", "", line, states) }
+	// A structured step pipeline built from the script's step() calls, so the run
+	// emits the SAME timeline the script (and the UI detail view) declares.
+	t := &stepTracker{cur: -1}
+	emit := func(status string) { r.report(ctx, a.ID, status, "", "", append([]stepState(nil), t.states...)) }
+	onStep := func(name string) { t.step(name); emit("running") }
+	report := func(msg string) { t.report(msg); r.report(ctx, a.ID, "running", "", msg, append([]stepState(nil), t.states...)) }
 
 	log := newCaptureLog()
 	log.onAdd = func(c Capture) {
@@ -601,16 +611,18 @@ func (r *Runner) runSnapshotAction(ctx context.Context, a Action, source string,
 		r.reportSnapshots(context.WithoutCancel(ctx), a.ID, []Capture{c})
 	}
 
-	err := r.execCapturedScript(ctx, log, source, args, push)
+	err := r.execCapturedScript(ctx, log, source, args, report, onStep)
 	if err == nil {
-		r.report(ctx, a.ID, "succeeded", "workflow completed", "", states)
+		t.finishOK()
+		r.report(ctx, a.ID, "succeeded", "workflow completed", "", append([]stepState(nil), t.states...))
 		if r.onExecuted != nil {
 			r.onExecuted()
 		}
 		return
 	}
-	// failure → generic auto-rollback from the run's capture log (detached ctx
-	// so a cancel/timeout does not also kill the rollback).
+	// failure → mark the open step failed, then generic auto-rollback from the
+	// run's capture log (detached ctx so a cancel/timeout does not kill the rollback).
+	t.failCurrent(err.Error())
 	rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer rcancel()
 	results := r.Restore(rctx, log.List())
@@ -622,11 +634,47 @@ func (r *Runner) runSnapshotAction(ctx context.Context, a Action, source string,
 		} else {
 			st = "failed"
 		}
-		states = append(states, stepState{Name: "rollback " + x.Kind + "/" + x.Name, Status: st, Detail: x.Detail})
+		t.states = append(t.states, stepState{Name: "rollback " + x.Kind + "/" + x.Name, Status: st, Detail: x.Detail})
 	}
-	r.report(ctx, a.ID, "failed", fmt.Sprintf("%s — rolled back %d/%d mutation(s)", err.Error(), undone, len(results)), "", states)
+	r.report(ctx, a.ID, "failed", fmt.Sprintf("%s — rolled back %d/%d mutation(s)", err.Error(), undone, len(results)), "", append([]stepState(nil), t.states...))
 	if r.onExecuted != nil {
 		r.onExecuted()
+	}
+}
+
+// stepTracker turns a script's sequential step()/report() calls into a structured
+// step timeline. The Starlark run is single-threaded, so no locking is needed.
+type stepTracker struct {
+	states []stepState
+	cur    int
+}
+
+func (t *stepTracker) step(name string) {
+	if t.cur >= 0 && t.states[t.cur].Status == "running" {
+		t.states[t.cur].Status = "ok"
+	}
+	t.states = append(t.states, stepState{Name: name, Status: "running"})
+	t.cur = len(t.states) - 1
+}
+
+func (t *stepTracker) report(msg string) {
+	if t.cur >= 0 {
+		t.states[t.cur].Detail = msg
+	}
+}
+
+func (t *stepTracker) finishOK() {
+	if t.cur >= 0 && t.states[t.cur].Status == "running" {
+		t.states[t.cur].Status = "ok"
+	}
+}
+
+func (t *stepTracker) failCurrent(detail string) {
+	if t.cur >= 0 && t.states[t.cur].Status == "running" {
+		t.states[t.cur].Status = "failed"
+		if t.states[t.cur].Detail == "" {
+			t.states[t.cur].Detail = detail
+		}
 	}
 }
 
@@ -676,15 +724,15 @@ func (r *Runner) executeSnapshotRestore(ctx context.Context, a Action) {
 // rollback split).
 func (r *Runner) runCapturedScript(ctx context.Context, source string, args map[string]string, report func(string)) (*CaptureLog, error) {
 	log := newCaptureLog()
-	err := r.execCapturedScript(ctx, log, source, args, report)
+	err := r.execCapturedScript(ctx, log, source, args, report, nil)
 	return log, err
 }
 
 // execCapturedScript runs a script against a CALLER-OWNED log — so the caller can
-// set log.onAdd to report captures durably as they happen. Returns the terminal
-// error (nil on success).
-func (r *Runner) execCapturedScript(ctx context.Context, log *CaptureLog, source string, args map[string]string, report func(string)) error {
-	globals := r.snapshotGlobals(ctx, log, report)
+// set log.onAdd to report captures durably as they happen. onStep (optional) opens
+// a structured pipeline step per script step(). Returns the terminal error.
+func (r *Runner) execCapturedScript(ctx context.Context, log *CaptureLog, source string, args map[string]string, report func(string), onStep func(string)) error {
+	globals := r.snapshotGlobals(ctx, log, report, onStep)
 	argsDict := starlark.NewDict(len(args))
 	for k, v := range args {
 		_ = argsDict.SetKey(starlark.String(k), starlark.String(v))
