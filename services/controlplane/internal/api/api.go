@@ -172,6 +172,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/actions", sess(http.HandlerFunc(s.handleCreateAction)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/actions", sess(http.HandlerFunc(s.handleListActions)))
 	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/actions/{action}/cancel", sess(http.HandlerFunc(s.handleCancelAction)))
+	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/actions/{action}/revert", sess(http.HandlerFunc(s.handleRevertAction)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/workload-pods", sess(http.HandlerFunc(s.handleWorkloadPods)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/inventory", sess(http.HandlerFunc(s.handleListInventory)))
 	mux.Handle("GET /api/orgs/{org}/action-definitions", sess(http.HandlerFunc(s.handleListActionDefs)))

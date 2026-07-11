@@ -7,7 +7,7 @@ import { Spinner } from '@/components/ui';
 import { useMe } from '@/components/app/me-context';
 import { PageHeader } from '@/components/app/page-header';
 import { useClusterEvents } from '@/lib/hooks/use-cluster-events';
-import { cancelAction, createAction, getActions } from '@/lib/api/controlplane';
+import { cancelAction, createAction, getActions, revertAction } from '@/lib/api/controlplane';
 import { CATEGORY_LABEL, LEVEL_META, RISK_LEVELS, actionCategoryOf, actionLevelOf, levelColor, type ActionCategory, type RiskLevel } from '@/lib/approval';
 import { StepTimeline } from '@/components/actions/step-timeline';
 import type { ClusterAction } from '@/lib/api/types';
@@ -183,14 +183,15 @@ function RunRow({ a, open, onToggle, onCancel, onForceCancel, onRevert }: { a: C
                 <pre className="mt-1.5 max-h-[220px] overflow-auto whitespace-pre-wrap break-all font-mono text-[9.5px] leading-relaxed text-muted">{JSON.stringify(a.snapshot, null, 2)}</pre>
               </details>
             ) : null}
-            {a.status === 'succeeded' && a.revert ? (
+            {a.status === 'succeeded' && (a.revert || a.revertible) ? (
               <div className="rounded-skin-sm border border-line bg-inset p-2">
                 <p className="rp-micro !text-[9.5px] mb-1">revert</p>
                 <code className="block break-all font-mono text-[10px] leading-snug text-muted">
-                  {a.revert.kind} {a.revert.targetKind}/{a.revert.targetName}
-                  {Object.keys(a.revert.params ?? {}).length ? ' ' + JSON.stringify(a.revert.params) : ''}
+                  {a.revert
+                    ? `${a.revert.kind} ${a.revert.targetKind}/${a.revert.targetName}${Object.keys(a.revert.params ?? {}).length ? ' ' + JSON.stringify(a.revert.params) : ''}`
+                    : 'restore every resource this run touched from its snapshot'}
                 </code>
-                <button type="button" onClick={() => onRevert(a)} className="rp-focus mt-1.5 rounded-skin-sm border border-line px-2.5 py-1 font-mono text-[10.5px] text-ink transition-colors hover:bg-hover" title="Dispatch the inverse action with the values captured BEFORE this run">
+                <button type="button" onClick={() => onRevert(a)} className="rp-focus mt-1.5 rounded-skin-sm border border-line px-2.5 py-1 font-mono text-[10.5px] text-ink transition-colors hover:bg-hover" title="Undo this change from the state captured BEFORE this run">
                   ↺ revert this change
                 </button>
               </div>
@@ -336,14 +337,19 @@ export default function RunsPage() {
                   onCancel={(id) => { if (orgId) void cancelAction(orgId, clusterId, id).catch(() => {}); }}
                   onForceCancel={(id) => { if (orgId) void cancelAction(orgId, clusterId, id, true).catch(() => {}); }}
                   onRevert={(run) => {
-                    if (!orgId || !run.revert) return;
-                    void createAction(orgId, clusterId, {
-                      kind: run.revert.kind as ClusterAction['kind'],
-                      targetNamespace: run.revert.targetNamespace,
-                      targetKind: run.revert.targetKind,
-                      targetName: run.revert.targetName,
-                      params: run.revert.params ?? {},
-                    }).catch(() => {});
+                    if (!orgId) return;
+                    if (run.revert) {
+                      void createAction(orgId, clusterId, {
+                        kind: run.revert.kind as ClusterAction['kind'],
+                        targetNamespace: run.revert.targetNamespace,
+                        targetKind: run.revert.targetKind,
+                        targetName: run.revert.targetName,
+                        params: run.revert.params ?? {},
+                      }).catch(() => {});
+                    } else if (run.revertible) {
+                      // snapshot substrate: restore every captured resource
+                      void revertAction(orgId, clusterId, run.id).catch(() => {});
+                    }
                   }}
                 />
               );

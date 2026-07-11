@@ -275,6 +275,10 @@ type Action struct {
 	// Snapshot: the stripped target object BEFORE the mutation (generic
 	// before snapshot) — audit trail + restore_resource basis.
 	Snapshot        json.RawMessage `json:"snapshot,omitempty"`
+	// Revertible: a succeeded run can be undone — either a legacy inverse action
+	// (Revert) or a durable snapshot list (the snapshot substrate). Drives the
+	// Runs-page revert button for snapshot-dispatched actions.
+	Revertible      bool            `json:"revertible"`
 	CancelRequested bool            `json:"cancelRequested"`
 	// Safe Actions v2 grouping: every run belongs to exactly one ActionGroup
 	// (a lone action is a group of one). GroupSeq orders the run within the

@@ -669,6 +669,54 @@ func (s *Server) handleCreateAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, a)
 }
 
+// handleRevertAction — POST /api/orgs/{org}/clusters/{cluster}/actions/{action}/revert
+// Undo a succeeded snapshot-substrate run by enqueueing a snapshot_restore action
+// with the run's durable capture list — the ONE generic rollback, now user-driven.
+func (s *Server) handleRevertAction(w http.ResponseWriter, r *http.Request) {
+	orgID, role, ok := s.resolveOrgRole(w, r)
+	if !ok {
+		return
+	}
+	clusterID, ok := parseClusterID(w, r)
+	if !ok {
+		return
+	}
+	if _, _, err := s.store.GetClusterWithNamespaces(r.Context(), orgID, clusterID); err != nil {
+		writeErr(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+	actionID, err := uuid.Parse(r.PathValue("action"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid action id")
+		return
+	}
+	if roleRank(role) < roleRank("admin") {
+		writeErr(w, http.StatusForbidden, "reverting a change requires admin role")
+		return
+	}
+	snaps, err := s.store.GetActionSnapshots(r.Context(), actionID)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "action not found")
+		return
+	}
+	if len(snaps) == 0 || string(snaps) == "[]" || string(snaps) == "null" {
+		writeErr(w, http.StatusBadRequest, "this run captured no snapshot to revert")
+		return
+	}
+	params, _ := json.Marshal(map[string]any{"snapshots": json.RawMessage(snaps)})
+	user, _ := auth.UserFrom(r.Context())
+	a, err := s.store.CreateAction(r.Context(), clusterID, user.ID, "snapshot_restore", "-", "Revert", "revert", params)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "failed to enqueue revert")
+		return
+	}
+	a.RequestedBy = user.Email
+	s.audit(r, &orgID, "action.reverted", "action", actionID.String(), "revert via snapshot list", map[string]any{"revertOf": actionID.String()})
+	s.broker.Publish(clusterID, "actions", 0)
+	s.broker.Publish(clusterID, "dispatch", 0)
+	writeJSON(w, http.StatusCreated, a)
+}
+
 // handleListActions — GET /api/orgs/{org}/clusters/{cluster}/actions?namespace=&target=&limit=
 func (s *Server) handleListActions(w http.ResponseWriter, r *http.Request) {
 	orgID, ok := s.resolveOrg(w, r)

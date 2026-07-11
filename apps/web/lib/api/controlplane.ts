@@ -341,6 +341,19 @@ export function cancelAction(
   });
 }
 
+// revertAction undoes a succeeded snapshot-substrate run: the control plane
+// enqueues a snapshot_restore action from the run's durable capture list.
+export function revertAction(
+  orgId: string,
+  clusterId: string,
+  actionId: string,
+): Promise<import('./types').ClusterAction> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/actions/${enc(actionId)}/revert`, {
+    method: 'POST',
+    body: '{}',
+  });
+}
+
 export function getInfra(
   orgId: string,
   clusterId: string,

@@ -116,7 +116,8 @@ func (s *Store) ListActions(ctx context.Context, clusterID uuid.UUID, ns, target
 	rows, err := s.pool.Query(ctx, `
 		SELECT a.id, a.cluster_id, COALESCE(u.email, ''), a.kind, a.target_namespace, a.target_kind, a.target_name,
 		       a.params, a.status, a.result, a.progress, a.steps, a.revert, a.snapshot, a.cancel_requested,
-		       a.group_id, a.group_seq, a.investigation_node_id, a.created_at, a.updated_at
+		       a.group_id, a.group_seq, a.investigation_node_id, a.created_at, a.updated_at,
+		       (a.revert IS NOT NULL OR a.snapshots <> '[]'::jsonb) AS revertible
 		FROM cluster_actions a
 		LEFT JOIN users u ON u.id = a.requested_by
 		WHERE a.cluster_id = $1
@@ -133,7 +134,7 @@ func (s *Store) ListActions(ctx context.Context, clusterID uuid.UUID, ns, target
 		var a model.Action
 		if err := rows.Scan(&a.ID, &a.ClusterID, &a.RequestedBy, &a.Kind, &a.TargetNamespace, &a.TargetKind, &a.TargetName,
 			&a.Params, &a.Status, &a.Result, &a.Progress, &a.Steps, &a.Revert, &a.Snapshot, &a.CancelRequested,
-			&a.GroupID, &a.GroupSeq, &a.InvestigationNodeID, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			&a.GroupID, &a.GroupSeq, &a.InvestigationNodeID, &a.CreatedAt, &a.UpdatedAt, &a.Revertible); err != nil {
 			return nil, fmt.Errorf("scan action: %w", err)
 		}
 		out = append(out, a)

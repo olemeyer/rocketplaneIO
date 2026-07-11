@@ -373,6 +373,8 @@ export interface ClusterAction {
   steps: ActionStep[];
   /** Inverse catalog action with before-snapshot (only when succeeded) — revert button. */
   revert?: { kind: string; targetNamespace: string; targetKind: string; targetName: string; params: Record<string, unknown> };
+  /** True when a succeeded run can be undone (legacy inverse OR a durable snapshot list). */
+  revertible?: boolean;
   /** Stripped target object BEFORE the mutation (generic before-snapshot). */
   snapshot?: Record<string, unknown>;
   /** User requested cancellation; engine rolls back → cancelled. */
