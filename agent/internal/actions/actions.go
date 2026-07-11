@@ -218,9 +218,17 @@ func (r *Runner) execute(ctx context.Context, a Action) {
 			return
 		}
 	}
-	// Custom-Workflows (Starlark) erzeugen ihre Steps dynamisch.
+	// Custom workflows (Starlark) run on the SAME snapshot surface as the built-in
+	// scripts and a fork of one — shown == executed, built-in == custom. They get
+	// the step timeline, durable snapshots, auto-rollback on failure and a revert
+	// button, exactly like a dispatched built-in. (RP_ACTIONS_SNAPSHOT=0 falls back
+	// to the legacy raw-surface executeScript for a rollback.)
 	if a.Kind == "script" {
-		r.executeScript(ctx, a)
+		if actionsSnapshotDispatch {
+			r.executeSnapshotScript(ctx, a)
+		} else {
+			r.executeScript(ctx, a)
+		}
 		return
 	}
 	// v4: every built-in kind is a declarative Effect manifest. If one exists,

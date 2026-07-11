@@ -27,45 +27,39 @@ import type { ActionDefParam } from '@/lib/api/types';
 const snip = (label: string, template: string, detail: string, info: string, type = 'function'): Completion =>
   snippetCompletion(template, { label, detail, info, type });
 
-// Top-level globals — mirror agent/internal/actions/script.go exactly.
+// Top-level globals — mirror the snapshot surface (agent/internal/actions/
+// script_snapshot.go), the exact surface built-in scripts, their forks and custom
+// workflows all execute on. shown == executed.
 const BUILTIN_COMPLETIONS: Completion[] = [
   snip('step', 'step("${name}")', 'step(name)', 'Begin a new timeline step (shown live in the UI and Runs).'),
-  snip('report', 'report("${detail}")', 'report(detail)', 'Live progress line of the current step (e.g. "rollout 1/3 ready").'),
-  snip('fail', 'fail("${message}")', 'fail(message)', 'Abort the workflow as failed — triggers LIFO rollback of registered undos.'),
-  snip('sleep', 'sleep(${5})', 'sleep(seconds)', 'Pause (max 30s per call).'),
+  snip('report', 'report("${detail}")', 'report(detail)', 'Progress detail attached to the current step.'),
+  snip('fail', 'fail("${message}")', 'fail(message)', 'Abort as failed — every snapshotted change is rolled back automatically.'),
+  snip('sleep', 'sleep(${5})', 'sleep(seconds)', 'Pause (bounded).'),
+  snip('snapshot', 'snapshot(${ns}, "${Deployment}", ${name})', 'snapshot(namespace, kind, name) → dict', 'Explicitly capture an object before mutating it (mutators also auto-capture). Restore replays these captures.'),
   { label: 'args', type: 'variable', detail: 'dict[str,str]', info: 'Input parameters. All values are strings — cast with int()/float() as needed.' },
   { label: 'k8s', type: 'namespace', detail: 'module', info: 'Cluster operations. Type "k8s." for the full method list.' },
-  snip('wait_rollout', 'wait_rollout(${ns}, "${Deployment}", ${name}, timeout=${120})', 'wait_rollout(namespace, kind, name, timeout=120) → bool', 'Wait until the new generation is fully rolled out on POD level (old gone, new ready). Returns False on timeout — you decide the rollback.'),
+  { label: 'json', type: 'namespace', detail: 'module', info: 'json.decode(str) / json.encode(value) — parse or build JSON (e.g. a merge patch).' },
+  snip('wait_rollout', 'wait_rollout(${ns}, "${Deployment}", ${name}, timeout=${120})', 'wait_rollout(namespace, kind, name, timeout=120) → bool', 'Wait until the new generation is fully rolled out on POD level (old gone, new ready). Returns False on timeout — you decide (fail() → auto-rollback).'),
   snip('wait_ready', 'wait_ready(${ns}, "${Deployment}", ${name}, timeout=${120})', 'wait_ready(namespace, kind, name, timeout=120) → bool', 'Wait until pods == desired and every pod is ready. Returns False on timeout.'),
 ];
 
-// k8s.<member> — every builtin the agent registers (script.go k8sModule +
-// script_raw.go rawMembers). Applied after the "k8s." prefix.
+// k8s.<member> — the snapshot surface (script_snapshot.go). Mutators auto-capture
+// what they touch, so a failure rolls back and a succeeded run stays revertible.
 const K8S_COMPLETIONS: Completion[] = [
-  snip('get', 'get(${ns}, "${Deployment}", ${name})', 'k8s.get(namespace, kind, name) → dict', 'Read workload state: {desired, ready, updated, available, generationCaughtUp}.', 'method'),
-  snip('pods', 'pods(${ns})', 'k8s.pods(namespace, selector="") → list', 'List pods: [{name, ready, phase, restarts, node}].', 'method'),
-  snip('scale', 'scale(${ns}, "${Deployment}", ${name}, ${2})', 'k8s.scale(namespace, kind, name, replicas)', 'Set replicas (0–50). Auto-registers a rollback to the prior count.', 'method'),
-  snip('rollout_restart', 'rollout_restart(${ns}, "${Deployment}", ${name})', 'k8s.rollout_restart(namespace, kind, name)', 'Trigger a rolling restart (patches a restartedAt annotation).', 'method'),
-  snip('rollout_undo', 'rollout_undo(${ns}, ${name})', 'k8s.rollout_undo(namespace, name)', 'Roll a Deployment back to its previous revision.', 'method'),
-  snip('set_image', 'set_image(${ns}, "${Deployment}", ${name}, "${image}", container="${c}")', 'k8s.set_image(namespace, kind, name, image, container="")', 'Set a container image. container defaults to the sole container. Registers a rollback to the prior image.', 'method'),
-  snip('delete_pod', 'delete_pod(${ns}, ${name})', 'k8s.delete_pod(namespace, name)', 'Delete one pod (the owner recreates it). Irreversible.', 'method'),
-  snip('pause', 'pause(${ns}, ${name})', 'k8s.pause(namespace, name)', 'Pause a Deployment rollout. Rollback = resume.', 'method'),
-  snip('resume', 'resume(${ns}, ${name})', 'k8s.resume(namespace, name)', 'Resume a paused Deployment rollout.', 'method'),
-  snip('cordon', 'cordon(${node})', 'k8s.cordon(node)', 'Mark a node unschedulable. Rollback = uncordon.', 'method'),
-  snip('uncordon', 'uncordon(${node})', 'k8s.uncordon(node)', 'Mark a node schedulable again.', 'method'),
-  snip('hpa_set', 'hpa_set(${ns}, ${name}, ${min}, ${max})', 'k8s.hpa_set(namespace, name, min, max)', 'Set an HPA\'s min/max replica bounds. Registers a rollback to the prior bounds.', 'method'),
-  snip('cronjob_trigger', 'cronjob_trigger(${ns}, ${name})', 'k8s.cronjob_trigger(namespace, name)', 'Create a Job from a CronJob now. Irreversible.', 'method'),
-  snip('cronjob_suspend', 'cronjob_suspend(${ns}, ${name})', 'k8s.cronjob_suspend(namespace, name)', 'Suspend a CronJob. Rollback = resume.', 'method'),
-  snip('cronjob_resume', 'cronjob_resume(${ns}, ${name})', 'k8s.cronjob_resume(namespace, name)', 'Resume a suspended CronJob.', 'method'),
-  snip('taint', 'taint(${node}, "${key}", value="${v}", effect="${NoSchedule}")', 'k8s.taint(node, key, value="", effect="NoSchedule")', 'Add a node taint. Rollback = untaint.', 'method'),
-  snip('untaint', 'untaint(${node}, "${key}")', 'k8s.untaint(node, key)', 'Remove a node taint by key.', 'method'),
-  snip('events', 'events(${ns}, ${name})', 'k8s.events(namespace, name) → list', 'Recent events for an object: [{type, reason, message, count, age}].', 'method'),
-  // Generic escape hatch (script_raw.go) — any whitelisted GVR.
-  snip('raw_get', 'raw_get("${v1}", "${Pod}", ${ns}, ${name})', 'k8s.raw_get(apiVersion, kind, namespace, name) → dict', 'Read any whitelisted resource as a plain dict.', 'method'),
-  snip('raw_list', 'raw_list("${apps/v1}", "${ReplicaSet}", ${ns})', 'k8s.raw_list(apiVersion, kind, namespace) → list', 'List any whitelisted resource in a namespace.', 'method'),
-  snip('raw_apply', 'raw_apply("${apps/v1}", "${Deployment}", ${ns}, ${name}, ${obj})', 'k8s.raw_apply(apiVersion, kind, namespace, name, object)', 'Server-side apply an object (registers a rollback to the before-state).', 'method'),
-  snip('raw_patch', 'raw_patch("${apps/v1}", "${Deployment}", ${ns}, ${name}, ${patch})', 'k8s.raw_patch(apiVersion, kind, namespace, name, patch)', 'Strategic-merge patch (registers a rollback to the before-state).', 'method'),
-  snip('raw_delete', 'raw_delete("${v1}", "${Pod}", ${ns}, ${name})', 'k8s.raw_delete(apiVersion, kind, namespace, name)', 'Delete any whitelisted resource. Irreversible.', 'method'),
+  // reads (no snapshot, safe)
+  snip('get', 'get(${ns}, "${Deployment}", ${name})', 'k8s.get(namespace, kind, name) → dict', 'Workload state: {desired, ready, updated, available}.', 'method'),
+  snip('raw_get', 'raw_get("${v1}", "${ConfigMap}", ${ns}, ${name})', 'k8s.raw_get(apiVersion, kind, namespace, name, resource="") → dict|None', 'Read any object (CRDs via resource=plural). Secret values are redacted.', 'method'),
+  snip('raw_list', 'raw_list("${apps/v1}", "${ReplicaSet}", ${ns})', 'k8s.raw_list(apiVersion, kind, namespace, selector="", resource="") → list', 'List any kind in a namespace.', 'method'),
+  snip('pods', 'pods(${ns})', 'k8s.pods(namespace, selector="") → list', '[{name, ready, phase, restarts, node}].', 'method'),
+  snip('events', 'events(${ns}, "${name}")', 'k8s.events(namespace, name="") → list', '[{type, reason, message, count, object}].', 'method'),
+  // mutators (auto-snapshot → auto-rollback on failure + revertible)
+  snip('patch', 'patch(${ns}, "${Deployment}", ${name}, ${patch})', 'k8s.patch(namespace, kind, name, patch, strategic=False)', 'Whole-object merge patch (strategic=True for container arrays). Snapshots the object first.', 'method'),
+  snip('set_field', 'set_field(${ns}, "${Deployment}", ${name}, ["metadata", "annotations", "${key}"], "${value}")', 'k8s.set_field(namespace, kind, name, path, value)', 'Set one field path (value=None removes it). Field-scoped restore keeps sibling keys.', 'method'),
+  snip('set_fields', 'set_fields(${ns}, "${PodDisruptionBudget}", ${name}, [(["spec", "minAvailable"], ${1}), (["spec", "maxUnavailable"], None)])', 'k8s.set_fields(namespace, kind, name, entries)', 'Set several field paths in ONE atomic patch (mutually-exclusive pairs).', 'method'),
+  snip('scale', 'scale(${ns}, "${Deployment}", ${name}, ${2})', 'k8s.scale(namespace, kind, name, replicas)', 'Set replicas. Snapshots the prior count.', 'method'),
+  snip('patch_configmap', 'patch_configmap(${ns}, ${name}, "${key}", "${value}")', 'k8s.patch_configmap(namespace, name, key, value)', 'Set one ConfigMap key (field-scoped).', 'method'),
+  snip('create', 'create(${manifest})', 'k8s.create(manifest)', 'Create an object (manifest needs apiVersion, kind, metadata.name). Restore deletes it.', 'method'),
+  snip('delete', 'delete(${ns}, "${Pod}", ${name})', 'k8s.delete(namespace, kind, name)', 'Snapshot + delete. Restore recreates it from the capture.', 'method'),
 ];
 
 // RETICLE-Syntax-Farben: ruhige, gedeckte Hues — Status-Farben bleiben Daten.

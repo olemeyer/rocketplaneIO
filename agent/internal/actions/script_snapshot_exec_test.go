@@ -88,6 +88,39 @@ fail("verify failed")
 	}
 }
 
+// A custom "script" workflow (and thus a fork of a built-in) runs on the SAME
+// snapshot surface as the built-ins: k8s.patch is a snapshot-surface primitive the
+// legacy raw surface does NOT have, so this only passes because kind=script now
+// routes to executeSnapshotScript. Proves fork → edit → run works + is revertible.
+func TestExecuteScriptRunsOnSnapshotSurface(t *testing.T) {
+	old := actionsSnapshotDispatch
+	actionsSnapshotDispatch = true
+	defer func() { actionsSnapshotDispatch = old }()
+
+	cp := newStubCP()
+	defer cp.Close()
+	r := snapExecRunner(t, cp.URL, dep("shop", "api", 2))
+	src := `step("patch"); k8s.patch("shop", "Deployment", "api", {"spec": {"replicas": 5}})`
+	params, _ := json.Marshal(map[string]any{"source": src, "args": map[string]string{}})
+	r.execute(context.Background(), Action{ID: "act-fork", Kind: "script", Params: params})
+
+	if getDepReplicas(t, r, "shop", "api") != 5 {
+		t.Fatalf("custom script did not run on the snapshot surface (k8s.patch): replicas=%d", getDepReplicas(t, r, "shop", "api"))
+	}
+	durable, succeeded := false, false
+	for _, rep := range cp.snapshot() {
+		if rep.Status == "running" && len(rep.Snapshots) > 0 && string(rep.Snapshots) != "null" {
+			durable = true
+		}
+		if rep.Status == "succeeded" {
+			succeeded = true
+		}
+	}
+	if !durable || !succeeded {
+		t.Fatalf("custom script not revertible/succeeded on snapshot surface (durable=%v succeeded=%v)", durable, succeeded)
+	}
+}
+
 // The script's step() calls become a structured step timeline on the run — the
 // same pipeline the UI shows (fixes "0/0 steps · no steps recorded").
 func TestExecuteSnapshotScriptRecordsSteps(t *testing.T) {

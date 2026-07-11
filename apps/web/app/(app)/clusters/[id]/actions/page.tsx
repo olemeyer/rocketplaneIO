@@ -515,31 +515,24 @@ const BUILTINS: Builtin[] = [
   },
 ];
 
-const EXAMPLE_SOURCE = `# Safe scale-up with automatic rollback.
-# Full contract: args (dict) · step(name) · report(detail) · fail(msg)
-# k8s.get/pods/scale/rollout_restart/delete_pod · wait_rollout/wait_ready · sleep(s)
+const EXAMPLE_SOURCE = `# Safe scale-up on the snapshot substrate — same surface the built-ins run on.
+# Mutators auto-snapshot what they touch: if this fails, every change is rolled
+# back automatically, and a succeeded run stays revertible.
+# Surface: args · step(name) · report(msg) · fail(msg) · sleep(s) · json
+#   k8s.patch/set_field/set_fields/scale/patch_configmap/create/delete
+#   k8s.get/raw_get/raw_list/pods/events · wait_ready/wait_rollout
 
 ns = args["namespace"]
 name = args["name"]
 target = int(args["replicas"])
 
-step("snapshot")
-before = k8s.get(ns, "Deployment", name)["desired"]
-report("current replicas: %d" % before)
-
 step("scale to %d" % target)
+report("current: %d replicas" % k8s.get(ns, "Deployment", name)["desired"])
 k8s.scale(ns, "Deployment", name, target)
-ok = wait_ready(ns, "Deployment", name, timeout=120)
-
-if not ok:
-    step("rollback")
-    report("not ready in time - rolling back to %d" % before)
-    k8s.scale(ns, "Deployment", name, before)
-    wait_ready(ns, "Deployment", name, timeout=120)
-    fail("scale to %d did not settle - rolled back to %d" % (target, before))
 
 step("verify")
-pods = [p for p in k8s.pods(ns) if p["ready"]]
+if not wait_ready(ns, "Deployment", name, timeout=120):
+    fail("did not settle in time — the snapshot rolls every change back automatically")
 report("settled at %d replicas" % target)
 `;
 
