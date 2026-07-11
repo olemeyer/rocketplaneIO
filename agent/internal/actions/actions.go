@@ -214,7 +214,7 @@ func (r *Runner) execute(ctx context.Context, a Action) {
 	// (flag-gated per rollout; the released plan()/revert.go path is the default).
 	if actionsSnapshotDispatch {
 		if src, ok := builtinSnapshotScript(a.Kind); ok {
-			r.runSnapshotAction(ctx, a, src, snapshotArgs(a))
+			r.runSnapshotAction(ctx, a, src, snapshotArgs(a), builtinReversible(a.Kind))
 			return
 		}
 	}

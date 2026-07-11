@@ -26,6 +26,12 @@ var stdlibFS embed.FS
 
 var stdlibScripts = map[string]string{}
 
+// stdlibReversible[kind] is the script's `# @reversible` front-matter
+// (snapshot|readonly|none). "none" kinds do not durably report snapshots and are
+// not auto-rolled-back — so the UI never offers a revert that would fail or add
+// garbage (a cleanup recreating terminal pods, a PVC that cannot shrink).
+var stdlibReversible = map[string]string{}
+
 func init() {
 	entries, err := stdlibFS.ReadDir("stdlib")
 	if err != nil {
@@ -33,16 +39,37 @@ func init() {
 	}
 	for _, e := range entries {
 		data, err := stdlibFS.ReadFile("stdlib/" + e.Name())
-		if err == nil {
-			stdlibScripts[strings.TrimSuffix(e.Name(), ".star")] = string(data)
+		if err != nil {
+			continue
+		}
+		kind := strings.TrimSuffix(e.Name(), ".star")
+		src := string(data)
+		stdlibScripts[kind] = src
+		stdlibReversible[kind] = parseReversible(src)
+	}
+}
+
+// parseReversible extracts the `# @reversible <value>` front-matter line.
+func parseReversible(src string) string {
+	for _, ln := range strings.Split(src, "\n") {
+		ln = strings.TrimSpace(ln)
+		if strings.HasPrefix(ln, "# @reversible ") {
+			return strings.TrimSpace(strings.TrimPrefix(ln, "# @reversible "))
 		}
 	}
+	return "snapshot" // default: capture + rollback + revertible
 }
 
 // builtinSnapshotScript returns the embedded .star for a built-in kind.
 func builtinSnapshotScript(kind string) (string, bool) {
 	s, ok := stdlibScripts[kind]
 	return s, ok
+}
+
+// builtinReversible reports whether a built-in kind's captures should be durably
+// reported + auto-rolled-back (true) or discarded (false, for @reversible none).
+func builtinReversible(kind string) bool {
+	return stdlibReversible[kind] != "none"
 }
 
 // snapshotArgs flattens an action's target + typed params into the string `args`

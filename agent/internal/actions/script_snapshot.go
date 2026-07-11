@@ -588,13 +588,15 @@ func (r *Runner) executeSnapshotScript(ctx context.Context, a Action) {
 		r.report(ctx, a.ID, "failed", "snapshot_script: missing source", "", nil)
 		return
 	}
-	r.runSnapshotAction(ctx, a, p.Source, p.Args)
+	r.runSnapshotAction(ctx, a, p.Source, p.Args, true)
 }
 
 // runSnapshotAction is the shared run path for BOTH a custom snapshot_script and
 // a dispatched built-in .star: run the source, report captures durably as they
-// happen, auto-rollback via the generic Restore on any failure.
-func (r *Runner) runSnapshotAction(ctx context.Context, a Action, source string, args map[string]string) {
+// happen, auto-rollback via the generic Restore on any failure. When reversible
+// is false (@reversible none), captures are neither durably reported (no revert
+// button) nor rolled back — the action's effect is final by design.
+func (r *Runner) runSnapshotAction(ctx context.Context, a Action, source string, args map[string]string, reversible bool) {
 	ctx, cancel := context.WithTimeout(ctx, monitorTimeout)
 	defer cancel()
 
@@ -606,9 +608,11 @@ func (r *Runner) runSnapshotAction(ctx context.Context, a Action, source string,
 	report := func(msg string) { t.report(msg); r.report(ctx, a.ID, "running", "", msg, append([]stepState(nil), t.states...)) }
 
 	log := newCaptureLog()
-	log.onAdd = func(c Capture) {
-		// durable the instant a mutation is captured — survives a crash mid-run.
-		r.reportSnapshots(context.WithoutCancel(ctx), a.ID, []Capture{c})
+	if reversible {
+		log.onAdd = func(c Capture) {
+			// durable the instant a mutation is captured — survives a crash mid-run.
+			r.reportSnapshots(context.WithoutCancel(ctx), a.ID, []Capture{c})
+		}
 	}
 
 	err := r.execCapturedScript(ctx, log, source, args, report, onStep)
@@ -620,9 +624,19 @@ func (r *Runner) runSnapshotAction(ctx context.Context, a Action, source string,
 		}
 		return
 	}
-	// failure → mark the open step failed, then generic auto-rollback from the
-	// run's capture log (detached ctx so a cancel/timeout does not kill the rollback).
+	// failure → mark the open step failed.
 	t.failCurrent(err.Error())
+	// @reversible none: the effect is final by design — do not roll back (that
+	// would recreate terminal pods, re-add a manual job, etc.). Just report failed.
+	if !reversible {
+		r.report(ctx, a.ID, "failed", err.Error(), "", append([]stepState(nil), t.states...))
+		if r.onExecuted != nil {
+			r.onExecuted()
+		}
+		return
+	}
+	// generic auto-rollback from the run's capture log (detached ctx so a
+	// cancel/timeout does not kill the rollback).
 	rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer rcancel()
 	results := r.Restore(rctx, log.List())
