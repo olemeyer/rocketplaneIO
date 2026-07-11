@@ -637,7 +637,7 @@ function buildActionBody(kind: string, values: Record<string, string>) {
       ...(values.limitsMemory ? { limitsMemory: values.limitsMemory } : {}),
     };
   else if (kind === 'set_env')
-    params = { ...(values.container ? { container: values.container } : {}), name: values.envName ?? '', value: values.value ?? '', remove: isTrue(values.remove) };
+    params = { ...(values.container ? { container: values.container } : {}), envName: values.envName ?? '', value: values.value ?? '', remove: isTrue(values.remove) };
   else if (kind === 'rollout_to_revision') params = { revision: Number(values.revision ?? 1) };
   else if (kind === 'rollout_history') params = { limit: Number(values.limit ?? 10) };
   else if (kind === 'statefulset_partition') params = { partition: Number(values.partition ?? 0) };

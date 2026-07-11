@@ -46,9 +46,9 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "risk": "low",
     "reversible": "none",
     "targets": [
-      "Job"
+      "Namespace"
     ],
-    "source": "#\n# List jobs and delete those that have already succeeded or failed. These jobs are\n# terminal, so there is nothing to restore.\nns = args[\"namespace\"]\ndeleted = 0\nfor j in k8s.raw_list(\"batch/v1\", \"Job\", ns):\n    st = j.get(\"status\", {})\n    if st.get(\"succeeded\", 0) \u003e 0 or st.get(\"failed\", 0) \u003e 0:\n        name = j[\"metadata\"][\"name\"]\n        step(\"delete %s\" % name)\n        k8s.delete(ns, \"Job\", name)\n        deleted = deleted + 1\nreport(\"removed %d finished job(s)\" % deleted)\n"
+    "source": "#\n# The namespace is the target (args[\"name\"]). List its jobs and delete those that\n# have already succeeded or failed; terminal, so there is nothing to restore.\nns = args[\"name\"]\ndeleted = 0\nfor j in k8s.raw_list(\"batch/v1\", \"Job\", ns):\n    st = j.get(\"status\", {})\n    if st.get(\"succeeded\", 0) \u003e 0 or st.get(\"failed\", 0) \u003e 0:\n        name = j[\"metadata\"][\"name\"]\n        step(\"delete %s\" % name)\n        k8s.delete(ns, \"Job\", name)\n        deleted = deleted + 1\nreport(\"removed %d finished job(s)\" % deleted)\n"
   },
   "cleanup_pods": {
     "kind": "cleanup_pods",
@@ -57,9 +57,9 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "risk": "low",
     "reversible": "none",
     "targets": [
-      "Pod"
+      "Namespace"
     ],
-    "source": "#\n# List pods and delete those in a terminal phase. These pods are already done,\n# so there is nothing to restore.\nns = args[\"namespace\"]\nvictims = [p for p in k8s.pods(ns) if p[\"phase\"] in (\"Failed\", \"Succeeded\")]\nreport(\"found %d finished pod(s) to remove\" % len(victims))\nfor p in victims:\n    step(\"delete %s\" % p[\"name\"])\n    k8s.delete(ns, \"Pod\", p[\"name\"])\nreport(\"removed %d finished pod(s)\" % len(victims))\n"
+    "source": "#\n# The namespace is the target (args[\"name\"]). List its pods and delete those in a\n# terminal phase; those pods are already done, so there is nothing to restore.\nns = args[\"name\"]\nvictims = [p for p in k8s.pods(ns) if p[\"phase\"] in (\"Failed\", \"Succeeded\")]\nreport(\"found %d finished pod(s) to remove\" % len(victims))\nfor p in victims:\n    step(\"delete %s\" % p[\"name\"])\n    k8s.delete(ns, \"Pod\", p[\"name\"])\nreport(\"removed %d finished pod(s)\" % len(victims))\n"
   },
   "cordon": {
     "kind": "cordon",
@@ -75,13 +75,13 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
   "create_configmap": {
     "kind": "create_configmap",
     "name": "create configmap",
-    "summary": "Create a ConfigMap from key=value lines. Rollback deletes it again.",
+    "summary": "Create a ConfigMap from the given data. Rollback deletes it again.",
     "risk": "medium",
     "reversible": "snapshot",
     "targets": [
       "ConfigMap"
     ],
-    "source": "#\n# Build the object from the multiline `data` param, then create it. The snapshot\n# records that it did not exist before, so restore deletes what this run created.\nns = args[\"namespace\"]; name = args[\"name\"]\ndata = {}\nfor line in args.get(\"data\", \"\").split(\"\\n\"):\n    line = line.strip()\n    if line == \"\" or \"=\" not in line:\n        continue\n    k, v = line.split(\"=\", 1)\n    data[k.strip()] = v.strip()\nstep(\"create %s\" % name)\nk8s.create({\n    \"apiVersion\": \"v1\", \"kind\": \"ConfigMap\",\n    \"metadata\": {\"name\": name, \"namespace\": ns},\n    \"data\": data,\n})\nreport(\"created configmap %s with %d key(s)\" % (name, len(data)))\n"
+    "source": "#\n# The data param arrives as a JSON object (key -\u003e value). Create the ConfigMap; the\n# snapshot records that it did not exist before, so restore deletes what this run\n# created.\nns = args[\"namespace\"]; name = args[\"name\"]\ndata = json.decode(args.get(\"data\", \"{}\"))\nstep(\"create %s\" % name)\nk8s.create({\n    \"apiVersion\": \"v1\", \"kind\": \"ConfigMap\",\n    \"metadata\": {\"name\": name, \"namespace\": ns},\n    \"data\": data,\n})\nreport(\"created configmap %s with %d key(s)\" % (name, len(data)))\n"
   },
   "cronjob_resume": {
     "kind": "cronjob_resume",
@@ -160,7 +160,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "Pod"
     ],
-    "source": "#\n# Snapshot + delete. The owning controller recreates the pod, so there is nothing\n# to restore; the snapshot lets Revert re-create the exact pod if it was orphaned.\nns = args[\"namespace\"]; pod = args[\"pod\"]\nstep(\"delete %s\" % pod)\nk8s.delete(ns, \"Pod\", pod)\nreport(\"pod deleted — the owning controller will recreate it\")\n"
+    "source": "#\n# The pod is the target (args[\"name\"]). Snapshot + delete; the owning controller\n# recreates it, so there is nothing to restore — the snapshot lets Revert re-create\n# the exact pod if it was orphaned.\nns = args[\"namespace\"]; pod = args[\"name\"]\nstep(\"delete %s\" % pod)\nk8s.delete(ns, \"Pod\", pod)\nreport(\"pod deleted — the owning controller will recreate it\")\n"
   },
   "describe_resource": {
     "kind": "describe_resource",
@@ -194,7 +194,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "Node"
     ],
-    "source": "#\n# Read-only: lists every pod currently scheduled on the node so an operator can see\n# the blast radius before cordoning or draining. No mutation.\nstep(\"preview drain of %s\" % args[\"node\"])\nvictims = [p for p in k8s.pods(\"\") if p.get(\"node\") == args[\"node\"]]\nreport(\"%d pod(s) would be evicted\" % len(victims))\nfor p in victims:\n    report(p[\"name\"])\n"
+    "source": "#\n# The node is the target (args[\"name\"]). Read-only: list every pod scheduled on the\n# node so an operator can see the blast radius before cordoning or draining.\nnode = args[\"name\"]\nstep(\"preview drain of %s\" % node)\nvictims = [p for p in k8s.pods(\"\") if p.get(\"node\") == node]\nreport(\"%d pod(s) would be evicted\" % len(victims))\nfor p in victims:\n    report(p[\"name\"])\n"
   },
   "get_resource": {
     "kind": "get_resource",
@@ -243,9 +243,9 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "risk": "low",
     "reversible": "readonly",
     "targets": [
-      "Secret"
+      "Namespace"
     ],
-    "source": "#\n# Read-only: Helm v3 stores each release as a Secret labelled owner=helm. This reads\n# the release name, revision and status from those labels without touching anything.\nns = args.get(\"namespace\", \"\")\nstep(\"list helm releases\")\nsecs = k8s.raw_list(\"v1\", \"Secret\", ns, selector=\"owner=helm\")\nreport(\"%d release secret(s)\" % len(secs))\nfor s in secs:\n    lb = s[\"metadata\"].get(\"labels\", {})\n    report(\"%s rev=%s status=%s\" % (lb.get(\"name\"), lb.get(\"version\"), lb.get(\"status\")))\n"
+    "source": "#\n# The namespace is the target (args[\"name\"]); \"-\" lists across all namespaces.\n# Helm v3 stores each release as a Secret labelled owner=helm — read name, revision\n# and status from those labels without touching anything.\nns = args[\"name\"]\nif ns == \"-\":\n    ns = \"\"\nstep(\"list helm releases\")\nsecs = k8s.raw_list(\"v1\", \"Secret\", ns, selector=\"owner=helm\")\nreport(\"%d release secret(s)\" % len(secs))\nfor s in secs:\n    lb = s[\"metadata\"].get(\"labels\", {})\n    report(\"%s rev=%s status=%s\" % (lb.get(\"name\"), lb.get(\"version\"), lb.get(\"status\")))\n"
   },
   "hpa_set": {
     "kind": "hpa_set",
@@ -278,7 +278,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "Namespace"
     ],
-    "source": "#\n# Read-only: pulls the event stream for the namespace. warningsOnly=true keeps only\n# Warning events; limit caps how many are printed.\nns = args.get(\"namespace\", \"\")\nstep(\"list events\")\nevs = k8s.events(ns, \"\")\nif args.get(\"warningsOnly\", \"\") == \"true\":\n    evs = [e for e in evs if e.get(\"type\", \"\") == \"Warning\"]\nreport(\"%d event(s)\" % len(evs))\nlimit = int(args.get(\"limit\", \"40\"))\nfor i in range(limit):\n    if i \u003e= len(evs):\n        break\n    e = evs[i]\n    mark = \"WARN\" if e.get(\"type\", \"\") == \"Warning\" else \"info\"\n    report(\"[%s] %s %s: %s\" % (mark, e.get(\"object\", \"\"), e.get(\"reason\", \"\"), e.get(\"message\", \"\")))\n"
+    "source": "#\n# The namespace is the target (args[\"name\"]); \"-\" reads across all namespaces.\n# warningsOnly=true keeps only Warning events; limit caps how many are printed.\nns = args[\"name\"]\nif ns == \"-\":\n    ns = \"\"\nstep(\"list events\")\nevs = k8s.events(ns, \"\")\nif args.get(\"warningsOnly\", \"\") == \"true\":\n    evs = [e for e in evs if e.get(\"type\", \"\") == \"Warning\"]\nreport(\"%d event(s)\" % len(evs))\nlimit = int(args.get(\"limit\", \"40\"))\nfor i in range(limit):\n    if i \u003e= len(evs):\n        break\n    e = evs[i]\n    mark = \"WARN\" if e.get(\"type\", \"\") == \"Warning\" else \"info\"\n    report(\"[%s] %s %s: %s\" % (mark, e.get(\"object\", \"\"), e.get(\"reason\", \"\"), e.get(\"message\", \"\")))\n"
   },
   "node_taint": {
     "kind": "node_taint",
@@ -289,7 +289,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "Node"
     ],
-    "source": "#\n# Read the node's current taints, drop any existing entry with the same key, then\n# append the requested taint. Node is cluster-scoped, so the namespace is \"-\".\nnode = args[\"node\"]; key = args[\"key\"]\nn = k8s.raw_get(\"v1\", \"Node\", \"-\", node)\nif not n:\n    fail(\"node %s not found\" % node)\ntaints = n.get(\"spec\", {}).get(\"taints\", []) or []\nnewlist = [t for t in taints if t.get(\"key\") != key]\nnewlist.append({\n    \"key\": key,\n    \"value\": args.get(\"value\", \"\"),\n    \"effect\": args.get(\"effect\", \"NoSchedule\"),\n})\nstep(\"taint %s\" % node)\nk8s.patch(\"-\", \"Node\", node, {\"spec\": {\"taints\": newlist}})\nreport(\"tainted %s with %s=%s:%s\" % (node, key, args.get(\"value\", \"\"), args.get(\"effect\", \"NoSchedule\")))\n"
+    "source": "#\n# The node is the target (args[\"name\"]). Read its current taints, drop any existing\n# entry with the same key, then append the requested taint. Node is cluster-scoped\n# (namespace \"-\").\nnode = args[\"name\"]; key = args[\"key\"]\nn = k8s.raw_get(\"v1\", \"Node\", \"-\", node)\nif not n:\n    fail(\"node %s not found\" % node)\ntaints = n.get(\"spec\", {}).get(\"taints\", []) or []\nnewlist = [t for t in taints if t.get(\"key\") != key]\nnewlist.append({\n    \"key\": key,\n    \"value\": args.get(\"value\", \"\"),\n    \"effect\": args.get(\"effect\", \"NoSchedule\"),\n})\nstep(\"taint %s\" % node)\nk8s.patch(\"-\", \"Node\", node, {\"spec\": {\"taints\": newlist}})\nreport(\"tainted %s with %s=%s:%s\" % (node, key, args.get(\"value\", \"\"), args.get(\"effect\", \"NoSchedule\")))\n"
   },
   "node_untaint": {
     "kind": "node_untaint",
@@ -300,7 +300,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "Node"
     ],
-    "source": "#\n# Read the node's taints and drop every entry with the given key. Node is\n# cluster-scoped, so the namespace is \"-\".\nnode = args[\"node\"]; key = args[\"key\"]\nn = k8s.raw_get(\"v1\", \"Node\", \"-\", node)\nif not n:\n    fail(\"node %s not found\" % node)\ntaints = n.get(\"spec\", {}).get(\"taints\", []) or []\nnewlist = [t for t in taints if t.get(\"key\") != key]\nstep(\"untaint %s\" % node)\nk8s.patch(\"-\", \"Node\", node, {\"spec\": {\"taints\": newlist}})\nreport(\"removed taint %s from %s\" % (key, node))\n"
+    "source": "#\n# The node is the target (args[\"name\"]). Read its taints and drop every entry with\n# the given key. Node is cluster-scoped (namespace \"-\").\nnode = args[\"name\"]; key = args[\"key\"]\nn = k8s.raw_get(\"v1\", \"Node\", \"-\", node)\nif not n:\n    fail(\"node %s not found\" % node)\ntaints = n.get(\"spec\", {}).get(\"taints\", []) or []\nnewlist = [t for t in taints if t.get(\"key\") != key]\nstep(\"untaint %s\" % node)\nk8s.patch(\"-\", \"Node\", node, {\"spec\": {\"taints\": newlist}})\nreport(\"removed taint %s from %s\" % (key, node))\n"
   },
   "patch_configmap": {
     "kind": "patch_configmap",
@@ -347,7 +347,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "PodDisruptionBudget"
     ],
-    "source": "#\n# minAvailable and maxUnavailable are mutually exclusive, so setting one clears the\n# other. Value may be an integer or a percentage string like \"20%\".\nns = args[\"namespace\"]; name = args[\"name\"]\nraw = args[\"value\"]\nval = raw if raw.endswith(\"%\") else int(raw)\nif args[\"mode\"] == \"minAvailable\":\n    step(\"set minAvailable=%s\" % raw)\n    k8s.patch(ns, \"PodDisruptionBudget\", name, {\"spec\": {\"minAvailable\": val, \"maxUnavailable\": None}})\n    report(\"minAvailable set to %s on %s\" % (raw, name))\nelse:\n    step(\"set maxUnavailable=%s\" % raw)\n    k8s.patch(ns, \"PodDisruptionBudget\", name, {\"spec\": {\"maxUnavailable\": val, \"minAvailable\": None}})\n    report(\"maxUnavailable set to %s on %s\" % (raw, name))\n"
+    "source": "#\n# minAvailable and maxUnavailable are mutually exclusive, so setting one clears the\n# other IN ONE atomic patch (an intermediate with both set would be rejected). The\n# field-scoped snapshot restores the prior pair exactly — removing the key this run\n# added and restoring the one it cleared. Value may be an integer or a percentage.\nns = args[\"namespace\"]; name = args[\"name\"]\nif args.get(\"maxUnavailable\", \"\") != \"\":\n    raw = args[\"maxUnavailable\"]\n    val = raw if raw.endswith(\"%\") else int(raw)\n    step(\"set maxUnavailable=%s\" % raw)\n    k8s.set_fields(ns, \"PodDisruptionBudget\", name, [\n        ([\"spec\", \"maxUnavailable\"], val),\n        ([\"spec\", \"minAvailable\"], None),\n    ])\n    report(\"maxUnavailable set to %s on %s\" % (raw, name))\nelse:\n    raw = args.get(\"minAvailable\", \"1\")\n    val = raw if raw.endswith(\"%\") else int(raw)\n    step(\"set minAvailable=%s\" % raw)\n    k8s.set_fields(ns, \"PodDisruptionBudget\", name, [\n        ([\"spec\", \"minAvailable\"], val),\n        ([\"spec\", \"maxUnavailable\"], None),\n    ])\n    report(\"minAvailable set to %s on %s\" % (raw, name))\n"
   },
   "pod_events": {
     "kind": "pod_events",
