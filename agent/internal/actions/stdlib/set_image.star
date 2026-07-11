@@ -1,3 +1,9 @@
+# @name set image
+# @summary Set one container's image via strategic merge (verified rollout).
+# @risk medium
+# @reversible snapshot
+# @targets Deployment,StatefulSet,DaemonSet
+#
 # Snapshot the whole workload, then strategic-merge just the target container's
 # image (preserves other containers/fields). Rollback restores the captured
 # containers array (a whole-object JSON-merge restore replaces it back).

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -118,6 +119,28 @@ func TestParitySetImage(t *testing.T) {
 	arr, _ := c.([]any)
 	if len(arr) != 1 || arr[0].(map[string]any)["image"] != "nginx:1.25" {
 		t.Fatalf("image not restored: %v", arr)
+	}
+}
+
+// delete_pod/delete_configmap/delete_job shape: k8s.delete snapshots the whole
+// object then deletes; the generic restore RECREATES it from the capture.
+func TestParityDeleteRecreate(t *testing.T) {
+	r := snapRunner(t, cm("shop", "cfg", map[string]any{"mode": "prod", "keep": "x"}))
+	runParity(t, r, `k8s.delete("shop", "ConfigMap", "cfg")`)
+	d := getCMData(t, r, "shop", "cfg")
+	if d["mode"] != "prod" || d["keep"] != "x" {
+		t.Fatalf("configmap not recreated to before-state on restore: %v", d)
+	}
+}
+
+// create_configmap shape: k8s.create snapshots the ABSENT target then creates;
+// the generic restore DELETES what the run created.
+func TestParityCreateDelete(t *testing.T) {
+	r := snapRunner(t)
+	runParity(t, r, `k8s.create({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "new", "namespace": "shop"}, "data": {"k": "v"}})`)
+	_, err := r.dyn.Resource(cmGVR).Namespace("shop").Get(context.Background(), "new", metav1.GetOptions{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("created configmap not deleted on restore: err=%v", err)
 	}
 }
 

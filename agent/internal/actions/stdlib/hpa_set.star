@@ -1,3 +1,9 @@
+# @name hpa set bounds
+# @summary Patch an HPA's min/max replica bounds; rollback restores the prior bounds.
+# @risk low
+# @reversible snapshot
+# @targets HorizontalPodAutoscaler
+#
 # Snapshot the HPA, patch its bounds; rollback restores the prior min/max.
 ns = args["namespace"]; name = args["name"]
 spec = {}

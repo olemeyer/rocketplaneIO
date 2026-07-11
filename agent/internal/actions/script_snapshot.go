@@ -15,9 +15,12 @@ import (
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
+	starlarkjson "go.starlark.net/lib/json"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 )
@@ -192,11 +195,201 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		return starlark.None, nil
 	})
 
+	// k8s.delete — snapshot the WHOLE object, then delete it. The generic Restore
+	// recreates it from the capture (Get→NotFound→Create), so a delete is
+	// reversible like any other mutation. Used by delete_pod/delete_job/
+	// delete_configmap/cleanup_* (owners recreate pods; the snapshot recreates the
+	// rest). NOTE: an owner-managed pod is recreated by its controller too — undo
+	// is idempotent (Create is a no-op if it already exists again).
+	k8sDelete := starlark.NewBuiltin("delete", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
+		var ns, kind, name string
+		if err := starlark.UnpackArgs("delete", a, kw, "namespace", &ns, "kind", &kind, "name", &name); err != nil {
+			return nil, err
+		}
+		c, err := r.captureObject(ctx, log, kind, ns, name)
+		if err != nil {
+			return nil, fmt.Errorf("delete: cannot snapshot %s/%s (strict mode): %w", kind, name, err)
+		}
+		if c != nil && !c.Existed {
+			rep(fmt.Sprintf("%s/%s already gone", kind, name))
+			return starlark.None, nil
+		}
+		iface, err := r.dynIface(kind, ns)
+		if err != nil {
+			return nil, err
+		}
+		if err := iface.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return nil, err
+		}
+		rep(fmt.Sprintf("deleted %s/%s", kind, name))
+		return starlark.None, nil
+	})
+
+	// k8s.create — snapshot the (absent) target, then create it. The generic
+	// Restore deletes what this run created. Used by create_configmap/run_debug_pod.
+	k8sCreate := starlark.NewBuiltin("create", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
+		var manifest *starlark.Dict
+		if err := starlark.UnpackArgs("create", a, kw, "manifest", &manifest); err != nil {
+			return nil, err
+		}
+		obj, err := starToGo(manifest)
+		if err != nil {
+			return nil, err
+		}
+		m, _ := obj.(map[string]any)
+		u := &unstructured.Unstructured{Object: m}
+		kind, name, ns := u.GetKind(), u.GetName(), u.GetNamespace()
+		if kind == "" || name == "" {
+			return nil, fmt.Errorf("create: manifest needs kind + metadata.name")
+		}
+		if _, err := r.captureObject(ctx, log, kind, ns, name); err != nil {
+			return nil, fmt.Errorf("create: cannot snapshot %s/%s (strict mode): %w", kind, name, err)
+		}
+		iface, err := r.dynIface(kind, ns)
+		if err != nil {
+			return nil, err
+		}
+		u.SetResourceVersion("")
+		if _, err := iface.Create(ctx, u, metav1.CreateOptions{FieldManager: "rocketplane-agent"}); err != nil {
+			return nil, err
+		}
+		rep(fmt.Sprintf("created %s/%s", kind, name))
+		return starlark.None, nil
+	})
+
+	// readIface resolves a dynamic client for READS across any kind — whitelisted
+	// or via api_version(+resource). Reads are safe, so (unlike mutators) they are
+	// not whitelist-bound; this backs get/list of CRDs, ReplicaSets, Helm secrets.
+	readIface := func(apiVersion, kind, ns, resource string) (dynamicResource, error) {
+		if r.dyn == nil {
+			return nil, fmt.Errorf("generic access unavailable (no dynamic client)")
+		}
+		gvr, err := rawGVR(apiVersion, kind, resource)
+		if err != nil {
+			return nil, err
+		}
+		if ns == "" || ns == "-" {
+			return r.dyn.Resource(gvr), nil
+		}
+		return r.dyn.Resource(gvr).Namespace(ns), nil
+	}
+
+	// k8s.raw_get — read ANY object (CRDs too). Read-only, no capture. Secret
+	// values are redacted before crossing into script logic.
+	k8sRawGet := starlark.NewBuiltin("raw_get", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
+		var apiVersion, kind, ns, name, resource string
+		if err := starlark.UnpackArgs("raw_get", a, kw, "api_version", &apiVersion, "kind", &kind, "namespace", &ns, "name", &name, "resource?", &resource); err != nil {
+			return nil, err
+		}
+		iface, err := readIface(apiVersion, kind, ns, resource)
+		if err != nil {
+			return nil, err
+		}
+		u, err := iface.Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return starlark.None, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		obj := stripForSnapshot(u)
+		if kind == "Secret" {
+			redactSecretData(obj)
+		}
+		return goToStar(obj), nil
+	})
+
+	// k8s.raw_list — list ANY kind by namespace (+optional label selector). Read-only.
+	k8sRawList := starlark.NewBuiltin("raw_list", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
+		var apiVersion, kind, ns, selector, resource string
+		if err := starlark.UnpackArgs("raw_list", a, kw, "api_version", &apiVersion, "kind", &kind, "namespace", &ns, "selector?", &selector, "resource?", &resource); err != nil {
+			return nil, err
+		}
+		iface, err := readIface(apiVersion, kind, ns, resource)
+		if err != nil {
+			return nil, err
+		}
+		list, err := iface.List(ctx, metav1.ListOptions{LabelSelector: selector, Limit: 200})
+		if err != nil {
+			return nil, err
+		}
+		out := make([]starlark.Value, 0, len(list.Items))
+		for i := range list.Items {
+			obj := stripForSnapshot(&list.Items[i])
+			if kind == "Secret" {
+				redactSecretData(obj)
+			}
+			out = append(out, goToStar(obj))
+		}
+		return starlark.NewList(out), nil
+	})
+
+	// k8s.pods — pod-level status list (name/ready/phase/restarts/node). Read-only.
+	k8sPods := starlark.NewBuiltin("pods", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
+		var ns, selector string
+		if err := starlark.UnpackArgs("pods", a, kw, "namespace", &ns, "selector?", &selector); err != nil {
+			return nil, err
+		}
+		list, err := r.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+		if err != nil {
+			return nil, err
+		}
+		out := make([]starlark.Value, 0, len(list.Items))
+		for i := range list.Items {
+			p := &list.Items[i]
+			d := starlark.NewDict(5)
+			_ = d.SetKey(starlark.String("name"), starlark.String(p.Name))
+			_ = d.SetKey(starlark.String("ready"), starlark.Bool(isPodReady(p)))
+			_ = d.SetKey(starlark.String("phase"), starlark.String(string(p.Status.Phase)))
+			restarts := 0
+			for _, cs := range p.Status.ContainerStatuses {
+				restarts += int(cs.RestartCount)
+			}
+			_ = d.SetKey(starlark.String("restarts"), starlark.MakeInt(restarts))
+			_ = d.SetKey(starlark.String("node"), starlark.String(p.Spec.NodeName))
+			out = append(out, d)
+		}
+		return starlark.NewList(out), nil
+	})
+
+	// k8s.events — recent events (optionally filtered to one involved object). Read-only.
+	k8sEvents := starlark.NewBuiltin("events", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
+		var ns, name string
+		if err := starlark.UnpackArgs("events", a, kw, "namespace", &ns, "name?", &name); err != nil {
+			return nil, err
+		}
+		list, err := r.clientset.CoreV1().Events(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		out := make([]starlark.Value, 0, len(list.Items))
+		for i := range list.Items {
+			e := &list.Items[i]
+			if name != "" && e.InvolvedObject.Name != name {
+				continue
+			}
+			d := starlark.NewDict(5)
+			_ = d.SetKey(starlark.String("type"), starlark.String(e.Type))
+			_ = d.SetKey(starlark.String("reason"), starlark.String(e.Reason))
+			_ = d.SetKey(starlark.String("message"), starlark.String(e.Message))
+			_ = d.SetKey(starlark.String("count"), starlark.MakeInt(int(e.Count)))
+			_ = d.SetKey(starlark.String("object"), starlark.String(e.InvolvedObject.Kind+"/"+e.InvolvedObject.Name))
+			out = append(out, d)
+		}
+		return starlark.NewList(out), nil
+	})
+
 	k8s := &starlarkstruct.Module{Name: "k8s", Members: starlark.StringDict{
 		"patch":           k8sPatch,
 		"set_field":       k8sSetField,
 		"scale":           k8sScale,
 		"patch_configmap": k8sPatchCM,
+		"delete":          k8sDelete,
+		"create":          k8sCreate,
+		"raw_get":         k8sRawGet,
+		"raw_list":        k8sRawList,
+		"pods":            k8sPods,
+		"events":          k8sEvents,
 		"get":             starlark.NewBuiltin("get", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
 			var ns, kind, name string
 			if err := starlark.UnpackArgs("get", a, kw, "namespace", &ns, "kind", &kind, "name", &name); err != nil {
@@ -250,11 +443,47 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		return st.generationCaughtUp && st.ready == st.desired && sum.terminating == 0 && int32(sum.total) == st.desired
 	})
 
+	// report(msg) — a human progress line (same channel as step()).
+	reportFn := starlark.NewBuiltin("report", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
+		var msg string
+		if err := starlark.UnpackArgs("report", a, kw, "msg", &msg); err != nil {
+			return nil, err
+		}
+		rep(msg)
+		return starlark.None, nil
+	})
+
+	// sleep(seconds) — bounded cooperative wait (capped at maxSleep). Cancels with
+	// the run so a hung poll cannot outlive the action timeout.
+	sleepFn := starlark.NewBuiltin("sleep", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
+		var secsVal starlark.Value
+		if err := starlark.UnpackArgs("sleep", a, kw, "seconds", &secsVal); err != nil {
+			return nil, err
+		}
+		secs, ok := starlark.AsFloat(secsVal)
+		if !ok || secs < 0 {
+			return nil, fmt.Errorf("sleep: seconds must be a non-negative number")
+		}
+		d := time.Duration(secs * float64(time.Second))
+		if d > maxSleep {
+			d = maxSleep
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("timeout during sleep")
+		case <-time.After(d):
+		}
+		return starlark.None, nil
+	})
+
 	return starlark.StringDict{
 		"snapshot":     snapshot,
 		"k8s":          k8s,
+		"json":         starlarkjson.Module, // json.decode/encode for generic patches
 		"fail":         failFn,
 		"step":         stepFn,
+		"report":       reportFn,
+		"sleep":        sleepFn,
 		"wait_rollout": waitRollout,
 		"wait_ready":   waitReady,
 	}
