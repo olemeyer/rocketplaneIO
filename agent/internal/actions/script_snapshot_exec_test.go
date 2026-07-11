@@ -3,8 +3,10 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -18,10 +20,11 @@ func snapExecRunner(t *testing.T, cpURL string, objs ...*unstructured.Unstructur
 	t.Helper()
 	scheme := runtime.NewScheme()
 	gvrToList := map[schema.GroupVersionResource]string{
-		cmGVR:   "ConfigMapList",
-		depGVR:  "DeploymentList",
-		nodeGVR: "NodeList",
-		hpaGVR:  "HorizontalPodAutoscalerList",
+		cmGVR:     "ConfigMapList",
+		depGVR:    "DeploymentList",
+		nodeGVR:   "NodeList",
+		hpaGVR:    "HorizontalPodAutoscalerList",
+		secretGVR: "SecretList",
 	}
 	rt := make([]runtime.Object, len(objs))
 	for i, o := range objs {
@@ -30,6 +33,47 @@ func snapExecRunner(t *testing.T, cpURL string, objs ...*unstructured.Unstructur
 	r := New(cpURL, "tok", k8sfake.NewSimpleClientset(), nil, nil)
 	r.dyn = dynfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToList, rt...)
 	return r
+}
+
+var secretGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
+
+func secret(ns, name string, data map[string]any) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Secret",
+		"metadata": map[string]any{"namespace": ns, "name": name},
+		"data":     data,
+	}}
+}
+
+// Secret data must NEVER be durably reported to the control plane (no plaintext at
+// rest). The mutation still happens; auto-rollback-on-failure still works from the
+// in-memory log — only the durable copy is withheld.
+func TestSecretCapturesNotDurablyReported(t *testing.T) {
+	cp := newStubCP()
+	defer cp.Close()
+	r := snapExecRunner(t, cp.URL, secret("shop", "creds", map[string]any{"token": "b2xk"}))
+	// patch the secret, then fail → in-memory auto-rollback must restore it.
+	src := `
+k8s.patch("shop", "Secret", "creds", {"stringData": {"token": "new"}})
+fail("boom")
+`
+	params, _ := json.Marshal(map[string]any{"source": src})
+	r.execute(context.Background(), Action{ID: "act-sec", Kind: "snapshot_script", Params: params})
+
+	// no durable report may carry a Secret capture
+	for _, rep := range cp.snapshot() {
+		if len(rep.Snapshots) > 0 && string(rep.Snapshots) != "null" {
+			if strings.Contains(string(rep.Snapshots), "\"Secret\"") || strings.Contains(string(rep.Snapshots), "\"token\"") {
+				t.Fatalf("secret data leaked into a durable snapshot report: %s", rep.Snapshots)
+			}
+		}
+	}
+	// auto-rollback (in-memory) restored the original value
+	u, _ := r.dyn.Resource(secretGVR).Namespace("shop").Get(context.Background(), "creds", metav1.GetOptions{})
+	d, _, _ := unstructured.NestedMap(u.Object, "data")
+	if d["token"] != "b2xk" {
+		t.Fatalf("secret not rolled back in-memory: %v", d)
+	}
 }
 
 // The full execute() path for a snapshot_script action: captures are reported

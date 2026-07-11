@@ -114,7 +114,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "CronJob"
     ],
-    "source": "#\n# Read the CronJob and materialise its jobTemplate into a standalone Job. This is\n# a fire-and-forget manual run; there is nothing meaningful to restore.\nns = args[\"namespace\"]; name = args[\"name\"]\ncj = k8s.raw_get(\"batch/v1\", \"CronJob\", ns, name)\nif not cj:\n    fail(\"cronjob %s/%s not found\" % (ns, name))\njt = cj[\"spec\"][\"jobTemplate\"]\njobname = name + \"-manual\"\nstep(\"create job %s\" % jobname)\nk8s.create({\n    \"apiVersion\": \"batch/v1\",\n    \"kind\": \"Job\",\n    \"metadata\": {\"name\": jobname, \"namespace\": ns},\n    \"spec\": jt.get(\"spec\", {}),\n})\nreport(\"created one-off job %s from cronjob %s\" % (jobname, name))\n"
+    "source": "#\n# Read the CronJob and materialise its jobTemplate into a standalone Job. This is\n# a fire-and-forget manual run; there is nothing meaningful to restore.\nns = args[\"namespace\"]; name = args[\"name\"]\ncj = k8s.raw_get(\"batch/v1\", \"CronJob\", ns, name)\nif not cj:\n    fail(\"cronjob %s/%s not found\" % (ns, name))\njt = cj[\"spec\"][\"jobTemplate\"]\njobname = name + \"-manual\"\nif k8s.raw_get(\"batch/v1\", \"Job\", ns, jobname) != None:\n    fail(\"a manual job %s already exists — delete it before triggering again\" % jobname)\nstep(\"create job %s\" % jobname)\nk8s.create({\n    \"apiVersion\": \"batch/v1\",\n    \"kind\": \"Job\",\n    \"metadata\": {\"name\": jobname, \"namespace\": ns},\n    \"spec\": jt.get(\"spec\", {}),\n})\nreport(\"created one-off job %s from cronjob %s\" % (jobname, name))\n"
   },
   "debug_bundle": {
     "kind": "debug_bundle",

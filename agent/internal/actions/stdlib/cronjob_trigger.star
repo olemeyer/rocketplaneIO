@@ -12,6 +12,8 @@ if not cj:
     fail("cronjob %s/%s not found" % (ns, name))
 jt = cj["spec"]["jobTemplate"]
 jobname = name + "-manual"
+if k8s.raw_get("batch/v1", "Job", ns, jobname) != None:
+    fail("a manual job %s already exists — delete it before triggering again" % jobname)
 step("create job %s" % jobname)
 k8s.create({
     "apiVersion": "batch/v1",

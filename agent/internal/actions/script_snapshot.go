@@ -610,6 +610,14 @@ func (r *Runner) runSnapshotAction(ctx context.Context, a Action, source string,
 	log := newCaptureLog()
 	if reversible {
 		log.onAdd = func(c Capture) {
+			// NEVER persist Secret data to the control plane — a durable snapshot
+			// carries the real (base64) values, which must not land in the DB/audit.
+			// Auto-rollback-on-failure still works: it replays the IN-MEMORY log
+			// (real values), not the durable copy. The trade-off is no manual revert
+			// for a Secret change (re-run patch_secret with the prior value).
+			if c.Kind == "Secret" {
+				return
+			}
 			// durable the instant a mutation is captured — survives a crash mid-run.
 			r.reportSnapshots(context.WithoutCancel(ctx), a.ID, []Capture{c})
 		}
