@@ -24,7 +24,7 @@ import {
   type InventoryKind,
 } from '@/lib/api/controlplane';
 import type { ActionDefParam, ActionDefinition, ActionKind, ClusterAction, ServiceMap } from '@/lib/api/types';
-import { BUILTIN_STARLARK } from '@/lib/action-templates';
+import { BUILTIN_ACTIONS, type BuiltinMeta } from '@/lib/builtin-actions.generated';
 import { LEVEL_META, RISK_LEVELS, levelColor, type RiskLevel } from '@/lib/approval';
 import Link from 'next/link';
 
@@ -800,6 +800,75 @@ const TARGET_LABEL: Record<string, string> = {
   pod_logs: 'pod', list_events: 'namespace', run_debug_pod: 'ephemeral pod', net_probe: 'url · host:port',
 };
 
+// HOST_NATIVE: die wenigen Kinds, die KEIN Starlark-Skript sind, weil sie eine
+// Agent-Host-Fähigkeit brauchen (Eviction-API, Container-Exec, Kubelet-Logs,
+// In-Cluster-Probe). Die UI zeigt deren echte native Pipeline — nicht ein
+// Fake-Skript: „shown == executed" gilt auch hier.
+const HOST_NATIVE: Record<string, string> = {
+  drain:
+    'Runs natively on the agent: cordon, then a PDB-aware Eviction API across every namespace (DaemonSet & mirror pods are kept), waiting until the node is empty. Cancel re-uncordons.',
+  evict_pod:
+    'Runs natively on the agent: the graceful, PDB-aware Eviction API — never a force delete — then waits for a ready replacement.',
+  exec_readonly:
+    'Runs natively on the agent: one whitelisted argv (no shell) exec into the container. The only way to read in-container file logs.',
+  net_probe:
+    'Runs natively on the agent: an in-cluster http / tcp / dns / tls probe — status, latency, and certificate days-to-expiry.',
+  pod_logs:
+    'Runs natively on the agent: kubectl logs straight from the kubelet, including the PREVIOUS crashed container.',
+  run_debug_pod:
+    'Runs natively on the agent: an ephemeral probe pod (image + argv, optional PVC mount). Its logs are the result; the pod is always cleaned up.',
+};
+
+// builtinSource returns the EXACT executed source for a kind: the snapshot
+// Starlark for scriptable kinds (single source, generated from the agent's
+// embedded scripts) or the native-primitive descriptor for host-native kinds.
+function builtinSource(kind: string): string {
+  const meta = BUILTIN_ACTIONS[kind];
+  if (meta) return meta.source;
+  const note = HOST_NATIVE[kind];
+  return note ? `# ${kind} — native agent primitive\n#\n# ${note}\n` : `# ${kind}\n`;
+}
+
+// REVERSIBLE_META renders the snapshot-substrate reversibility as a first-class,
+// colorblind-glyphed status. Snapshot = auto-rollback; readonly = nothing to
+// undo; none = irreversible (verify carefully); native = runs on the agent host.
+const REVERSIBLE_META = {
+  snapshot: {
+    label: 'auto-rollback',
+    hint: 'The script snapshots what it touches; a failure rolls every mutation back automatically, and Revert stays available on the run.',
+    klass: 'reversible',
+  },
+  readonly: {
+    label: 'read-only',
+    hint: 'Reads cluster state only — no mutation, nothing to undo.',
+    klass: 'read',
+  },
+  none: {
+    label: 'irreversible',
+    hint: 'This action has lasting effects that cannot be snapshot-restored. Verify carefully before running.',
+    klass: 'destructive',
+  },
+  native: {
+    label: 'native primitive',
+    hint: 'Runs as a built-in agent capability rather than a Starlark script.',
+    klass: 'disruptive',
+  },
+} satisfies Record<string, { label: string; hint: string; klass: RiskLevel }>;
+
+function reversibleOf(kind: string): keyof typeof REVERSIBLE_META {
+  return (BUILTIN_ACTIONS[kind]?.reversible as keyof typeof REVERSIBLE_META) ?? 'native';
+}
+
+// parseSteps extracts the step("…") pipeline a script declares — the honest
+// timeline the run will emit. Dynamic %-formatting is shown verbatim.
+function parseSteps(src: string): string[] {
+  const out: string[] = [];
+  const re = /step\(\s*"((?:[^"\\]|\\.)*)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) out.push(m[1] ?? '');
+  return out;
+}
+
 // Level-Labels/Glyphs kommen aus lib/approval (LEVEL_META) — eine Quelle für
 // Katalog, Copilot-Guardrails und Runs-Seite.
 
@@ -901,6 +970,7 @@ export default function ActionsPage() {
   const [map, setMap] = useState<ServiceMap | null>(null);
   const { nodes: infraNodes } = useInfra(orgId, clusterId);
   const [editor, setEditor] = useState<EditorState | null>(null);
+  const [detail, setDetail] = useState<Builtin | null>(null);
   const [runDialog, setRunDialog] = useState<
     | { type: 'builtin'; builtin: (typeof BUILTINS)[number] }
     | { type: 'script'; def: ActionDefinition }
@@ -996,14 +1066,16 @@ export default function ActionsPage() {
   );
 
   // fork: eine eingebaute Action als editierbaren Starlark-Workflow öffnen —
-  // die Source ist der KANONISCHE Code der Action, die Felder werden zu Params.
+  // die Source ist der KANONISCHE, EXAKT AUSGEFÜHRTE Code der Action (aus den
+  // eingebetteten Agent-Skripten generiert), die Felder werden zu Params.
   const forkBuiltin = useCallback((b: (typeof BUILTINS)[number]) => {
+    setDetail(null);
     setEditor({
       id: null,
       name: b.kind.replace(/_/g, '-'),
-      description: b.description,
+      description: BUILTIN_ACTIONS[b.kind]?.summary ?? b.description,
       params: b.fields,
-      source: BUILTIN_STARLARK[b.kind] ?? `# ${b.name}\n`,
+      source: builtinSource(b.kind),
       timeoutSeconds: 600,
     });
   }, []);
@@ -1222,7 +1294,17 @@ export default function ActionsPage() {
                       return (
                         <div
                           key={b.kind}
-                          className="group flex items-start gap-2.5 rounded-skin-sm border border-line bg-raised p-2.5 transition-colors hover:border-line-strong"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setDetail(b)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setDetail(b);
+                            }
+                          }}
+                          title="open the exact executed script"
+                          className="rp-focus group flex cursor-pointer items-start gap-2.5 rounded-skin-sm border border-line bg-raised p-2.5 transition-colors hover:border-line-strong"
                         >
                           <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-skin-sm border border-line bg-inset text-mid transition-colors group-hover:text-ink">
                             <ActionIcon kind={b.kind} />
@@ -1238,20 +1320,26 @@ export default function ActionsPage() {
                                 {LEVEL_META[klass].glyph} {LEVEL_META[klass].label}
                               </span>
                             </div>
-                            <p className="mt-0.5 line-clamp-2 font-mono text-[10px] leading-snug text-muted" title={b.description}>
-                              {b.description}
+                            <p className="mt-0.5 line-clamp-2 font-mono text-[10px] leading-snug text-muted" title={BUILTIN_ACTIONS[b.kind]?.summary ?? b.description}>
+                              {BUILTIN_ACTIONS[b.kind]?.summary ?? b.description}
                             </p>
                             <div className="mt-1.5 flex items-center gap-1.5 opacity-70 transition-opacity group-hover:opacity-100">
                               <button
                                 type="button"
-                                onClick={() => setRunDialog({ type: 'builtin', builtin: b })}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setRunDialog({ type: 'builtin', builtin: b });
+                                }}
                                 className="rp-focus rounded-skin-chip border border-line px-2 py-0.5 font-mono text-[10px] text-ink transition-colors hover:bg-hover"
                               >
                                 run →
                               </button>
                               <button
                                 type="button"
-                                onClick={() => forkBuiltin(b)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  forkBuiltin(b);
+                                }}
                                 title="fork as an editable Starlark workflow"
                                 className="rp-focus rounded-skin-chip border border-line px-1.5 py-0.5 font-mono text-[10px] text-mid transition-colors hover:bg-hover hover:text-ink"
                               >
@@ -1274,6 +1362,18 @@ export default function ActionsPage() {
           )}
         </div>
       </div>
+
+      {detail ? (
+        <ActionDetail
+          b={detail}
+          onClose={() => setDetail(null)}
+          onRun={() => {
+            setRunDialog({ type: 'builtin', builtin: detail });
+            setDetail(null);
+          }}
+          onFork={() => forkBuiltin(detail)}
+        />
+      ) : null}
 
       {editor ? (
         <WorkflowEditor
@@ -1319,6 +1419,165 @@ export default function ActionsPage() {
 }
 
 /* ── Editor-Drawer ─────────────────────────────────────────────────────── */
+
+// ActionDetail — das „neue Gewand" jeder Action: ein deklarativer Header
+// (Ziel · param-abhängiges Level · Reversibilität als Snapshot-Semantik · die
+// step()-Pipeline) über dem EXAKT ausgeführten Snapshot-Skript. Built-in und
+// Custom teilen dieselbe Substanz — hier sieht man, dass „shown == executed".
+function ActionDetail({
+  b,
+  onClose,
+  onRun,
+  onFork,
+}: {
+  b: Builtin;
+  onClose: () => void;
+  onRun: () => void;
+  onFork: () => void;
+}) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const meta: BuiltinMeta | undefined = BUILTIN_ACTIONS[b.kind];
+  const source = builtinSource(b.kind);
+  const steps = parseSteps(source);
+  const rev = REVERSIBLE_META[reversibleOf(b.kind)];
+  const klass = (ACTION_META[b.kind]?.klass ?? 'reversible') as RiskLevel;
+  const targets = meta?.targets ?? [];
+  const isNative = !meta;
+
+  return (
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={`${b.name} details`}>
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+        className="absolute inset-0 cursor-default"
+        style={{ backgroundColor: 'var(--rp-scrim)' }}
+      />
+      <aside
+        className="absolute inset-y-0 right-0 flex w-[min(720px,94vw)] flex-col border-l border-line bg-raised"
+        style={{
+          boxShadow: 'var(--rp-rim), var(--rp-shadow-pop)',
+          animation: 'rp-drawer-in var(--rp-dur-large) var(--rp-ease-enter)',
+        }}
+      >
+        <header className="shrink-0 border-b border-line px-5 pb-3 pt-4">
+          <div className="rp-micro !text-[10px]">action / {ACTION_META[b.kind]?.category ?? 'built-in'}</div>
+          <div className="rp-keyline mt-2 flex flex-wrap items-center justify-between gap-2 pb-3">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-skin-sm border border-line bg-inset text-mid">
+                <ActionIcon kind={b.kind} />
+              </span>
+              <div>
+                <h2 className="font-display text-[20px] font-bold tracking-tightest text-ink">{b.name}</h2>
+                <div className="mt-0.5 font-mono text-[10px] text-faint">{b.kind}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onFork}
+                title="fork as an editable Starlark workflow"
+                className="rounded-skin-sm border border-line px-2.5 py-1.5 font-mono text-[11px] text-mid transition-colors hover:bg-hover hover:text-ink"
+              >
+                {'</>'} fork
+              </button>
+              <button
+                type="button"
+                onClick={onRun}
+                className="rp-focus h-8 rounded-skin-sm px-3.5 font-mono text-[11.5px] font-semibold transition-opacity hover:opacity-90"
+                style={{ background: 'var(--rp-btn-bg)', color: 'var(--rp-btn-fg)' }}
+              >
+                run →
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <p className="font-mono text-[12px] leading-relaxed text-mid">
+            {meta?.summary ?? b.description}
+          </p>
+
+          {/* ── Deklarativer Header: Level · Reversibilität · Ziele ── */}
+          <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <div className="rounded-skin-sm border border-line bg-inset px-3 py-2">
+              <div className="rp-micro !text-[9.5px]">level</div>
+              <div className="mt-1 flex items-center gap-1.5 font-mono text-[11px]" style={{ color: levelColor(klass) }} title={LEVEL_META[klass].hint}>
+                <span>{LEVEL_META[klass].glyph}</span>
+                {LEVEL_META[klass].label}
+              </div>
+            </div>
+            <div className="rounded-skin-sm border border-line bg-inset px-3 py-2">
+              <div className="rp-micro !text-[9.5px]">reversibility</div>
+              <div className="mt-1 flex items-center gap-1.5 font-mono text-[11px]" style={{ color: levelColor(rev.klass) }} title={rev.hint}>
+                <span>{LEVEL_META[rev.klass].glyph}</span>
+                {rev.label}
+              </div>
+            </div>
+            <div className="rounded-skin-sm border border-line bg-inset px-3 py-2">
+              <div className="rp-micro !text-[9.5px]">acts on</div>
+              <div className="mt-1 truncate font-mono text-[11px] text-mid" title={TARGET_LABEL[b.kind] ?? targets.join(' · ')}>
+                {TARGET_LABEL[b.kind] ?? (targets.join(' · ') || '—')}
+              </div>
+            </div>
+          </div>
+
+          <p className="mt-2 font-mono text-[10.5px] leading-relaxed text-faint">{rev.hint}</p>
+
+          {/* ── Ziel-Kinds (aus dem Skript-Front-matter) ── */}
+          {targets.length > 0 ? (
+            <div className="mt-3 flex flex-wrap items-center gap-1">
+              <span className="rp-micro !text-[9.5px] mr-1">kinds</span>
+              {targets.map((t) => (
+                <span key={t} className="rounded-skin-chip bg-inset px-1.5 py-0.5 font-mono text-[9.5px] text-muted">
+                  {t}
+                </span>
+              ))}
+            </div>
+          ) : null}
+
+          {/* ── Pipeline: die step()-Schritte, die der Run als Timeline emittiert ── */}
+          {steps.length > 0 ? (
+            <div className="mt-4">
+              <span className="rp-micro !text-[10px]">pipeline — the run emits these as a timeline</span>
+              <ol className="mt-1.5 space-y-1">
+                {steps.map((s, i) => (
+                  <li key={`${s}-${i}`} className="flex items-center gap-2 font-mono text-[11px] text-mid">
+                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-line text-[9px] text-faint tnum">
+                      {i + 1}
+                    </span>
+                    {s}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
+
+          {/* ── Der EXAKT ausgeführte Source ── */}
+          <div className="mt-4">
+            <div className="flex items-center justify-between">
+              <span className="rp-micro !text-[10px]">{isNative ? 'native agent primitive' : 'executed script — snapshot substrate'}</span>
+              <span className="font-mono text-[9.5px] text-faint">{isNative ? 'go' : 'starlark · shown == executed'}</span>
+            </div>
+            <pre
+              className="mt-1.5 overflow-x-auto rounded-skin-sm border border-line bg-inset p-3 font-mono text-[11px] leading-relaxed text-ink"
+              style={{ tabSize: 4 }}
+            >
+              <code>{source}</code>
+            </pre>
+          </div>
+        </div>
+      </aside>
+    </div>
+  );
+}
 
 function WorkflowEditor({
   state,
