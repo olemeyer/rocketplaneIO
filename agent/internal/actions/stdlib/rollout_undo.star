@@ -23,8 +23,13 @@ for rs in k8s.raw_list("apps/v1", "ReplicaSet", ns):
     revs[rev] = rs["spec"]["template"]
     if rev > cur:
         cur = rev
-prev = cur - 1
-if prev not in revs:
+# the highest revision strictly below the current one — revision numbers are not
+# contiguous after prior rollbacks, so cur-1 may not exist.
+prev = -1
+for rev in revs:
+    if rev < cur and rev > prev:
+        prev = rev
+if prev < 0:
     fail("no previous revision to roll back to")
 step("roll back to revision %d" % prev)
 k8s.patch(ns, "Deployment", name, {"spec": {"template": revs[prev]}})

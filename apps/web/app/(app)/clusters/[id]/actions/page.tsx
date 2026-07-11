@@ -858,7 +858,10 @@ function parseSteps(src: string): string[] {
   const out: string[] = [];
   const re = /step\(\s*"((?:[^"\\]|\\.)*)"/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(src))) out.push(m[1] ?? '');
+  // Soften Starlark %-format verbs (%d/%s/…) to a neutral placeholder so the
+  // preview reads as a declared step, not a raw format string.
+  const clean = (s: string) => s.replace(/%%/g, '%').replace(/%[#0-9.+\- ]*[a-zA-Z]/g, '…');
+  while ((m = re.exec(src))) out.push(clean(m[1] ?? ''));
   return out;
 }
 
