@@ -1,19 +1,14 @@
 # @name create configmap
-# @summary Create a ConfigMap from key=value lines. Rollback deletes it again.
+# @summary Create a ConfigMap from the given data. Rollback deletes it again.
 # @risk medium
 # @reversible snapshot
 # @targets ConfigMap
 #
-# Build the object from the multiline `data` param, then create it. The snapshot
-# records that it did not exist before, so restore deletes what this run created.
+# The data param arrives as a JSON object (key -> value). Create the ConfigMap; the
+# snapshot records that it did not exist before, so restore deletes what this run
+# created.
 ns = args["namespace"]; name = args["name"]
-data = {}
-for line in args.get("data", "").split("\n"):
-    line = line.strip()
-    if line == "" or "=" not in line:
-        continue
-    k, v = line.split("=", 1)
-    data[k.strip()] = v.strip()
+data = json.decode(args.get("data", "{}"))
 step("create %s" % name)
 k8s.create({
     "apiVersion": "v1", "kind": "ConfigMap",

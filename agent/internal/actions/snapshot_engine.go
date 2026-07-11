@@ -197,7 +197,7 @@ func (r *Runner) Restore(ctx context.Context, captures []Capture) []RestoreResul
 			// is identity/status-stripped, so the patch carries no resourceVersion.
 			u := (&unstructured.Unstructured{Object: c.Object}).DeepCopy()
 			ensureGVK(u, c.Kind)
-			_, gerr := iface.Get(ctx, c.Name, metav1.GetOptions{})
+			got, gerr := iface.Get(ctx, c.Name, metav1.GetOptions{})
 			if apierrors.IsNotFound(gerr) {
 				// deleted since → recreate best-effort (new identity, orphaned).
 				u.SetResourceVersion("")
@@ -209,7 +209,12 @@ func (r *Runner) Restore(ctx context.Context, captures []Capture) []RestoreResul
 			} else if gerr != nil {
 				res.OK, res.Detail = false, gerr.Error()
 			} else {
-				data, _ := json.Marshal(u.Object)
+				// Diff against the CURRENT (stripped) object so keys the run ADDED
+				// (a taint, spec.unschedulable, spec.paused) are explicitly nulled —
+				// a plain merge-patch of the before-object alone cannot remove them.
+				cur := stripForSnapshot(got)
+				patch := restoreMergePatch(c.Object, cur)
+				data, _ := json.Marshal(patch)
 				if _, err := iface.Patch(ctx, c.Name, types.MergePatchType, data, metav1.PatchOptions{FieldManager: "rocketplane-agent"}); err != nil {
 					res.OK, res.Detail = false, err.Error()
 				} else {
@@ -263,6 +268,34 @@ func fieldsMergePatch(fields []FieldDelta) map[string]any {
 		setNested(root, f.Path, val)
 	}
 	return root
+}
+
+// restoreMergePatch builds a JSON-merge-patch that turns `current` back into
+// `before`: it carries before's values AND nulls any key present in current but
+// absent in before. Plain merge-patch of the before-object alone restores changed
+// values but CANNOT remove a key the run added (a node taint, spec.unschedulable,
+// spec.paused, a new ConfigMap/Secret key) — this closes that gap while staying a
+// merge-patch (the `patch` verb, which the agent's RBAC grants). Nested maps
+// recurse; arrays/scalars are replaced wholesale (merge-patch semantics), so
+// before's value wins.
+func restoreMergePatch(before, current map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, bv := range before {
+		cv, inCur := current[k]
+		bm, bok := bv.(map[string]any)
+		cm, cok := cv.(map[string]any)
+		if bok && cok && inCur {
+			out[k] = restoreMergePatch(bm, cm)
+		} else {
+			out[k] = bv
+		}
+	}
+	for k := range current {
+		if _, ok := before[k]; !ok {
+			out[k] = nil // remove keys added since the snapshot
+		}
+	}
+	return out
 }
 
 func setNested(root map[string]any, path []string, val any) {

@@ -2,11 +2,11 @@
 # @summary Delete completed or failed Jobs in a namespace — terminal jobs, not reversible.
 # @risk low
 # @reversible none
-# @targets Job
+# @targets Namespace
 #
-# List jobs and delete those that have already succeeded or failed. These jobs are
-# terminal, so there is nothing to restore.
-ns = args["namespace"]
+# The namespace is the target (args["name"]). List its jobs and delete those that
+# have already succeeded or failed; terminal, so there is nothing to restore.
+ns = args["name"]
 deleted = 0
 for j in k8s.raw_list("batch/v1", "Job", ns):
     st = j.get("status", {})

@@ -367,11 +367,16 @@ func (r *Runner) rolloutSteps(a Action) []step {
 func (r *Runner) planSetEnv(a Action) []step {
 	var p struct {
 		Container string `json:"container"`
+		EnvName   string `json:"envName"`
 		Name      string `json:"name"`
 		Value     string `json:"value"`
 		Remove    bool   `json:"remove"`
 	}
 	_ = json.Unmarshal(a.Params, &p)
+	// envName is the env-var name; older callers sent it as `name`.
+	if p.EnvName != "" {
+		p.Name = p.EnvName
+	}
 	steps := []step{{name: "trigger", run: func(ctx context.Context, _ func(string)) (string, error) {
 		c, err := r.resolveContainer(ctx, a, p.Container)
 		if err != nil {

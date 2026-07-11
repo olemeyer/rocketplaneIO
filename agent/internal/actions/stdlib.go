@@ -15,10 +15,11 @@ import (
 	"strings"
 )
 
-// actionsSnapshotDispatch gates routing built-in kinds to their embedded .star
-// (the snapshot substrate) instead of the native plan(). Off by default so the
-// released path is untouched; flipped per rollout via RP_ACTIONS_SNAPSHOT=1.
-var actionsSnapshotDispatch = os.Getenv("RP_ACTIONS_SNAPSHOT") == "1"
+// actionsSnapshotDispatch routes built-in kinds to their embedded .star (the
+// snapshot substrate) instead of the native plan(). ON by default — the
+// substrate IS the execution path now, so what the UI shows is what runs. The
+// escape hatch RP_ACTIONS_SNAPSHOT=0 falls back to native plan() for a rollback.
+var actionsSnapshotDispatch = os.Getenv("RP_ACTIONS_SNAPSHOT") != "0"
 
 //go:embed stdlib/*.star
 var stdlibFS embed.FS
@@ -47,11 +48,7 @@ func builtinSnapshotScript(kind string) (string, bool) {
 // snapshotArgs flattens an action's target + typed params into the string `args`
 // dict a stdlib script reads (all values are strings — scripts cast with int()).
 func snapshotArgs(a Action) map[string]string {
-	args := map[string]string{
-		"namespace": a.TargetNamespace,
-		"kind":      a.TargetKind,
-		"name":      a.TargetName,
-	}
+	args := map[string]string{}
 	var p map[string]any
 	if len(a.Params) > 0 {
 		_ = json.Unmarshal(a.Params, &p)
@@ -71,5 +68,10 @@ func snapshotArgs(a Action) map[string]string {
 			args[k] = string(b)
 		}
 	}
+	// Target coordinates win over any param of the same name — a param must never
+	// clobber the resource the action targets (e.g. set_env's env-var name).
+	args["namespace"] = a.TargetNamespace
+	args["kind"] = a.TargetKind
+	args["name"] = a.TargetName
 	return args
 }

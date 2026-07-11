@@ -4,9 +4,11 @@
 # @reversible readonly
 # @targets Namespace
 #
-# Read-only: pulls the event stream for the namespace. warningsOnly=true keeps only
-# Warning events; limit caps how many are printed.
-ns = args.get("namespace", "")
+# The namespace is the target (args["name"]); "-" reads across all namespaces.
+# warningsOnly=true keeps only Warning events; limit caps how many are printed.
+ns = args["name"]
+if ns == "-":
+    ns = ""
 step("list events")
 evs = k8s.events(ns, "")
 if args.get("warningsOnly", "") == "true":

@@ -379,9 +379,65 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		return starlark.NewList(out), nil
 	})
 
+	// k8s.set_field — the GENERIC multi-field variant. Captures several exact
+	// paths (one field-scoped snapshot) and applies them in ONE merge patch, so a
+	// mutually-exclusive pair (PDB minAvailable/maxUnavailable) is set atomically
+	// and the field-scoped restore removes an added key / restores a changed one
+	// without ever passing through an invalid intermediate. entries is a list of
+	// (path_list, value) tuples; value=None removes the key.
+	k8sSetFields := starlark.NewBuiltin("set_fields", func(_ *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+		var ns, kind, name string
+		var entries *starlark.List
+		if err := starlark.UnpackArgs("set_fields", args, kwargs, "namespace", &ns, "kind", &kind, "name", &name, "entries", &entries); err != nil {
+			return nil, err
+		}
+		paths := make([][]string, 0, entries.Len())
+		vals := make([]any, 0, entries.Len())
+		for i := 0; i < entries.Len(); i++ {
+			pair, ok := entries.Index(i).(starlark.Tuple)
+			if !ok || len(pair) != 2 {
+				return nil, fmt.Errorf("set_fields: each entry must be a (path, value) tuple")
+			}
+			pl, ok := pair[0].(*starlark.List)
+			if !ok {
+				return nil, fmt.Errorf("set_fields: path must be a list of strings")
+			}
+			segs := make([]string, 0, pl.Len())
+			for j := 0; j < pl.Len(); j++ {
+				s, ok := pl.Index(j).(starlark.String)
+				if !ok {
+					return nil, fmt.Errorf("set_fields: path segments must be strings")
+				}
+				segs = append(segs, string(s))
+			}
+			if len(segs) == 0 {
+				return nil, fmt.Errorf("set_fields: empty path")
+			}
+			gv, err := starToGo(pair[1])
+			if err != nil {
+				return nil, err
+			}
+			paths = append(paths, segs)
+			vals = append(vals, gv)
+		}
+		if _, err := r.captureFields(ctx, log, kind, ns, name, paths); err != nil {
+			return nil, fmt.Errorf("set_fields: cannot snapshot %v (strict mode): %w", paths, err)
+		}
+		patch := map[string]any{}
+		for i, segs := range paths {
+			setNested(patch, segs, vals[i])
+		}
+		if err := r.applyMergePatch(ctx, kind, ns, name, patch); err != nil {
+			return nil, err
+		}
+		rep(fmt.Sprintf("set %d field(s) on %s/%s", len(paths), kind, name))
+		return starlark.None, nil
+	})
+
 	k8s := &starlarkstruct.Module{Name: "k8s", Members: starlark.StringDict{
 		"patch":           k8sPatch,
 		"set_field":       k8sSetField,
+		"set_fields":      k8sSetFields,
 		"scale":           k8sScale,
 		"patch_configmap": k8sPatchCM,
 		"delete":          k8sDelete,
@@ -390,20 +446,23 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		"raw_list":        k8sRawList,
 		"pods":            k8sPods,
 		"events":          k8sEvents,
-		"get":             starlark.NewBuiltin("get", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
+		// k8s.get — workload status summary {desired, ready, updated, available}
+		// (matches the custom-script surface). For the full object use raw_get.
+		"get": starlark.NewBuiltin("get", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
 			var ns, kind, name string
 			if err := starlark.UnpackArgs("get", a, kw, "namespace", &ns, "kind", &kind, "name", &name); err != nil {
 				return nil, err
 			}
-			u, err := r.getUnstructured(ctx, kind, ns, name)
+			st, err := r.readStateOf(ctx, ns, kind, name)
 			if err != nil {
 				return starlark.None, nil
 			}
-			obj := stripForSnapshot(u)
-			if kind == "Secret" {
-				redactSecretData(obj)
-			}
-			return goToStar(obj), nil
+			d := starlark.NewDict(4)
+			_ = d.SetKey(starlark.String("desired"), starlark.MakeInt(int(st.desired)))
+			_ = d.SetKey(starlark.String("ready"), starlark.MakeInt(int(st.ready)))
+			_ = d.SetKey(starlark.String("updated"), starlark.MakeInt(int(st.updated)))
+			_ = d.SetKey(starlark.String("available"), starlark.MakeInt(int(st.available)))
+			return d, nil
 		}),
 	}}
 

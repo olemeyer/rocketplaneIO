@@ -4,9 +4,9 @@
 # @reversible snapshot
 # @targets Node
 #
-# Read the node's taints and drop every entry with the given key. Node is
-# cluster-scoped, so the namespace is "-".
-node = args["node"]; key = args["key"]
+# The node is the target (args["name"]). Read its taints and drop every entry with
+# the given key. Node is cluster-scoped (namespace "-").
+node = args["name"]; key = args["key"]
 n = k8s.raw_get("v1", "Node", "-", node)
 if not n:
     fail("node %s not found" % node)
