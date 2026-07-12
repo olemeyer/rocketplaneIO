@@ -1,4 +1,4 @@
-# @name rollout to revision
+# @name rollout-to-revision
 # @summary Roll a Deployment to a specific historical revision (verified rollout).
 # @risk medium
 # @reversible snapshot

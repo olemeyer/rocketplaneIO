@@ -1,4 +1,4 @@
-# @name set resources
+# @name set-resources
 # @summary Set a container's CPU/memory requests and limits (verified rollout).
 # @risk medium
 # @reversible snapshot

@@ -1,4 +1,4 @@
-# @name recreate pod
+# @name delete-pod
 # @summary Delete one pod; its owner schedules a fresh replacement.
 # @risk medium
 # @reversible none

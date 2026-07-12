@@ -1,4 +1,4 @@
-# @name set pdb budget
+# @name pdb-set
 # @summary Set a PodDisruptionBudget minAvailable or maxUnavailable; snapshot restores.
 # @risk medium
 # @reversible snapshot

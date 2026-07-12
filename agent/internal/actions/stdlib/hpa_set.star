@@ -1,4 +1,4 @@
-# @name hpa set bounds
+# @name hpa-set
 # @summary Patch an HPA's min/max replica bounds; rollback restores the prior bounds.
 # @risk low
 # @reversible snapshot

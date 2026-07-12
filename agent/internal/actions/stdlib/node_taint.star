@@ -1,4 +1,4 @@
-# @name taint node
+# @name node-taint
 # @summary Add or replace a taint on a node; snapshot restores the prior taint set.
 # @risk medium
 # @reversible snapshot

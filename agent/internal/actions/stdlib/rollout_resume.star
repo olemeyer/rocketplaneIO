@@ -1,4 +1,4 @@
-# @name rollout resume
+# @name rollout-resume
 # @summary Resume a paused Deployment (spec.paused=false) and wait for it to settle.
 # @risk low
 # @reversible snapshot

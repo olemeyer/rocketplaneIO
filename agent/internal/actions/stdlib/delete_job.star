@@ -1,4 +1,4 @@
-# @name delete job
+# @name delete-job
 # @summary Delete a single Job; the snapshot lets Revert recreate it.
 # @risk medium
 # @reversible snapshot

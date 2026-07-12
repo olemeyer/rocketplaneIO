@@ -1,4 +1,4 @@
-# @name uncordon node
+# @name uncordon
 # @summary Mark a node schedulable again; snapshot restores its prior state.
 # @risk low
 # @reversible snapshot

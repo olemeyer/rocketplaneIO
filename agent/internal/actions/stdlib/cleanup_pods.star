@@ -1,4 +1,4 @@
-# @name cleanup finished pods
+# @name cleanup-pods
 # @summary Delete all Failed/Succeeded pods in a namespace — terminal pods, not reversible.
 # @risk low
 # @reversible none

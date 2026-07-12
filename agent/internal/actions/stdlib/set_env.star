@@ -1,4 +1,4 @@
-# @name set env var
+# @name set-env
 # @summary Set or remove one container environment variable (verified rollout).
 # @risk medium
 # @reversible snapshot

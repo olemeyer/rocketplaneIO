@@ -1,4 +1,4 @@
-# @name list events
+# @name list-events
 # @summary List recent namespace events, optionally warnings only (read-only).
 # @risk low
 # @reversible readonly

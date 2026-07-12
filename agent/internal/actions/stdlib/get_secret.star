@@ -1,4 +1,4 @@
-# @name get secret keys
+# @name get-secret
 # @summary List a Secret's key names (values stay redacted; read-only).
 # @risk low
 # @reversible readonly

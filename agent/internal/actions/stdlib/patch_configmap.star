@@ -1,4 +1,4 @@
-# @name patch configmap
+# @name patch-configmap
 # @summary Set or remove one ConfigMap key; snapshot restores the prior value.
 # @risk low
 # @reversible snapshot

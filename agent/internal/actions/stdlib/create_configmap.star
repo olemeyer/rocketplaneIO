@@ -1,4 +1,4 @@
-# @name create configmap
+# @name create-configmap
 # @summary Create a ConfigMap from the given data. Rollback deletes it again.
 # @risk medium
 # @reversible snapshot

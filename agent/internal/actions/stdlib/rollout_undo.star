@@ -1,4 +1,4 @@
-# @name rollout undo
+# @name rollout-undo
 # @summary Roll a Deployment back to its previous revision (verified rollout).
 # @risk medium
 # @reversible snapshot

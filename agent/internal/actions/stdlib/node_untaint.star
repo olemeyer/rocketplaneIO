@@ -1,4 +1,4 @@
-# @name untaint node
+# @name node-untaint
 # @summary Remove a taint by key from a node; snapshot restores it on revert.
 # @risk medium
 # @reversible snapshot

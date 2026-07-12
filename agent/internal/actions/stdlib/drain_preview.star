@@ -1,4 +1,4 @@
-# @name drain preview
+# @name drain-preview
 # @summary Preview which pods a node drain would evict (read-only).
 # @risk low
 # @reversible readonly

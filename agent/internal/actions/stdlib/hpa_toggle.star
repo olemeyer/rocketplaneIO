@@ -1,4 +1,4 @@
-# @name hpa toggle
+# @name hpa-toggle
 # @summary Freeze an HPA (pin min=max at the current size) or unfreeze it (restore the saved bounds).
 # @risk low
 # @reversible snapshot

@@ -1,4 +1,4 @@
-# @name get resource
+# @name get-resource
 # @summary Read the full live spec of any object (Secrets show keys only).
 # @risk low
 # @reversible readonly

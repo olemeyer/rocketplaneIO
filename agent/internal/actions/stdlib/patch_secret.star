@@ -1,4 +1,4 @@
-# @name patch secret
+# @name patch-secret
 # @summary Set or remove one Secret key; snapshot restores the prior value.
 # @risk medium
 # @reversible snapshot

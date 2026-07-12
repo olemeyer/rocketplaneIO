@@ -1,4 +1,4 @@
-# @name patch resource
+# @name patch-resource
 # @summary Apply a raw JSON merge patch to a networking/policy object; snapshot restores.
 # @risk medium
 # @reversible snapshot

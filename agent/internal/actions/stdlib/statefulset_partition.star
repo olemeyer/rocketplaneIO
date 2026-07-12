@@ -1,4 +1,4 @@
-# @name statefulset partition
+# @name statefulset-partition
 # @summary Set a StatefulSet rolling-update partition for staged rollouts.
 # @risk low
 # @reversible snapshot

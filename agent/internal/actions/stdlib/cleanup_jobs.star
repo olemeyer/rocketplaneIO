@@ -1,4 +1,4 @@
-# @name cleanup finished jobs
+# @name cleanup-jobs
 # @summary Delete completed or failed Jobs in a namespace — terminal jobs, not reversible.
 # @risk low
 # @reversible none

@@ -1,4 +1,4 @@
-# @name rollout history
+# @name rollout-history
 # @summary List a Deployment's revision history with container images (read-only).
 # @risk low
 # @reversible readonly

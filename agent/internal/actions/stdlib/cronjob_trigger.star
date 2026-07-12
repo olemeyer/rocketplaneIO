@@ -1,4 +1,4 @@
-# @name trigger cronjob
+# @name cronjob-trigger
 # @summary Create a one-off Job from a CronJob's template — a manual run, not reversible.
 # @risk medium
 # @reversible none

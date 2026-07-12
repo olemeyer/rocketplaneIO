@@ -1,4 +1,4 @@
-# @name describe resource
+# @name describe-resource
 # @summary Summarize an object's status conditions and recent events (read-only).
 # @risk low
 # @reversible readonly

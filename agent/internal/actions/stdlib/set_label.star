@@ -1,4 +1,4 @@
-# @name set label
+# @name set-label
 # @summary Set or remove one metadata label on a cluster-scoped object; snapshot restores.
 # @risk low
 # @reversible snapshot

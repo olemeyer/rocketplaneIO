@@ -1,4 +1,4 @@
-# @name delete configmap
+# @name delete-configmap
 # @summary Delete a ConfigMap; snapshot lets Revert re-create it verbatim.
 # @risk medium
 # @reversible snapshot

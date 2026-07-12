@@ -1,4 +1,4 @@
-# @name set image
+# @name set-image
 # @summary Set one container's image via strategic merge (verified rollout).
 # @risk medium
 # @reversible snapshot

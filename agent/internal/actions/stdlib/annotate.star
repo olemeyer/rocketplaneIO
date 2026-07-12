@@ -1,4 +1,4 @@
-# @name annotate object
+# @name annotate
 # @summary Set or remove one metadata annotation (pause an operator, tag for triage).
 # @risk low
 # @reversible snapshot

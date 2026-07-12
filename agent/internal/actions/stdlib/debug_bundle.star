@@ -1,4 +1,4 @@
-# @name debug bundle
+# @name debug-bundle
 # @summary Collect readiness, pod status and warnings for a workload (read-only).
 # @risk low
 # @reversible readonly

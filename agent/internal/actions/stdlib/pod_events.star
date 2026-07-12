@@ -1,4 +1,4 @@
-# @name pod events
+# @name pod-events
 # @summary Show events for a workload's pods by name match (read-only).
 # @risk low
 # @reversible readonly

@@ -1,4 +1,4 @@
-# @name resume cronjob
+# @name cronjob-resume
 # @summary Resume a suspended CronJob so it schedules again; snapshot restores prior state.
 # @risk low
 # @reversible snapshot

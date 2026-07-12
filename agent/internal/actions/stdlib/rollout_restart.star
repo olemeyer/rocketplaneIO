@@ -1,4 +1,4 @@
-# @name rollout restart
+# @name rollout-restart
 # @summary Force a fresh rollout by bumping a counter annotation on the pod template.
 # @risk low
 # @reversible none

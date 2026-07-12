@@ -1,4 +1,4 @@
-# @name cordon node
+# @name cordon
 # @summary Mark a node unschedulable; snapshot restores its prior schedulability.
 # @risk low
 # @reversible snapshot

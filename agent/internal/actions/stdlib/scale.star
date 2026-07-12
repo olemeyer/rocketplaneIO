@@ -1,4 +1,4 @@
-# @name scale workload
+# @name scale
 # @summary Set replica count and wait until every pod is ready and settled — up or down.
 # @risk medium
 # @reversible snapshot

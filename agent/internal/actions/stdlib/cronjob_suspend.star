@@ -1,4 +1,4 @@
-# @name suspend cronjob
+# @name cronjob-suspend
 # @summary Suspend a CronJob so it stops scheduling; snapshot restores its prior state.
 # @risk low
 # @reversible snapshot

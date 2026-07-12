@@ -1,4 +1,4 @@
-# @name rollout pause
+# @name rollout-pause
 # @summary Freeze a Deployment's rollout (spec.paused=true); rollback restores it.
 # @risk low
 # @reversible snapshot

@@ -1,4 +1,4 @@
-# @name expand pvc
+# @name pvc-expand
 # @summary Request a larger PersistentVolumeClaim (grow-only, not reversible).
 # @risk high
 # @reversible none

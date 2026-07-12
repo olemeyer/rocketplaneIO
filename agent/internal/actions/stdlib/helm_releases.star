@@ -1,4 +1,4 @@
-# @name helm releases
+# @name helm-releases
 # @summary List Helm releases in a namespace from their release Secrets (read-only).
 # @risk low
 # @reversible readonly
