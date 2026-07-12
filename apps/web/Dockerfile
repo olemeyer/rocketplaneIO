@@ -17,6 +17,9 @@ RUN pnpm install --frozen-lockfile --filter @rocketplane/web...
 COPY tsconfig.base.json ./
 COPY packages/ packages/
 COPY apps/web/ apps/web/
+# Give the Next.js build a generous heap — the default ceiling caused intermittent
+# OOM ("did not complete successfully: exit code 1") on constrained CI builders.
+ENV NODE_OPTIONS=--max-old-space-size=4096
 RUN pnpm --filter @rocketplane/web build
 
 FROM node:22-alpine

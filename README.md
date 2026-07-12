@@ -85,12 +85,17 @@ You need Docker and a Kubernetes cluster to point it at (minikube is fine).
 ```bash
 curl -O https://raw.githubusercontent.com/olemeyer/rocketplaneIO/main/deploy/compose/docker-compose.prod.yml
 curl -o .env https://raw.githubusercontent.com/olemeyer/rocketplaneIO/main/deploy/compose/.env.example
-# set RP_SESSION_SECRET in .env (e.g. `openssl rand -hex 32`); defaults are fine for a local trial
+
+# REQUIRED: a real session secret — the control plane refuses to start without one.
+echo "RP_SESSION_SECRET=$(openssl rand -hex 32)" >> .env
 
 docker compose --env-file .env -f docker-compose.prod.yml up -d
 ```
 
-The UI comes up on **http://localhost:4173**, the control plane on `:8090`.
+The UI comes up on **http://localhost:4173**, the control plane on `:8090`. It runs
+in production mode by default (no anonymous login) — you create the first account in
+step 2. For a throwaway localhost trial you can add `RP_ENV=dev` to `.env` to skip
+account setup.
 
 **2 — connect your cluster**
 
@@ -108,8 +113,9 @@ Open it from the top bar and connect any Anthropic- or OpenAI-compatible provide
 local one). The key stays on your instance; requests go straight from your control plane to the
 provider you chose.
 
-<sub>Images are tagged <code>edge</code> (tracks <code>main</code>) today; tagged releases and a
-platform Helm chart are the next milestone. Want a demo workload? A Python + Redis shop behind
+<sub>Images ship as pinned releases (see <code>RP_VERSION</code> in <code>.env</code>);
+<code>edge</code> tracks <code>main</code> for the latest unreleased changes. A platform Helm
+chart is the next milestone. Want a demo workload? A Python + Redis shop behind
 nginx — the one in every screenshot here — ships in
 <a href="deploy/dev/">deploy/dev/</a> (<code>kubectl apply -f deploy/dev/shop-realistic.yaml -f deploy/dev/frontdoor.yaml</code>).</sub>
 
@@ -119,6 +125,13 @@ The section every platform team reads first:
 
 - **Outbound-only.** The agent dials out over HTTPS; nothing connects into your cluster, nothing
   listens. Actions are *claimed* by the agent — never pushed in.
+- **Auth.** In production the dev-login bypass is off: the first account is created at `/setup`, or
+  you wire up Google SSO. Sessions are HMAC-signed with `RP_SESSION_SECRET`, and the control plane
+  *refuses to start* with a missing or weak one — no forgeable cookies, no shipped default.
+- **Network / TLS.** The control plane speaks plain HTTP on `:8090` — put it behind a TLS
+  reverse proxy (or the platform Helm chart's ingress) for anything past `localhost`. The OTLP
+  ingest ports `4317`/`4318` are unauthenticated by design; keep them on a trusted network
+  (in-cluster or behind the proxy), not on the public internet.
 - **Enumerated RBAC, two blocks** ([`deploy/install.yaml`](deploy/install.yaml)): *observe* is
   read-only; *act* holds exactly the write verbs the action catalog needs. Delete the act block
   (or set `rbac.actions=false` in Helm) for a strictly observe-only agent. No wildcards, no
