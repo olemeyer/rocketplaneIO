@@ -3,6 +3,7 @@
 package config
 
 import (
+	"fmt"
 	"net/url"
 	"os"
 	"strings"
@@ -38,6 +39,10 @@ type Config struct {
 	ClickHouseDB       string // CLICKHOUSE_DB
 }
 
+// insecureSessionSecret is the dev default; production refuses to start with it
+// (or any weak value), because the session HMAC key protects every login.
+const insecureSessionSecret = "dev-insecure-session-secret-change-me"
+
 // Load reads the configuration from the environment, applying defaults.
 func Load() *Config {
 	return &Config{
@@ -45,7 +50,7 @@ func Load() *Config {
 		DatabaseURL:        env("DATABASE_URL", "postgres://rocketplane:rocketplane@localhost:5432/rocketplane?sslmode=disable"),
 		Listen:             env("RP_LISTEN", ":8090"),
 		PublicURL:          strings.TrimRight(env("RP_PUBLIC_URL", "http://localhost:8090"), "/"),
-		SessionSecret:      env("RP_SESSION_SECRET", "dev-insecure-session-secret-change-me"),
+		SessionSecret:      env("RP_SESSION_SECRET", insecureSessionSecret),
 		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 		PlatformAdmins:     splitList(os.Getenv("RP_PLATFORM_ADMINS")),
@@ -67,6 +72,21 @@ func Load() *Config {
 
 // IsDev reports whether the Control-Plane runs in dev mode.
 func (c *Config) IsDev() bool { return c.Env == "dev" }
+
+// Validate fails closed on insecure production configuration — a weak session
+// secret would let anyone forge a login cookie. Dev keeps the convenient defaults.
+func (c *Config) Validate() error {
+	if c.IsDev() {
+		return nil
+	}
+	s := c.SessionSecret
+	if s == "" || s == insecureSessionSecret || s == "change-me-to-a-long-random-string" || len(s) < 16 {
+		return fmt.Errorf("RP_SESSION_SECRET must be a strong random value in production " +
+			"(generate one with `openssl rand -hex 32`) — refusing to start with a default/weak " +
+			"key that would let anyone forge session cookies")
+	}
+	return nil
+}
 
 // AgentOTLP returns the OTLP endpoint Beyla exports to inside an enrolled
 // cluster — baked into every generated install command so copy-paste works in

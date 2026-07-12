@@ -70,6 +70,9 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-rocketplane}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-rocketplane}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB:-otel}
+      # production disables the dev-login bypass — sign in via /setup (first user)
+      # or Google SSO. Override to `dev` ONLY for a throwaway localhost trial.
+      RP_ENV: ${RP_ENV:-production}
       RP_LISTEN: :8090
       RP_PUBLIC_URL: ${RP_PUBLIC_URL:-http://localhost:8090}
       RP_AGENT_CONTROLPLANE_URL: ${RP_AGENT_CONTROLPLANE_URL:-}

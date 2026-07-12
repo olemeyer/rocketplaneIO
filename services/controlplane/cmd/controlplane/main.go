@@ -91,6 +91,9 @@ func run() error {
 	defer stop()
 
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
 
 	// Database pool + migrations.
 	startCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
