@@ -8,7 +8,7 @@
 # the first container image, newest-to-oldest as Kubernetes records them.
 ns = args["namespace"]; name = args["name"]
 step("rollout history")
-sets = k8s.raw_list("apps/v1", "ReplicaSet", ns)
+sets = k8s.list("apps/v1", "ReplicaSet", ns)
 count = 0
 for rs in sets:
     owners = rs["metadata"].get("ownerReferences", [])

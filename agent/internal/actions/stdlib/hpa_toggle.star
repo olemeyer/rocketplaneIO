@@ -10,7 +10,7 @@
 # HPA, so a failure rolls back and the run stays revertible.
 ns = args["namespace"]; name = args["name"]
 ann = "rocketplane.io/hpa-frozen-bounds"
-hpa = k8s.raw_get("autoscaling/v2", "HorizontalPodAutoscaler", ns, name)
+hpa = k8s.get("autoscaling/v2", "HorizontalPodAutoscaler", ns, name)
 if hpa == None:
     fail("HPA %s/%s not found" % (ns, name))
 step("snapshot")

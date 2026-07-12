@@ -8,7 +8,7 @@
 # have already succeeded or failed; terminal, so there is nothing to restore.
 ns = args["name"]
 deleted = 0
-for j in k8s.raw_list("batch/v1", "Job", ns):
+for j in k8s.list("batch/v1", "Job", ns):
     st = j.get("status", {})
     if st.get("succeeded", 0) > 0 or st.get("failed", 0) > 0:
         name = j["metadata"]["name"]

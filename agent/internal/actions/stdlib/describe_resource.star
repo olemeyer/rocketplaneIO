@@ -8,7 +8,7 @@
 # recent events on the object. Pass apiVersion for non-core kinds.
 kind = args["kind"]; ns = args.get("namespace", ""); name = args["name"]
 step("describe %s/%s" % (kind, name))
-obj = k8s.raw_get(args.get("apiVersion", "v1"), kind, ns, name)
+obj = k8s.get(args.get("apiVersion", "v1"), kind, ns, name)
 if not obj:
     fail("%s/%s not found" % (kind, name))
 conds = obj.get("status", {}).get("conditions", [])

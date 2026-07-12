@@ -7,7 +7,7 @@
 # The node is the target (args["name"]). Read its taints and drop every entry with
 # the given key. Node is cluster-scoped (namespace "-").
 node = args["name"]; key = args["key"]
-n = k8s.raw_get("v1", "Node", "-", node)
+n = k8s.get("v1", "Node", "-", node)
 if not n:
     fail("node %s not found" % node)
 taints = n.get("spec", {}).get("taints", []) or []

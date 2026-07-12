@@ -527,9 +527,10 @@ const EXAMPLE_SOURCE = `# @name safe-scale
 # @param replicas int 0 50 required
 #
 # Metadata above is co-evaluated (name/risk/reversibility/params come from it).
-# Surface: step · report · fail · sleep · snapshot · json · args
-#   k8s.patch/set_field/set_fields/scale/patch_configmap/create/delete
-#   k8s.get/raw_get/raw_list/pods/events · wait_ready/wait_rollout
+# Surface: step · report · fail · sleep · snapshot · json · args · net_probe
+#   k8s.patch/set_field/set_fields/scale/patch_configmap/create/delete/apply
+#   k8s.get/list/status/pods/events · k8s.exec/logs/evict/node_pods/pod_status
+#   wait_ready/wait_rollout
 ns = args["namespace"]
 name = args["name"]
 target = int(args["replicas"])

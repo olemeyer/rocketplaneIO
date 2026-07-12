@@ -8,7 +8,7 @@
 # starts with the workload, and any Warning events. No mutation.
 ns = args["namespace"]; kind = args["kind"]; name = args["name"]
 step("workload status")
-st = k8s.get(ns, kind, name)
+st = k8s.status(ns, kind, name)
 if st:
     report("%d/%d ready" % (st["ready"], st["desired"]))
 else:

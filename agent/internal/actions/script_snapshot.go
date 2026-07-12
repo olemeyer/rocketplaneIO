@@ -314,11 +314,12 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		return r.dyn.Resource(gvr).Namespace(ns), nil
 	}
 
-	// k8s.raw_get — read ANY object (CRDs too). Read-only, no capture. Secret
-	// values are redacted before crossing into script logic.
-	k8sRawGet := starlark.NewBuiltin("raw_get", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
+	// k8s.get — read the full object of ANY kind (CRDs via resource=plural).
+	// Read-only, no capture. Secret values are redacted before crossing into script
+	// logic; server noise (managedFields/status/resourceVersion) is stripped.
+	k8sGet := starlark.NewBuiltin("get", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
 		var apiVersion, kind, ns, name, resource string
-		if err := starlark.UnpackArgs("raw_get", a, kw, "api_version", &apiVersion, "kind", &kind, "namespace", &ns, "name", &name, "resource?", &resource); err != nil {
+		if err := starlark.UnpackArgs("get", a, kw, "api_version", &apiVersion, "kind", &kind, "namespace", &ns, "name", &name, "resource?", &resource); err != nil {
 			return nil, err
 		}
 		iface, err := readIface(apiVersion, kind, ns, resource)
@@ -339,10 +340,10 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		return goToStar(obj), nil
 	})
 
-	// k8s.raw_list — list ANY kind by namespace (+optional label selector). Read-only.
-	k8sRawList := starlark.NewBuiltin("raw_list", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
+	// k8s.list — list ANY kind by namespace (+optional label selector). Read-only.
+	k8sList := starlark.NewBuiltin("list", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
 		var apiVersion, kind, ns, selector, resource string
-		if err := starlark.UnpackArgs("raw_list", a, kw, "api_version", &apiVersion, "kind", &kind, "namespace", &ns, "selector?", &selector, "resource?", &resource); err != nil {
+		if err := starlark.UnpackArgs("list", a, kw, "api_version", &apiVersion, "kind", &kind, "namespace", &ns, "selector?", &selector, "resource?", &resource); err != nil {
 			return nil, err
 		}
 		iface, err := readIface(apiVersion, kind, ns, resource)
@@ -483,8 +484,8 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		"delete":          k8sDelete,
 		"create":          k8sCreate,
 		"apply":           k8sApply,
-		"raw_get":         k8sRawGet,
-		"raw_list":        k8sRawList,
+		"get":             k8sGet,
+		"list":            k8sList,
 		"pods":            k8sPods,
 		"events":          k8sEvents,
 		// host-capability primitives (script_host.go): exec/logs/evict/node_pods/
@@ -495,11 +496,11 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		"evict":      r.hostEvict(ctx, rep),
 		"node_pods":  r.hostNodePods(ctx),
 		"pod_status": r.hostPodStatus(ctx),
-		// k8s.get — workload status summary {desired, ready, updated, available}
-		// (matches the custom-script surface). For the full object use raw_get.
-		"get": starlark.NewBuiltin("get", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
+		// k8s.status — workload rollout summary {desired, ready, updated, available}.
+		// For the full object use k8s.get.
+		"status": starlark.NewBuiltin("status", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
 			var ns, kind, name string
-			if err := starlark.UnpackArgs("get", a, kw, "namespace", &ns, "kind", &kind, "name", &name); err != nil {
+			if err := starlark.UnpackArgs("status", a, kw, "namespace", &ns, "kind", &kind, "name", &name); err != nil {
 				return nil, err
 			}
 			st, err := r.readStateOf(ctx, ns, kind, name)

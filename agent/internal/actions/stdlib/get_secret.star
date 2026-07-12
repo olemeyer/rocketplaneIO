@@ -8,7 +8,7 @@
 # ever surfaced. No snapshot, no mutation.
 ns = args["namespace"]; name = args["name"]
 step("read secret %s" % name)
-sec = k8s.raw_get("v1", "Secret", ns, name)
+sec = k8s.get("v1", "Secret", ns, name)
 if not sec:
     fail("Secret %s/%s not found" % (ns, name))
 keys = list(sec.get("data", {}).keys())

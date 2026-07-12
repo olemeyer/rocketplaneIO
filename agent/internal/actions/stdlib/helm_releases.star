@@ -11,7 +11,7 @@ ns = args["name"]
 if ns == "-":
     ns = ""
 step("list helm releases")
-secs = k8s.raw_list("v1", "Secret", ns, selector="owner=helm")
+secs = k8s.list("v1", "Secret", ns, selector="owner=helm")
 report("%d release secret(s)" % len(secs))
 for s in secs:
     lb = s["metadata"].get("labels", {})

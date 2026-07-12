@@ -8,7 +8,7 @@
 # recreated. Not reversible: restarting pods cannot be un-restarted.
 ns = args["namespace"]; kind = args["kind"]; name = args["name"]
 step("read current restart counter")
-obj = k8s.raw_get("apps/v1", kind, ns, name)
+obj = k8s.get("apps/v1", kind, ns, name)
 if obj == None:
     fail("workload not found")
 cur = int(obj["spec"]["template"]["metadata"].get("annotations", {}).get("rocketplane.io/restartedAt", "0"))

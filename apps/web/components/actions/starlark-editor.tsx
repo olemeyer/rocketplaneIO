@@ -52,9 +52,9 @@ const BUILTIN_COMPLETIONS: Completion[] = [
 // what they touch, so a failure rolls back and a succeeded run stays revertible.
 const K8S_COMPLETIONS: Completion[] = [
   // reads (no snapshot, safe)
-  snip('get', 'get(${ns}, "${Deployment}", ${name})', 'k8s.get(namespace, kind, name) → dict', 'Workload state: {desired, ready, updated, available}.', 'method'),
-  snip('raw_get', 'raw_get("${v1}", "${ConfigMap}", ${ns}, ${name})', 'k8s.raw_get(apiVersion, kind, namespace, name, resource="") → dict|None', 'Read any object (CRDs via resource=plural). Secret values are redacted.', 'method'),
-  snip('raw_list', 'raw_list("${apps/v1}", "${ReplicaSet}", ${ns})', 'k8s.raw_list(apiVersion, kind, namespace, selector="", resource="") → list', 'List any kind in a namespace.', 'method'),
+  snip('get', 'get("${v1}", "${ConfigMap}", ${ns}, ${name})', 'k8s.get(apiVersion, kind, namespace, name, resource="") → dict|None', 'Read the full object of any kind (CRDs via resource=plural). Secret values are redacted.', 'method'),
+  snip('list', 'list("${apps/v1}", "${ReplicaSet}", ${ns})', 'k8s.list(apiVersion, kind, namespace, selector="", resource="") → list', 'List any kind in a namespace.', 'method'),
+  snip('status', 'status(${ns}, "${Deployment}", ${name})', 'k8s.status(namespace, kind, name) → dict', 'Workload rollout summary: {desired, ready, updated, available}.', 'method'),
   snip('pods', 'pods(${ns})', 'k8s.pods(namespace, selector="") → list', '[{name, ready, phase, restarts, node}].', 'method'),
   snip('events', 'events(${ns}, "${name}")', 'k8s.events(namespace, name="") → list', '[{type, reason, message, count, object}].', 'method'),
   // mutators (auto-snapshot → auto-rollback on failure + revertible)

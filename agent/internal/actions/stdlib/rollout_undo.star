@@ -11,7 +11,7 @@ ns = args["namespace"]; name = args["name"]
 step("find previous revision")
 cur = -1
 revs = {}
-for rs in k8s.raw_list("apps/v1", "ReplicaSet", ns):
+for rs in k8s.list("apps/v1", "ReplicaSet", ns):
     md = rs.get("metadata", {})
     owned = False
     for o in md.get("ownerReferences", []):

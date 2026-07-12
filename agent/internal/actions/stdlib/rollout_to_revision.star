@@ -10,7 +10,7 @@ ns = args["namespace"]; name = args["name"]
 target = int(args["revision"])
 step("find revision %d" % target)
 revs = {}
-for rs in k8s.raw_list("apps/v1", "ReplicaSet", ns):
+for rs in k8s.list("apps/v1", "ReplicaSet", ns):
     md = rs.get("metadata", {})
     owned = False
     for o in md.get("ownerReferences", []):
