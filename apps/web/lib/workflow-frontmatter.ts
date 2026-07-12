@@ -120,8 +120,12 @@ export function lintWorkflow(source: string): { meta: WorkflowMeta; diags: Diag[
   if (meta.reversible === 'readonly' && hasMut) {
     diags.push({ line: bodyLine(ANY_MUT), severity: 'error', message: 'declared @reversible readonly but the script mutates the cluster — use a mutator only in a snapshot/none workflow' });
   }
+  // Enforced (not just advised): a snapshot-reversible whole-object mutation MUST
+  // call snapshot(namespace, kind, name) first, so the capture is load-bearing and
+  // visible — not left to the mutator's implicit auto-capture. Field mutators
+  // (set_field/patch_configmap) name their exact path, so they are exempt.
   if (meta.reversible === 'snapshot' && hasWhole && !hasSnap && !hasField) {
-    diags.push({ line: bodyLine(WHOLE_OBJECT_MUT), severity: 'warning', message: 'whole-object mutation without an explicit snapshot(namespace, kind, name) — add one before the mutation so the capture is visible (the mutator also auto-captures)' });
+    diags.push({ line: bodyLine(WHOLE_OBJECT_MUT), severity: 'error', message: 'a whole-object mutation in a @reversible snapshot workflow must be preceded by snapshot(namespace, kind, name)' });
   }
   if (meta.reversible === 'none' && hasSnap) {
     diags.push({ line: bodyLine(SNAPSHOT_CALL), severity: 'info', message: '@reversible none but snapshot() is called — the capture will not be offered as a revert' });

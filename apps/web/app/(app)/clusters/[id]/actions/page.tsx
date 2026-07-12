@@ -1758,8 +1758,15 @@ function RunDialog({
   onClose: () => void;
   onRun: (values: Record<string, string>) => Promise<void>;
 }) {
+  // A custom workflow's params come from its script front-matter — the single
+  // source — so the run form always matches what the code declares (the stored
+  // columns are just a derived index and could lag an external edit).
   const fields: BuiltinField[] =
-    dialog.type === 'script' ? (dialog.def.params ?? []) : dialog.builtin.fields;
+    dialog.type === 'script'
+      ? ((parseFrontmatter(dialog.def.source).params as BuiltinField[]).length
+          ? (parseFrontmatter(dialog.def.source).params as BuiltinField[])
+          : (dialog.def.params ?? []))
+      : dialog.builtin.fields;
   const [values, setValues] = useState<Record<string, string>>(
     Object.fromEntries(fields.map((f) => [f.name, f.default ?? ''])),
   );
