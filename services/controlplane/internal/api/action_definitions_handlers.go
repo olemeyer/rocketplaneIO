@@ -56,6 +56,31 @@ func (s *Server) validateDefReq(w http.ResponseWriter, req *defReq) bool {
 	return true
 }
 
+// handleCheckActionDef — POST /api/orgs/{org}/action-definitions/check {source}
+// Live editor validation: compile the source against the agent's surface (parse +
+// resolve, no execution) and return the first error with position. Non-blocking,
+// no persistence.
+func (s *Server) handleCheckActionDef(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.resolveOrg(w, r); !ok {
+		return
+	}
+	var req struct {
+		Source string `json:"source"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if len(req.Source) > 64_000 {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "source too large (max 64k)"})
+		return
+	}
+	if err := checkScriptSource("workflow", req.Source); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (s *Server) handleListActionDefs(w http.ResponseWriter, r *http.Request) {
 	orgID, ok := s.resolveOrg(w, r)
 	if !ok {

@@ -15,11 +15,12 @@ import (
 	"go.starlark.net/syntax"
 )
 
-// scriptEnv MUSS mit den Builtins in agent/internal/actions/script.go
-// übereinstimmen — sie ist der Vertrag der Script-Umgebung.
+// scriptEnv MUSS mit der Snapshot-Surface in
+// agent/internal/actions/script_snapshot.go übereinstimmen — sie ist der Vertrag
+// der Script-Umgebung (auf der Built-ins, Forks und Custom-Workflows laufen).
 var scriptEnv = []string{
 	"args", "step", "report", "fail", "sleep",
-	"k8s", "wait_rollout", "wait_ready",
+	"k8s", "json", "snapshot", "wait_rollout", "wait_ready",
 }
 
 // scriptFileOptions spiegelt die Agent-Engine (While/Recursion aus).

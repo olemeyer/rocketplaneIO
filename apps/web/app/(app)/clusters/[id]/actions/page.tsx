@@ -12,6 +12,7 @@ import { GuardrailsMenu } from '@/components/app/copilot';
 import { StarlarkEditor } from '@/components/actions/starlark-editor';
 import {
   cancelAction,
+  checkWorkflow,
   createAction,
   createActionDefinition,
   deleteActionDefinition,
@@ -25,6 +26,7 @@ import {
 } from '@/lib/api/controlplane';
 import type { ActionDefParam, ActionDefinition, ActionKind, ClusterAction, ServiceMap } from '@/lib/api/types';
 import { BUILTIN_ACTIONS, type BuiltinMeta } from '@/lib/builtin-actions.generated';
+import { parseFrontmatter, lintWorkflow, hasBlockingError, type Diag, type WorkflowMeta } from '@/lib/workflow-frontmatter';
 import { LEVEL_META, RISK_LEVELS, levelColor, type RiskLevel } from '@/lib/approval';
 import Link from 'next/link';
 
@@ -515,19 +517,26 @@ const BUILTINS: Builtin[] = [
   },
 ];
 
-const EXAMPLE_SOURCE = `# Safe scale-up on the snapshot substrate — same surface the built-ins run on.
-# Mutators auto-snapshot what they touch: if this fails, every change is rolled
-# back automatically, and a succeeded run stays revertible.
-# Surface: args · step(name) · report(msg) · fail(msg) · sleep(s) · json
+const EXAMPLE_SOURCE = `# @name safe-scale
+# @summary Scale a Deployment and verify readiness; auto-rollback on failure.
+# @risk medium
+# @reversible snapshot
+# @targets Deployment
+# @param namespace namespace required
+# @param name workload required
+# @param replicas int 0 50 required
+#
+# Metadata above is co-evaluated (name/risk/reversibility/params come from it).
+# Surface: step · report · fail · sleep · snapshot · json · args
 #   k8s.patch/set_field/set_fields/scale/patch_configmap/create/delete
 #   k8s.get/raw_get/raw_list/pods/events · wait_ready/wait_rollout
-
 ns = args["namespace"]
 name = args["name"]
 target = int(args["replicas"])
 
+step("snapshot")
+snapshot(ns, "Deployment", name)
 step("scale to %d" % target)
-report("current: %d replicas" % k8s.get(ns, "Deployment", name)["desired"])
 k8s.scale(ns, "Deployment", name, target)
 
 step("verify")
@@ -946,14 +955,33 @@ function matchAction(b: (typeof BUILTINS)[number], q: string): boolean {
   );
 }
 
+// The editor now works on ONE thing — the script. Name, summary, risk,
+// reversibility, targets, params and timeout all live in its `# @…` front-matter
+// (co-evaluated live). id=null means a new workflow.
 type EditorState = {
-  id: string | null; // null = neu
-  name: string;
-  description: string;
-  params: ActionDefParam[];
+  id: string | null;
   source: string;
-  timeoutSeconds: number;
 };
+
+// composeDefSource makes an existing (possibly front-matter-less) definition
+// editable as a single front-matter-carrying script: if the stored source has no
+// `# @name`, synthesise a front-matter block from the definition's columns.
+function composeDefSource(d: ActionDefinition): string {
+  if (/^\s*#\s*@name\b/m.test(d.source)) return d.source;
+  const fm: string[] = [`# @name ${d.name}`];
+  if (d.description) fm.push(`# @summary ${d.description}`);
+  fm.push('# @reversible snapshot');
+  for (const p of d.params ?? []) {
+    const bits = [`# @param`, p.name, p.type ?? 'string'];
+    if (p.type === 'int' && p.min != null && p.max != null) bits.push(String(p.min), String(p.max));
+    if (p.type === 'enum' && p.options?.length) bits.push(...p.options);
+    if (p.required) bits.push('required');
+    if (p.default) bits.push(`=${p.default}`);
+    fm.push(bits.join(' '));
+  }
+  if (d.timeoutSeconds && d.timeoutSeconds !== 600) fm.push(`# @timeout ${d.timeoutSeconds}`);
+  return fm.join('\n') + '\n#\n' + d.source;
+}
 
 export default function ActionsPage() {
   const params = useParams<{ id: string }>();
@@ -1039,12 +1067,22 @@ export default function ActionsPage() {
   const saveEditor = useCallback(async () => {
     if (!orgId || !editor) return;
     setError(null);
+    // Everything is derived from the front-matter — the single source.
+    const { meta, diags } = lintWorkflow(editor.source);
+    if (hasBlockingError(diags)) {
+      setError('fix the errors flagged in the editor before saving');
+      return;
+    }
+    if (!meta.name) {
+      setError('add a `# @name my-workflow` line');
+      return;
+    }
     const body = {
-      name: editor.name,
-      description: editor.description,
-      params: editor.params.filter((p) => p.name.trim() !== ''),
+      name: meta.name,
+      description: meta.summary ?? '',
+      params: (meta.params ?? []) as ActionDefParam[],
       source: editor.source,
-      timeoutSeconds: editor.timeoutSeconds,
+      timeoutSeconds: meta.timeout ?? 600,
     };
     try {
       if (editor.id) await updateActionDefinition(orgId, editor.id, body);
@@ -1066,14 +1104,11 @@ export default function ActionsPage() {
   // eingebetteten Agent-Skripten generiert), die Felder werden zu Params.
   const forkBuiltin = useCallback((b: (typeof BUILTINS)[number]) => {
     setDetail(null);
-    setEditor({
-      id: null,
-      name: b.kind.replace(/_/g, '-'),
-      description: BUILTIN_ACTIONS[b.kind]?.summary ?? b.description,
-      params: b.fields,
-      source: builtinSource(b.kind),
-      timeoutSeconds: 600,
-    });
+    // Fork the FULL script incl. front-matter (so name/risk/reversibility/params
+    // are editable). Host-native kinds have no script → seed a front-matter stub.
+    const full = BUILTIN_ACTIONS[b.kind]?.full;
+    const source = full ?? `# @name ${b.kind.replace(/_/g, '-')}\n# @summary ${b.description}\n# @reversible none\n#\n# ${b.name} runs as a native agent primitive; write your own workflow here.\n`;
+    setEditor({ id: null, source });
   }, []);
 
   return (
@@ -1097,20 +1132,7 @@ export default function ActionsPage() {
           <GuardrailsMenu clusterId={clusterId} />
           <button
             type="button"
-            onClick={() =>
-              setEditor({
-                id: null,
-                name: '',
-                description: '',
-                params: [
-                  { name: 'namespace', type: 'namespace', default: 'shop', required: true },
-                  { name: 'name', type: 'workload', required: true },
-                  { name: 'replicas', type: 'int', min: 0, max: 10, default: '2', required: true },
-                ],
-                source: EXAMPLE_SOURCE,
-                timeoutSeconds: 600,
-              })
-            }
+            onClick={() => setEditor({ id: null, source: EXAMPLE_SOURCE })}
             className="rp-focus h-8 rounded-skin-sm px-3 font-mono text-[11px] font-semibold transition-opacity hover:opacity-90"
             style={{ background: 'var(--rp-btn-bg)', color: 'var(--rp-btn-fg)' }}
           >
@@ -1227,16 +1249,7 @@ export default function ActionsPage() {
                       <span className="ml-auto flex items-center gap-1.5">
                         <button
                           type="button"
-                          onClick={() =>
-                            setEditor({
-                              id: d.id,
-                              name: d.name,
-                              description: d.description,
-                              params: d.params ?? [],
-                              source: d.source,
-                              timeoutSeconds: d.timeoutSeconds || 600,
-                            })
-                          }
+                          onClick={() => setEditor({ id: d.id, source: composeDefSource(d) })}
                           className="rounded-skin-sm border border-line px-2 py-1 font-mono text-[10.5px] text-mid transition-colors hover:bg-hover hover:text-ink"
                         >
                           edit
@@ -1375,7 +1388,8 @@ export default function ActionsPage() {
         <WorkflowEditor
           state={editor}
           error={error}
-          onChange={setEditor}
+          onChange={(source) => setEditor({ ...editor, source })}
+          check={orgId ? (src) => checkWorkflow(orgId, src) : undefined}
           onSave={saveEditor}
           onDelete={
             editor.id && orgId
@@ -1579,13 +1593,15 @@ function WorkflowEditor({
   state,
   error,
   onChange,
+  check,
   onSave,
   onDelete,
   onClose,
 }: {
   state: EditorState;
   error: string | null;
-  onChange: (s: EditorState) => void;
+  onChange: (source: string) => void;
+  check?: (source: string) => Promise<{ ok: boolean; error?: string }>;
   onSave: () => void;
   onDelete?: () => void;
   onClose: () => void;
@@ -1598,7 +1614,12 @@ function WorkflowEditor({
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const set = (patch: Partial<EditorState>) => onChange({ ...state, ...patch });
+  const [diags, setDiags] = useState<Diag[]>([]);
+  // Metadata is co-evaluated live from the front-matter — the single source.
+  const meta: WorkflowMeta = useMemo(() => parseFrontmatter(state.source), [state.source]);
+  const errorCount = diags.filter((d) => d.severity === 'error').length;
+  const warnCount = diags.filter((d) => d.severity === 'warning').length;
+  const revMeta = REVERSIBLE_META[(meta.reversible as keyof typeof REVERSIBLE_META) ?? 'native'];
 
   return (
     <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Workflow editor">
@@ -1610,17 +1631,17 @@ function WorkflowEditor({
         style={{ backgroundColor: 'var(--rp-scrim)' }}
       />
       <aside
-        className="absolute inset-y-0 right-0 flex w-[min(760px,94vw)] flex-col border-l border-line bg-raised"
+        className="absolute inset-y-0 right-0 flex w-[min(920px,96vw)] flex-col border-l border-line bg-raised"
         style={{
           boxShadow: 'var(--rp-rim), var(--rp-shadow-pop)',
           animation: 'rp-drawer-in var(--rp-dur-large) var(--rp-ease-enter)',
         }}
       >
         <header className="shrink-0 border-b border-line px-5 pb-3 pt-4">
-          <div className="rp-micro !text-[10px]">workflow / starlark</div>
-          <div className="rp-keyline mt-2 flex flex-wrap items-center justify-between gap-2 pb-3">
+          <div className="rp-micro !text-[10px]">workflow / starlark · front-matter drives name · risk · reversibility · params</div>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
             <h2 className="font-display text-[20px] font-bold tracking-tightest text-ink">
-              {state.id ? `Edit ${state.name}` : 'New workflow'}
+              {meta.name ? (state.id ? `Edit ${meta.name}` : meta.name) : 'New workflow'}
             </h2>
             <div className="flex items-center gap-2">
               {onDelete ? (
@@ -1636,7 +1657,9 @@ function WorkflowEditor({
               <button
                 type="button"
                 onClick={onSave}
-                className="rp-focus h-8 rounded-skin-sm px-3.5 font-mono text-[11.5px] font-semibold transition-opacity hover:opacity-90"
+                disabled={errorCount > 0}
+                title={errorCount > 0 ? 'fix the errors first' : 'save'}
+                className="rp-focus h-8 rounded-skin-sm px-3.5 font-mono text-[11.5px] font-semibold transition-opacity enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                 style={{ background: 'var(--rp-btn-bg)', color: 'var(--rp-btn-fg)' }}
               >
                 Save
@@ -1650,160 +1673,67 @@ function WorkflowEditor({
               </button>
             </div>
           </div>
+
+          {/* live meta strip — parsed from the front-matter as you type */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10.5px]">
+            <span className="text-faint">risk <span className="text-mid">{meta.risk ?? '—'}</span></span>
+            <span className="flex items-center gap-1" style={{ color: levelColor(revMeta.klass) }} title={revMeta.hint}>
+              {LEVEL_META[revMeta.klass].glyph} {revMeta.label}
+            </span>
+            <span className="text-faint">acts on <span className="text-mid">{meta.targets.length ? meta.targets.join(' · ') : '—'}</span></span>
+            <span className="text-faint">{meta.params.length} param{meta.params.length === 1 ? '' : 's'}</span>
+            <span className="ml-auto flex items-center gap-1.5">
+              {errorCount > 0 ? (
+                <span style={{ color: levelColor('destructive') }}>▲ {errorCount} error{errorCount === 1 ? '' : 's'}</span>
+              ) : warnCount > 0 ? (
+                <span style={{ color: levelColor('disruptive') }}>◆ {warnCount} warning{warnCount === 1 ? '' : 's'}</span>
+              ) : (
+                <span style={{ color: 'var(--rp-green)' }}>● valid</span>
+              )}
+            </span>
+          </div>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-          {error ? (
-            <div
-              className="mb-3 rounded-skin-sm px-3 py-2 font-mono text-[11px]"
-              style={{ color: 'var(--rp-tone-red-fg)', background: 'var(--rp-tone-red-bg)' }}
-            >
-              {error}
-            </div>
-          ) : null}
-
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="block">
-              <span className="rp-micro !text-[10px]">name (kebab-case)</span>
-              <input
-                value={state.name}
-                onChange={(e) => set({ name: e.target.value })}
-                placeholder="safe-scale"
-                className="rp-focus mt-1 h-9 w-full rounded-skin-sm border border-line bg-inset px-2.5 font-mono text-[12px] text-ink placeholder:text-faint"
-              />
-            </label>
-            <label className="block">
-              <span className="rp-micro !text-[10px]">description</span>
-              <input
-                value={state.description}
-                onChange={(e) => set({ description: e.target.value })}
-                placeholder="Scale up with verification and automatic rollback"
-                className="rp-focus mt-1 h-9 w-full rounded-skin-sm border border-line bg-inset px-2.5 font-mono text-[12px] text-ink placeholder:text-faint"
-              />
-            </label>
+        {error ? (
+          <div
+            className="mx-5 mt-3 shrink-0 rounded-skin-sm px-3 py-2 font-mono text-[11px]"
+            style={{ color: 'var(--rp-tone-red-fg)', background: 'var(--rp-tone-red-bg)' }}
+          >
+            {error}
           </div>
+        ) : null}
 
-          {/* Params */}
-          <div className="mt-4">
-            <div className="flex items-center justify-between">
-              <span className="rp-micro !text-[10px]">parameters — become `args` in the script</span>
-              <button
-                type="button"
-                onClick={() => set({ params: [...state.params, { name: '', default: '' }] })}
-                className="rounded-skin-chip border border-line px-1.5 py-0.5 font-mono text-[10px] text-muted transition-colors hover:text-ink"
-              >
-                + add
-              </button>
-            </div>
-            <div className="mt-1.5 space-y-1.5">
-              {state.params.map((p, i) => {
-                const patch = (q: Partial<ActionDefParam>) => {
-                  const params = [...state.params];
-                  params[i] = { ...p, ...q };
-                  set({ params });
-                };
-                return (
-                  <div key={i} className="flex items-center gap-2">
-                    <input
-                      value={p.name}
-                      onChange={(e) => patch({ name: e.target.value })}
-                      placeholder="name"
-                      className="rp-focus h-8 w-32 rounded-skin-sm border border-line bg-inset px-2 font-mono text-[11px] text-ink placeholder:text-faint"
-                    />
-                    <select
-                      value={p.type ?? 'string'}
-                      onChange={(e) => patch({ type: e.target.value as ActionDefParam['type'] })}
-                      className="rp-focus h-8 rounded-skin-sm border border-line bg-inset px-1.5 font-mono text-[11px] text-ink"
-                    >
-                      {['string', 'int', 'bool', 'enum', 'namespace', 'workload'].map((t) => (
-                        <option key={t} value={t}>{t}</option>
-                      ))}
-                    </select>
-                    {p.type === 'int' ? (
-                      <>
-                        <input
-                          value={p.min ?? ''}
-                          onChange={(e) => patch({ min: e.target.value === '' ? undefined : Number(e.target.value) })}
-                          placeholder="min"
-                          className="rp-focus h-8 w-14 rounded-skin-sm border border-line bg-inset px-2 font-mono text-[11px] text-ink placeholder:text-faint tnum"
-                        />
-                        <input
-                          value={p.max ?? ''}
-                          onChange={(e) => patch({ max: e.target.value === '' ? undefined : Number(e.target.value) })}
-                          placeholder="max"
-                          className="rp-focus h-8 w-14 rounded-skin-sm border border-line bg-inset px-2 font-mono text-[11px] text-ink placeholder:text-faint tnum"
-                        />
-                      </>
-                    ) : null}
-                    {p.type === 'enum' ? (
-                      <input
-                        value={(p.options ?? []).join(',')}
-                        onChange={(e) => patch({ options: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })}
-                        placeholder="a,b,c"
-                        className="rp-focus h-8 w-36 rounded-skin-sm border border-line bg-inset px-2 font-mono text-[11px] text-ink placeholder:text-faint"
-                      />
-                    ) : null}
-                    <input
-                      value={p.default ?? ''}
-                      onChange={(e) => patch({ default: e.target.value })}
-                      placeholder="default"
-                      className="rp-focus h-8 min-w-0 flex-1 rounded-skin-sm border border-line bg-inset px-2 font-mono text-[11px] text-ink placeholder:text-faint"
-                    />
-                    <label className="flex shrink-0 items-center gap-1 font-mono text-[10px] text-muted" title="required">
-                      <input
-                        type="checkbox"
-                        checked={p.required ?? false}
-                        onChange={(e) => patch({ required: e.target.checked })}
-                        className="rp-focus h-3.5 w-3.5"
-                      />
-                      req
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => set({ params: state.params.filter((_, j) => j !== i) })}
-                      className="h-8 w-8 shrink-0 rounded-skin-sm border border-line font-mono text-[11px] text-muted transition-colors hover:text-ink"
-                      aria-label="remove parameter"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Timeout — der Ablauf ist zeitbegrenzt; danach Rollback */}
-            <label className="mt-3 flex items-center gap-2">
-              <span className="rp-micro !text-[10px]">timeout</span>
-              <input
-                value={state.timeoutSeconds}
-                onChange={(e) => set({ timeoutSeconds: Number(e.target.value) || 0 })}
-                className="rp-focus h-8 w-20 rounded-skin-sm border border-line bg-inset px-2 font-mono text-[11px] text-ink tnum"
-              />
-              <span className="font-mono text-[10px] text-faint">seconds (30–1800) · on timeout the engine rolls back automatically</span>
-            </label>
-          </div>
-
-          {/* Source */}
-          <div className="mt-4">
-            <div className="flex items-baseline justify-between">
-              <span className="rp-micro !text-[10px]">source — hermetic python (starlark)</span>
-              <span className="font-mono text-[9.5px] text-faint">
-                step() · report() · fail() · k8s.* · wait_rollout() · wait_ready() · sleep()
-              </span>
-            </div>
-            <div className="mt-1.5">
-              <StarlarkEditor
-                value={state.source}
-                onChange={(v) => set({ source: v })}
-                params={state.params}
-              />
-            </div>
-            <p className="mt-1.5 font-mono text-[9.5px] leading-relaxed text-faint">
-              Verified on save: the control-plane compiles the script (syntax + unknown
-              names) — broken workflows cannot be stored. Ctrl+Space for completion.
-            </p>
-          </div>
+        {/* the big editor — the whole workflow lives here, front-matter included */}
+        <div className="min-h-0 flex-1 px-5 py-3">
+          <StarlarkEditor value={state.source} onChange={onChange} check={check} onDiagnostics={setDiags} />
         </div>
+
+        {/* validation panel — every diagnostic, with its line + severity */}
+        {diags.length > 0 ? (
+          <div className="max-h-[28%] shrink-0 overflow-y-auto border-t border-line px-5 py-2">
+            <div className="rp-micro !text-[9.5px] mb-1">validation</div>
+            <ul className="space-y-0.5">
+              {diags
+                .slice()
+                .sort((a, b) => a.line - b.line)
+                .map((d, i) => {
+                  const c = d.severity === 'error' ? levelColor('destructive') : d.severity === 'warning' ? levelColor('disruptive') : 'var(--rp-ink-faint)';
+                  const g = d.severity === 'error' ? '▲' : d.severity === 'warning' ? '◆' : '○';
+                  return (
+                    <li key={i} className="flex items-start gap-2 font-mono text-[10.5px] leading-snug">
+                      <span className="shrink-0 tnum text-faint">L{d.line + 1}</span>
+                      <span className="shrink-0" style={{ color: c }}>{g}</span>
+                      <span className="text-mid">{d.message}</span>
+                    </li>
+                  );
+                })}
+            </ul>
+          </div>
+        ) : (
+          <p className="shrink-0 border-t border-line px-5 py-2 font-mono text-[9.5px] leading-relaxed text-faint">
+            Front-matter (# @name/@risk/@reversible/@param) is co-evaluated · Ctrl+Space for completion · the control-plane compiles on save — broken or incoherent workflows cannot be stored.
+          </p>
+        )}
       </aside>
     </div>
   );

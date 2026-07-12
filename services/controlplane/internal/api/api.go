@@ -176,6 +176,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/workload-pods", sess(http.HandlerFunc(s.handleWorkloadPods)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/inventory", sess(http.HandlerFunc(s.handleListInventory)))
 	mux.Handle("GET /api/orgs/{org}/action-definitions", sess(http.HandlerFunc(s.handleListActionDefs)))
+	mux.Handle("POST /api/orgs/{org}/action-definitions/check", sess(http.HandlerFunc(s.handleCheckActionDef)))
 	mux.Handle("POST /api/orgs/{org}/action-definitions", sess(http.HandlerFunc(s.handleCreateActionDef)))
 	mux.Handle("PUT /api/orgs/{org}/action-definitions/{def}", sess(http.HandlerFunc(s.handleUpdateActionDef)))
 	mux.Handle("DELETE /api/orgs/{org}/action-definitions/{def}", sess(http.HandlerFunc(s.handleDeleteActionDef)))

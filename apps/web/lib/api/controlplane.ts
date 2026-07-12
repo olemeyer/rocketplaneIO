@@ -354,6 +354,18 @@ export function revertAction(
   });
 }
 
+// checkWorkflow compiles a Starlark workflow (parse + resolve, no execution)
+// against the agent surface — live editor validation. Returns {ok, error?}.
+export function checkWorkflow(
+  orgId: string,
+  source: string,
+): Promise<{ ok: boolean; error?: string }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/action-definitions/check`, {
+    method: 'POST',
+    body: JSON.stringify({ source }),
+  });
+}
+
 export function getInfra(
   orgId: string,
   clusterId: string,

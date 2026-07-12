@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, placeholder } from '@codemirror/view';
-import { EditorState, Compartment } from '@codemirror/state';
+import { EditorState } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { python } from '@codemirror/lang-python';
 import {
@@ -13,8 +13,12 @@ import {
   type Completion,
 } from '@codemirror/autocomplete';
 import { bracketMatching, indentUnit, syntaxHighlighting, HighlightStyle } from '@codemirror/language';
+import { linter, lintGutter, type Diagnostic } from '@codemirror/lint';
 import { tags } from '@lezer/highlight';
-import type { ActionDefParam } from '@/lib/api/types';
+import {
+  lintWorkflow, parseFrontmatter,
+  RISK_VALUES, REVERSIBLE_VALUES, PARAM_TYPES, type Diag,
+} from '@/lib/workflow-frontmatter';
 
 // starlark-editor.tsx — echter Code-Editor für Workflows: CodeMirror 6 mit
 // Python-Grammatik (Starlark ist ein Subset), RETICLE-Theme über CSS-Variablen
@@ -61,6 +65,44 @@ const K8S_COMPLETIONS: Completion[] = [
   snip('create', 'create(${manifest})', 'k8s.create(manifest)', 'Create an object (manifest needs apiVersion, kind, metadata.name). Restore deletes it.', 'method'),
   snip('delete', 'delete(${ns}, "${Pod}", ${name})', 'k8s.delete(namespace, kind, name)', 'Snapshot + delete. Restore recreates it from the capture.', 'method'),
 ];
+
+// Front-matter completions — the `# @key value` block the editor co-evaluates.
+const FM_KEYS: Completion[] = [
+  snip('name', 'name ${my-workflow}', '# @name <kebab-case>', 'Workflow name (required).', 'keyword'),
+  snip('summary', 'summary ${one-line description}', '# @summary <text>', 'One-line description shown in the library.', 'keyword'),
+  snip('risk', 'risk ${medium}', '# @risk low|medium|high', 'Risk level for the guardrails.', 'keyword'),
+  snip('reversible', 'reversible ${snapshot}', '# @reversible snapshot|readonly|none', 'How the run can be undone.', 'keyword'),
+  snip('targets', 'targets ${Deployment,StatefulSet}', '# @targets <Kind,Kind>', 'Comma-separated target kinds.', 'keyword'),
+  snip('param', 'param ${name} ${string}', '# @param <name> <type> [min max | opts…] [required] [=default]', 'A run parameter (becomes args["name"]).', 'keyword'),
+  snip('timeout', 'timeout ${600}', '# @timeout <seconds>', 'Run timeout (30–1800). Default 600.', 'keyword'),
+];
+const kw = (labels: string[]): Completion[] => labels.map((l) => ({ label: l, type: 'constant' }));
+
+// frontmatterCompletion suggests @keys and enum values inside the `# @…` block.
+function frontmatterCompletion(ctx: import('@codemirror/autocomplete').CompletionContext) {
+  const line = ctx.state.doc.lineAt(ctx.pos);
+  const text = line.text;
+  if (!/^\s*#/.test(text)) return null; // only inside comments
+  // value slots
+  let m = ctx.matchBefore(/@risk\s+\w*/);
+  if (m && /@risk\s+\w*$/.test(text.slice(0, ctx.pos - line.from))) {
+    const v = ctx.matchBefore(/\w*/);
+    if (v) return { from: v.from, options: kw(RISK_VALUES), validFor: /^\w*$/ };
+  }
+  m = ctx.matchBefore(/@reversible\s+\w*/);
+  if (m && /@reversible\s+\w*$/.test(text.slice(0, ctx.pos - line.from))) {
+    const v = ctx.matchBefore(/\w*/);
+    if (v) return { from: v.from, options: kw(REVERSIBLE_VALUES), validFor: /^\w*$/ };
+  }
+  if (/^\s*#\s*@param\s+\S+\s+\w*$/.test(text.slice(0, ctx.pos - line.from))) {
+    const v = ctx.matchBefore(/\w*/);
+    if (v) return { from: v.from, options: kw(PARAM_TYPES), validFor: /^\w*$/ };
+  }
+  // key slot: "# @<word>"
+  const key = ctx.matchBefore(/@\w*/);
+  if (key) return { from: key.from + 1, options: FM_KEYS, validFor: /^\w*$/ };
+  return null;
+}
 
 // RETICLE-Syntax-Farben: ruhige, gedeckte Hues — Status-Farben bleiben Daten.
 const highlight = HighlightStyle.define([
@@ -121,53 +163,70 @@ const reticleTheme = EditorView.theme({
   },
 });
 
+// parseErrLine pulls the 1-based line from a compiler error like
+// "workflow.star:12:3: undefined: foo" → 11 (0-based). Falls back to 0.
+function parseErrLine(err: string): number {
+  const m = err.match(/:(\d+):\d+:/) || err.match(/:(\d+):/);
+  return m ? Math.max(0, Number(m[1]) - 1) : 0;
+}
+
 export function StarlarkEditor({
   value,
   onChange,
-  params,
+  check,
+  onDiagnostics,
 }: {
   value: string;
   onChange: (v: string) => void;
-  /** Definierte Parameter → args["…"]-Completions. */
-  params: ActionDefParam[];
+  /** async compile against the agent surface (parse + resolve) for live squiggles. */
+  check?: (source: string) => Promise<{ ok: boolean; error?: string }>;
+  /** merged client + compiler diagnostics — parent uses them to gate Save + summarise. */
+  onDiagnostics?: (diags: Diag[]) => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
-  const paramsRef = useRef(params);
-  paramsRef.current = params;
-  const completionCompartment = useRef(new Compartment());
+  const checkRef = useRef(check);
+  checkRef.current = check;
+  const onDiagRef = useRef(onDiagnostics);
+  onDiagRef.current = onDiagnostics;
 
   useEffect(() => {
     if (!hostRef.current) return;
 
-    const completionSource = () => {
-      const argCompletions: Completion[] = paramsRef.current
+    // args["…"] completions derive from the @param front-matter in the doc itself.
+    const argCompletions = (doc: string): Completion[] =>
+      parseFrontmatter(doc).params
         .filter((p) => p.name)
         .map((p) => ({
           label: `args["${p.name}"]`,
           type: 'property',
-          detail: p.type ?? 'string',
-          info: p.description || `Parameter ${p.name}${p.default ? ` (default ${p.default})` : ''}`,
+          detail: p.type,
+          info: `Parameter ${p.name}${p.default ? ` (default ${p.default})` : ''}${p.required ? ' · required' : ''}`,
         }));
-      return [
-        autocompletion({
-          override: [
-            // k8s.<member> — kontextsensitiv vor dem Punkt
-            (ctx) => {
-              const before = ctx.matchBefore(/k8s\.\w*/);
-              if (!before) return null;
-              return {
-                from: before.from + 4,
-                options: K8S_COMPLETIONS,
-                validFor: /^\w*$/,
-              };
-            },
-            completeFromList([...BUILTIN_COMPLETIONS, ...argCompletions]),
-          ],
-        }),
-      ];
+
+    // linter: client-side front-matter + snapshot-coherence lint, plus the async
+    // control-plane compile (syntax/unknown-name) mapped to the failing line.
+    const lintSource = async (view: EditorView): Promise<Diagnostic[]> => {
+      const doc = view.state.doc.toString();
+      const { diags } = lintWorkflow(doc);
+      const all: Diag[] = [...diags];
+      const fn = checkRef.current;
+      if (fn) {
+        try {
+          const r = await fn(doc);
+          if (!r.ok && r.error) all.push({ line: parseErrLine(r.error), severity: 'error', message: r.error });
+        } catch {
+          /* offline: keep client diagnostics only */
+        }
+      }
+      onDiagRef.current?.(all);
+      const nLines = view.state.doc.lines;
+      return all.map((d): Diagnostic => {
+        const ln = view.state.doc.line(Math.min(d.line + 1, nLines));
+        return { from: ln.from, to: ln.to, severity: d.severity, message: d.message };
+      });
     };
 
     const state = EditorState.create({
@@ -182,9 +241,26 @@ export function StarlarkEditor({
         python(),
         syntaxHighlighting(highlight),
         reticleTheme,
-        completionCompartment.current.of(completionSource()),
+        lintGutter(),
+        linter(lintSource, { delay: 400 }),
+        autocompletion({
+          override: [
+            frontmatterCompletion,
+            // k8s.<member> — kontextsensitiv vor dem Punkt
+            (ctx) => {
+              const before = ctx.matchBefore(/k8s\.\w*/);
+              if (!before) return null;
+              return { from: before.from + 4, options: K8S_COMPLETIONS, validFor: /^\w*$/ };
+            },
+            (ctx) => {
+              const word = ctx.matchBefore(/[\w"[\]]*/);
+              if (!word && !ctx.explicit) return null;
+              return completeFromList([...BUILTIN_COMPLETIONS, ...argCompletions(ctx.state.doc.toString())])(ctx);
+            },
+          ],
+        }),
         keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
-        placeholder('# your workflow…'),
+        placeholder('# @name my-workflow\n# @reversible snapshot\n#\n# your workflow…'),
         EditorView.updateListener.of((u) => {
           if (u.docChanged) onChangeRef.current(u.state.doc.toString());
         }),
@@ -197,11 +273,11 @@ export function StarlarkEditor({
       view.destroy();
       viewRef.current = null;
     };
-    // bewusst nur beim Mount — value-Sync unten, Completions via Ref
+    // bewusst nur beim Mount — value-Sync unten
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Externe value-Änderungen (z.B. Definition wechseln) einspielen.
+  // Externe value-Änderungen (z.B. Fork/Definition wechseln) einspielen.
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
@@ -210,5 +286,5 @@ export function StarlarkEditor({
     }
   }, [value]);
 
-  return <div ref={hostRef} className="max-h-[520px] min-h-[360px] overflow-auto" />;
+  return <div ref={hostRef} className="h-full min-h-[360px] overflow-auto [&_.cm-editor]:h-full" />;
 }

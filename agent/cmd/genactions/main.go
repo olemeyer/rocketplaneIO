@@ -31,7 +31,8 @@ type builtinMeta struct {
 	Risk       string   `json:"risk"`
 	Reversible string   `json:"reversible"`
 	Targets    []string `json:"targets"`
-	Source     string   `json:"source"`
+	Source     string   `json:"source"` // executed body, front-matter stripped (detail view)
+	Full       string   `json:"full"`   // verbatim .star incl. front-matter (fork into the editor)
 }
 
 func main() {
@@ -82,8 +83,10 @@ func main() {
 	b.WriteString("  risk: BuiltinRisk;\n")
 	b.WriteString("  reversible: BuiltinReversible;\n")
 	b.WriteString("  targets: string[];\n")
-	b.WriteString("  /** the executed Starlark, front-matter stripped */\n")
+	b.WriteString("  /** the executed Starlark, front-matter stripped (detail view) */\n")
 	b.WriteString("  source: string;\n")
+	b.WriteString("  /** the verbatim .star incl. front-matter (fork into the editor) */\n")
+	b.WriteString("  full: string;\n")
 	b.WriteString("};\n\n")
 	b.WriteString("export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = ")
 	b.Write(body)
@@ -99,7 +102,7 @@ func main() {
 // (front-matter directive lines stripped). Required keys: name, summary, risk,
 // reversible, targets.
 func parseScript(kind, src string) (builtinMeta, error) {
-	m := builtinMeta{Kind: kind}
+	m := builtinMeta{Kind: kind, Full: strings.TrimRight(src, "\n") + "\n"}
 	lines := strings.Split(src, "\n")
 	kept := make([]string, 0, len(lines))
 	for _, ln := range lines {
