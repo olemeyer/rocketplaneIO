@@ -7,6 +7,8 @@
 # Snapshot the Deployment and set spec.paused=false, then wait for the resumed
 # rollout to settle. The snapshot restores the prior paused state.
 ns = args["namespace"]; name = args["name"]
+step("snapshot")
+snapshot(ns, "Deployment", name)
 step("resume")
 k8s.patch(ns, "Deployment", name, {"spec": {"paused": False}})
 step("verify")

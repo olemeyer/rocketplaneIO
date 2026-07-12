@@ -70,7 +70,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "Node"
     ],
-    "source": "#\n# Patch spec.unschedulable=true. Node is cluster-scoped, so the namespace is \"-\".\nstep(\"cordon\")\nk8s.patch(\"-\", \"Node\", args[\"name\"], {\"spec\": {\"unschedulable\": True}})\nreport(\"cordoned %s\" % args[\"name\"])\n"
+    "source": "#\n# Patch spec.unschedulable=true. Node is cluster-scoped, so the namespace is \"-\".\nstep(\"snapshot\")\nsnapshot(\"-\", \"Node\", args[\"name\"])\nstep(\"cordon\")\nk8s.patch(\"-\", \"Node\", args[\"name\"], {\"spec\": {\"unschedulable\": True}})\nreport(\"cordoned %s\" % args[\"name\"])\n"
   },
   "create_configmap": {
     "kind": "create_configmap",
@@ -92,7 +92,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "CronJob"
     ],
-    "source": "#\n# Patch spec.suspend=false so the CronJob resumes scheduling on its cron cadence.\nstep(\"resume\")\nk8s.patch(args[\"namespace\"], \"CronJob\", args[\"name\"], {\"spec\": {\"suspend\": False}})\nreport(\"resumed cronjob %s/%s\" % (args[\"namespace\"], args[\"name\"]))\n"
+    "source": "#\n# Patch spec.suspend=false so the CronJob resumes scheduling on its cron cadence.\nstep(\"snapshot\")\nsnapshot(args[\"namespace\"], \"CronJob\", args[\"name\"])\nstep(\"resume\")\nk8s.patch(args[\"namespace\"], \"CronJob\", args[\"name\"], {\"spec\": {\"suspend\": False}})\nreport(\"resumed cronjob %s/%s\" % (args[\"namespace\"], args[\"name\"]))\n"
   },
   "cronjob_suspend": {
     "kind": "cronjob_suspend",
@@ -103,7 +103,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "CronJob"
     ],
-    "source": "#\n# Patch spec.suspend=true. Running jobs are unaffected; only future runs are paused.\nstep(\"suspend\")\nk8s.patch(args[\"namespace\"], \"CronJob\", args[\"name\"], {\"spec\": {\"suspend\": True}})\nreport(\"suspended cronjob %s/%s\" % (args[\"namespace\"], args[\"name\"]))\n"
+    "source": "#\n# Patch spec.suspend=true. Running jobs are unaffected; only future runs are paused.\nstep(\"snapshot\")\nsnapshot(args[\"namespace\"], \"CronJob\", args[\"name\"])\nstep(\"suspend\")\nk8s.patch(args[\"namespace\"], \"CronJob\", args[\"name\"], {\"spec\": {\"suspend\": True}})\nreport(\"suspended cronjob %s/%s\" % (args[\"namespace\"], args[\"name\"]))\n"
   },
   "cronjob_trigger": {
     "kind": "cronjob_trigger",
@@ -256,7 +256,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "HorizontalPodAutoscaler"
     ],
-    "source": "#\n# Snapshot the HPA, patch its bounds; rollback restores the prior min/max.\nns = args[\"namespace\"]; name = args[\"name\"]\nspec = {}\nif args.get(\"minReplicas\", \"\") != \"\": spec[\"minReplicas\"] = int(args[\"minReplicas\"])\nif args.get(\"maxReplicas\", \"\") != \"\": spec[\"maxReplicas\"] = int(args[\"maxReplicas\"])\nstep(\"hpa bounds\")\nk8s.patch(ns, \"HorizontalPodAutoscaler\", name, {\"spec\": spec})\n"
+    "source": "#\n# Snapshot the HPA, patch its bounds; rollback restores the prior min/max.\nns = args[\"namespace\"]; name = args[\"name\"]\nspec = {}\nif args.get(\"minReplicas\", \"\") != \"\": spec[\"minReplicas\"] = int(args[\"minReplicas\"])\nif args.get(\"maxReplicas\", \"\") != \"\": spec[\"maxReplicas\"] = int(args[\"maxReplicas\"])\nstep(\"snapshot\")\nsnapshot(ns, \"HorizontalPodAutoscaler\", name)\nstep(\"hpa bounds\")\nk8s.patch(ns, \"HorizontalPodAutoscaler\", name, {\"spec\": spec})\n"
   },
   "hpa_toggle": {
     "kind": "hpa_toggle",
@@ -267,7 +267,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "HorizontalPodAutoscaler"
     ],
-    "source": "#\n# Freeze stashes the original min/max in an annotation, then pins min=max to the\n# current replica count so the autoscaler stops moving. Unfreeze (enabled=true)\n# reads that annotation and restores the saved bounds. Both directions snapshot the\n# HPA, so a failure rolls back and the run stays revertible.\nns = args[\"namespace\"]; name = args[\"name\"]\nann = \"rocketplane.io/hpa-frozen-bounds\"\nhpa = k8s.raw_get(\"autoscaling/v2\", \"HorizontalPodAutoscaler\", ns, name)\nif hpa == None:\n    fail(\"HPA %s/%s not found\" % (ns, name))\nif args.get(\"enabled\", \"\") != \"true\":\n    spec = hpa.get(\"spec\", {})\n    lo = spec.get(\"minReplicas\", 1)\n    hi = spec.get(\"maxReplicas\", 1)\n    cur = hpa.get(\"status\", {}).get(\"currentReplicas\", lo)\n    step(\"freeze at %d\" % cur)\n    # stash the original bounds so unfreeze can restore them, then pin min=max=cur\n    k8s.patch(ns, \"HorizontalPodAutoscaler\", name, {\n        \"metadata\": {\"annotations\": {ann: \"%d,%d\" % (lo, hi)}},\n        \"spec\": {\"minReplicas\": cur, \"maxReplicas\": cur},\n    })\n    report(\"pinned HPA to %d replica(s) (saved bounds %d..%d)\" % (cur, lo, hi))\nelse:\n    saved = hpa.get(\"metadata\", {}).get(\"annotations\", {}).get(ann, \"\")\n    if saved == \"\":\n        fail(\"this HPA is not frozen by rocketplane (no saved bounds) — nothing to unfreeze\")\n    parts = saved.split(\",\")\n    lo = int(parts[0])\n    hi = int(parts[1])\n    step(\"unfreeze to %d..%d\" % (lo, hi))\n    # restore the saved bounds and clear the stash annotation (merge-null removes it)\n    k8s.patch(ns, \"HorizontalPodAutoscaler\", name, {\n        \"metadata\": {\"annotations\": {ann: None}},\n        \"spec\": {\"minReplicas\": lo, \"maxReplicas\": hi},\n    })\n    report(\"restored HPA bounds to %d..%d\" % (lo, hi))\n"
+    "source": "#\n# Freeze stashes the original min/max in an annotation, then pins min=max to the\n# current replica count so the autoscaler stops moving. Unfreeze (enabled=true)\n# reads that annotation and restores the saved bounds. Both directions snapshot the\n# HPA, so a failure rolls back and the run stays revertible.\nns = args[\"namespace\"]; name = args[\"name\"]\nann = \"rocketplane.io/hpa-frozen-bounds\"\nhpa = k8s.raw_get(\"autoscaling/v2\", \"HorizontalPodAutoscaler\", ns, name)\nif hpa == None:\n    fail(\"HPA %s/%s not found\" % (ns, name))\nstep(\"snapshot\")\nsnapshot(ns, \"HorizontalPodAutoscaler\", name)\nif args.get(\"enabled\", \"\") != \"true\":\n    spec = hpa.get(\"spec\", {})\n    lo = spec.get(\"minReplicas\", 1)\n    hi = spec.get(\"maxReplicas\", 1)\n    cur = hpa.get(\"status\", {}).get(\"currentReplicas\", lo)\n    step(\"freeze at %d\" % cur)\n    # stash the original bounds so unfreeze can restore them, then pin min=max=cur\n    k8s.patch(ns, \"HorizontalPodAutoscaler\", name, {\n        \"metadata\": {\"annotations\": {ann: \"%d,%d\" % (lo, hi)}},\n        \"spec\": {\"minReplicas\": cur, \"maxReplicas\": cur},\n    })\n    report(\"pinned HPA to %d replica(s) (saved bounds %d..%d)\" % (cur, lo, hi))\nelse:\n    saved = hpa.get(\"metadata\", {}).get(\"annotations\", {}).get(ann, \"\")\n    if saved == \"\":\n        fail(\"this HPA is not frozen by rocketplane (no saved bounds) — nothing to unfreeze\")\n    parts = saved.split(\",\")\n    lo = int(parts[0])\n    hi = int(parts[1])\n    step(\"unfreeze to %d..%d\" % (lo, hi))\n    # restore the saved bounds and clear the stash annotation (merge-null removes it)\n    k8s.patch(ns, \"HorizontalPodAutoscaler\", name, {\n        \"metadata\": {\"annotations\": {ann: None}},\n        \"spec\": {\"minReplicas\": lo, \"maxReplicas\": hi},\n    })\n    report(\"restored HPA bounds to %d..%d\" % (lo, hi))\n"
   },
   "list_events": {
     "kind": "list_events",
@@ -289,7 +289,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "Node"
     ],
-    "source": "#\n# The node is the target (args[\"name\"]). Read its current taints, drop any existing\n# entry with the same key, then append the requested taint. Node is cluster-scoped\n# (namespace \"-\").\nnode = args[\"name\"]; key = args[\"key\"]\nn = k8s.raw_get(\"v1\", \"Node\", \"-\", node)\nif not n:\n    fail(\"node %s not found\" % node)\ntaints = n.get(\"spec\", {}).get(\"taints\", []) or []\nnewlist = [t for t in taints if t.get(\"key\") != key]\nnewlist.append({\n    \"key\": key,\n    \"value\": args.get(\"value\", \"\"),\n    \"effect\": args.get(\"effect\", \"NoSchedule\"),\n})\nstep(\"taint %s\" % node)\nk8s.patch(\"-\", \"Node\", node, {\"spec\": {\"taints\": newlist}})\nreport(\"tainted %s with %s=%s:%s\" % (node, key, args.get(\"value\", \"\"), args.get(\"effect\", \"NoSchedule\")))\n"
+    "source": "#\n# The node is the target (args[\"name\"]). Read its current taints, drop any existing\n# entry with the same key, then append the requested taint. Node is cluster-scoped\n# (namespace \"-\").\nnode = args[\"name\"]; key = args[\"key\"]\nn = k8s.raw_get(\"v1\", \"Node\", \"-\", node)\nif not n:\n    fail(\"node %s not found\" % node)\ntaints = n.get(\"spec\", {}).get(\"taints\", []) or []\nnewlist = [t for t in taints if t.get(\"key\") != key]\nnewlist.append({\n    \"key\": key,\n    \"value\": args.get(\"value\", \"\"),\n    \"effect\": args.get(\"effect\", \"NoSchedule\"),\n})\nstep(\"snapshot\")\nsnapshot(\"-\", \"Node\", node)\nstep(\"taint %s\" % node)\nk8s.patch(\"-\", \"Node\", node, {\"spec\": {\"taints\": newlist}})\nreport(\"tainted %s with %s=%s:%s\" % (node, key, args.get(\"value\", \"\"), args.get(\"effect\", \"NoSchedule\")))\n"
   },
   "node_untaint": {
     "kind": "node_untaint",
@@ -300,7 +300,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "Node"
     ],
-    "source": "#\n# The node is the target (args[\"name\"]). Read its taints and drop every entry with\n# the given key. Node is cluster-scoped (namespace \"-\").\nnode = args[\"name\"]; key = args[\"key\"]\nn = k8s.raw_get(\"v1\", \"Node\", \"-\", node)\nif not n:\n    fail(\"node %s not found\" % node)\ntaints = n.get(\"spec\", {}).get(\"taints\", []) or []\nnewlist = [t for t in taints if t.get(\"key\") != key]\nstep(\"untaint %s\" % node)\nk8s.patch(\"-\", \"Node\", node, {\"spec\": {\"taints\": newlist}})\nreport(\"removed taint %s from %s\" % (key, node))\n"
+    "source": "#\n# The node is the target (args[\"name\"]). Read its taints and drop every entry with\n# the given key. Node is cluster-scoped (namespace \"-\").\nnode = args[\"name\"]; key = args[\"key\"]\nn = k8s.raw_get(\"v1\", \"Node\", \"-\", node)\nif not n:\n    fail(\"node %s not found\" % node)\ntaints = n.get(\"spec\", {}).get(\"taints\", []) or []\nnewlist = [t for t in taints if t.get(\"key\") != key]\nstep(\"snapshot\")\nsnapshot(\"-\", \"Node\", node)\nstep(\"untaint %s\" % node)\nk8s.patch(\"-\", \"Node\", node, {\"spec\": {\"taints\": newlist}})\nreport(\"removed taint %s from %s\" % (key, node))\n"
   },
   "patch_configmap": {
     "kind": "patch_configmap",
@@ -325,7 +325,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
       "NetworkPolicy",
       "PodDisruptionBudget"
     ],
-    "source": "#\n# The `patch` param is a JSON object merged onto the target. A malformed patch makes\n# json.decode error out and aborts before any write — that is the intended guard.\nns = args[\"namespace\"]; name = args[\"name\"]; kind = args[\"kind\"]\np = json.decode(args[\"patch\"])\nstep(\"patch %s/%s\" % (kind, name))\nk8s.patch(ns, kind, name, p)\nreport(\"patched %s/%s\" % (kind, name))\n"
+    "source": "#\n# The `patch` param is a JSON object merged onto the target. A malformed patch makes\n# json.decode error out and aborts before any write — that is the intended guard.\nns = args[\"namespace\"]; name = args[\"name\"]; kind = args[\"kind\"]\np = json.decode(args[\"patch\"])\nstep(\"snapshot\")\nsnapshot(ns, kind, name)\nstep(\"patch %s/%s\" % (kind, name))\nk8s.patch(ns, kind, name, p)\nreport(\"patched %s/%s\" % (kind, name))\n"
   },
   "patch_secret": {
     "kind": "patch_secret",
@@ -393,7 +393,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "Deployment"
     ],
-    "source": "#\n# Snapshot the Deployment and set spec.paused=true so no new rollout proceeds.\n# The snapshot restores the prior paused state.\nstep(\"pause\")\nk8s.patch(args[\"namespace\"], \"Deployment\", args[\"name\"], {\"spec\": {\"paused\": True}})\nreport(\"rollout frozen\")\n"
+    "source": "#\n# Snapshot the Deployment and set spec.paused=true so no new rollout proceeds.\n# The snapshot restores the prior paused state.\nstep(\"snapshot\")\nsnapshot(args[\"namespace\"], \"Deployment\", args[\"name\"])\nstep(\"pause\")\nk8s.patch(args[\"namespace\"], \"Deployment\", args[\"name\"], {\"spec\": {\"paused\": True}})\nreport(\"rollout frozen\")\n"
   },
   "rollout_restart": {
     "kind": "rollout_restart",
@@ -417,7 +417,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "Deployment"
     ],
-    "source": "#\n# Snapshot the Deployment and set spec.paused=false, then wait for the resumed\n# rollout to settle. The snapshot restores the prior paused state.\nns = args[\"namespace\"]; name = args[\"name\"]\nstep(\"resume\")\nk8s.patch(ns, \"Deployment\", name, {\"spec\": {\"paused\": False}})\nstep(\"verify\")\nif not wait_rollout(ns, \"Deployment\", name, timeout=300):\n    fail(\"resumed rollout did not settle\")\nreport(\"rollout resumed\")\n"
+    "source": "#\n# Snapshot the Deployment and set spec.paused=false, then wait for the resumed\n# rollout to settle. The snapshot restores the prior paused state.\nns = args[\"namespace\"]; name = args[\"name\"]\nstep(\"snapshot\")\nsnapshot(ns, \"Deployment\", name)\nstep(\"resume\")\nk8s.patch(ns, \"Deployment\", name, {\"spec\": {\"paused\": False}})\nstep(\"verify\")\nif not wait_rollout(ns, \"Deployment\", name, timeout=300):\n    fail(\"resumed rollout did not settle\")\nreport(\"rollout resumed\")\n"
   },
   "rollout_to_revision": {
     "kind": "rollout_to_revision",
@@ -428,7 +428,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "Deployment"
     ],
-    "source": "#\n# Find the ReplicaSet carrying the requested revision and patch its template onto\n# the Deployment. The snapshot restores the current template if it does not settle.\nns = args[\"namespace\"]; name = args[\"name\"]\ntarget = int(args[\"revision\"])\nstep(\"find revision %d\" % target)\nrevs = {}\nfor rs in k8s.raw_list(\"apps/v1\", \"ReplicaSet\", ns):\n    md = rs.get(\"metadata\", {})\n    owned = False\n    for o in md.get(\"ownerReferences\", []):\n        if o.get(\"name\") == name:\n            owned = True\n    if not owned:\n        continue\n    rev = int(md.get(\"annotations\", {}).get(\"deployment.kubernetes.io/revision\", \"0\"))\n    revs[rev] = rs[\"spec\"][\"template\"]\nif target not in revs:\n    fail(\"revision %d not found in ReplicaSet history\" % target)\nstep(\"roll to revision %d\" % target)\nk8s.patch(ns, \"Deployment\", name, {\"spec\": {\"template\": revs[target]}})\nstep(\"verify\")\nif not wait_rollout(ns, \"Deployment\", name, timeout=300):\n    fail(\"rollout to revision %d did not settle\" % target)\nreport(\"rolled to revision %d\" % target)\n"
+    "source": "#\n# Find the ReplicaSet carrying the requested revision and patch its template onto\n# the Deployment. The snapshot restores the current template if it does not settle.\nns = args[\"namespace\"]; name = args[\"name\"]\ntarget = int(args[\"revision\"])\nstep(\"find revision %d\" % target)\nrevs = {}\nfor rs in k8s.raw_list(\"apps/v1\", \"ReplicaSet\", ns):\n    md = rs.get(\"metadata\", {})\n    owned = False\n    for o in md.get(\"ownerReferences\", []):\n        if o.get(\"name\") == name:\n            owned = True\n    if not owned:\n        continue\n    rev = int(md.get(\"annotations\", {}).get(\"deployment.kubernetes.io/revision\", \"0\"))\n    revs[rev] = rs[\"spec\"][\"template\"]\nif target not in revs:\n    fail(\"revision %d not found in ReplicaSet history\" % target)\nstep(\"snapshot\")\nsnapshot(ns, \"Deployment\", name)\nstep(\"roll to revision %d\" % target)\nk8s.patch(ns, \"Deployment\", name, {\"spec\": {\"template\": revs[target]}})\nstep(\"verify\")\nif not wait_rollout(ns, \"Deployment\", name, timeout=300):\n    fail(\"rollout to revision %d did not settle\" % target)\nreport(\"rolled to revision %d\" % target)\n"
   },
   "rollout_undo": {
     "kind": "rollout_undo",
@@ -439,7 +439,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "Deployment"
     ],
-    "source": "#\n# Find the ReplicaSet one revision behind the current one and patch its template\n# back onto the Deployment. The snapshot of the Deployment restores the current\n# template if the rollout does not settle.\nns = args[\"namespace\"]; name = args[\"name\"]\nstep(\"find previous revision\")\ncur = -1\nrevs = {}\nfor rs in k8s.raw_list(\"apps/v1\", \"ReplicaSet\", ns):\n    md = rs.get(\"metadata\", {})\n    owned = False\n    for o in md.get(\"ownerReferences\", []):\n        if o.get(\"name\") == name:\n            owned = True\n    if not owned:\n        continue\n    rev = int(md.get(\"annotations\", {}).get(\"deployment.kubernetes.io/revision\", \"0\"))\n    revs[rev] = rs[\"spec\"][\"template\"]\n    if rev \u003e cur:\n        cur = rev\n# the highest revision strictly below the current one — revision numbers are not\n# contiguous after prior rollbacks, so cur-1 may not exist.\nprev = -1\nfor rev in revs:\n    if rev \u003c cur and rev \u003e prev:\n        prev = rev\nif prev \u003c 0:\n    fail(\"no previous revision to roll back to\")\nstep(\"roll back to revision %d\" % prev)\nk8s.patch(ns, \"Deployment\", name, {\"spec\": {\"template\": revs[prev]}})\nstep(\"verify\")\nif not wait_rollout(ns, \"Deployment\", name, timeout=300):\n    fail(\"rollback rollout did not settle\")\nreport(\"rolled back to revision %d\" % prev)\n"
+    "source": "#\n# Find the ReplicaSet one revision behind the current one and patch its template\n# back onto the Deployment. The snapshot of the Deployment restores the current\n# template if the rollout does not settle.\nns = args[\"namespace\"]; name = args[\"name\"]\nstep(\"find previous revision\")\ncur = -1\nrevs = {}\nfor rs in k8s.raw_list(\"apps/v1\", \"ReplicaSet\", ns):\n    md = rs.get(\"metadata\", {})\n    owned = False\n    for o in md.get(\"ownerReferences\", []):\n        if o.get(\"name\") == name:\n            owned = True\n    if not owned:\n        continue\n    rev = int(md.get(\"annotations\", {}).get(\"deployment.kubernetes.io/revision\", \"0\"))\n    revs[rev] = rs[\"spec\"][\"template\"]\n    if rev \u003e cur:\n        cur = rev\n# the highest revision strictly below the current one — revision numbers are not\n# contiguous after prior rollbacks, so cur-1 may not exist.\nprev = -1\nfor rev in revs:\n    if rev \u003c cur and rev \u003e prev:\n        prev = rev\nif prev \u003c 0:\n    fail(\"no previous revision to roll back to\")\nstep(\"snapshot\")\nsnapshot(ns, \"Deployment\", name)\nstep(\"roll back to revision %d\" % prev)\nk8s.patch(ns, \"Deployment\", name, {\"spec\": {\"template\": revs[prev]}})\nstep(\"verify\")\nif not wait_rollout(ns, \"Deployment\", name, timeout=300):\n    fail(\"rollback rollout did not settle\")\nreport(\"rolled back to revision %d\" % prev)\n"
   },
   "scale": {
     "kind": "scale",
@@ -451,7 +451,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
       "Deployment",
       "StatefulSet"
     ],
-    "source": "#\n# Snapshot + patch spec.replicas; on failure the generic snapshot-rollback\n# restores the prior count. Shown == executed; a fork is a byte-copy of this.\nns = args[\"namespace\"]; kind = args[\"kind\"]; name = args[\"name\"]\ntarget = int(args[\"replicas\"])\nstep(\"scale to %d\" % target)\nk8s.patch(ns, kind, name, {\"spec\": {\"replicas\": target}})\nstep(\"verify\")\nif not wait_ready(ns, kind, name, timeout=300):\n    fail(\"workload did not become ready — rolling back to the prior count\")\nreport(\"settled at %d replicas\" % target)\n"
+    "source": "#\n# Snapshot + patch spec.replicas; on failure the generic snapshot-rollback\n# restores the prior count. Shown == executed; a fork is a byte-copy of this.\nns = args[\"namespace\"]; kind = args[\"kind\"]; name = args[\"name\"]\ntarget = int(args[\"replicas\"])\nstep(\"snapshot\")\nsnapshot(ns, kind, name)\nstep(\"scale to %d\" % target)\nk8s.patch(ns, kind, name, {\"spec\": {\"replicas\": target}})\nstep(\"verify\")\nif not wait_ready(ns, kind, name, timeout=300):\n    fail(\"workload did not become ready — rolling back to the prior count\")\nreport(\"settled at %d replicas\" % target)\n"
   },
   "set_env": {
     "kind": "set_env",
@@ -464,7 +464,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
       "StatefulSet",
       "DaemonSet"
     ],
-    "source": "#\n# Strategic-merge just the target container's env entry so sibling containers and\n# other env vars survive. The whole-object snapshot restores the prior env array.\nns = args[\"namespace\"]; kind = args[\"kind\"]; name = args[\"name\"]\nc = args.get(\"container\", \"\")\nif c == \"\":\n    fail(\"set_env needs a container name\")\nE = args[\"envName\"]\nstep(\"set env\")\nif args.get(\"remove\", \"\") == \"true\":\n    k8s.patch(ns, kind, name,\n        {\"spec\": {\"template\": {\"spec\": {\"containers\": [{\"name\": c, \"env\": [{\"name\": E, \"$patch\": \"delete\"}]}]}}}},\n        strategic=True)\n    report(\"removed env %s from %s\" % (E, c))\nelse:\n    k8s.patch(ns, kind, name,\n        {\"spec\": {\"template\": {\"spec\": {\"containers\": [{\"name\": c, \"env\": [{\"name\": E, \"value\": args.get(\"value\", \"\")}]}]}}}},\n        strategic=True)\n    report(\"%s=%s on %s\" % (E, args.get(\"value\", \"\"), c))\nstep(\"verify\")\nif not wait_rollout(ns, kind, name, timeout=300):\n    fail(\"rollout did not settle\")\n"
+    "source": "#\n# Strategic-merge just the target container's env entry so sibling containers and\n# other env vars survive. The whole-object snapshot restores the prior env array.\nns = args[\"namespace\"]; kind = args[\"kind\"]; name = args[\"name\"]\nc = args.get(\"container\", \"\")\nif c == \"\":\n    fail(\"set_env needs a container name\")\nE = args[\"envName\"]\nstep(\"snapshot\")\nsnapshot(ns, kind, name)\nstep(\"set env\")\nif args.get(\"remove\", \"\") == \"true\":\n    k8s.patch(ns, kind, name,\n        {\"spec\": {\"template\": {\"spec\": {\"containers\": [{\"name\": c, \"env\": [{\"name\": E, \"$patch\": \"delete\"}]}]}}}},\n        strategic=True)\n    report(\"removed env %s from %s\" % (E, c))\nelse:\n    k8s.patch(ns, kind, name,\n        {\"spec\": {\"template\": {\"spec\": {\"containers\": [{\"name\": c, \"env\": [{\"name\": E, \"value\": args.get(\"value\", \"\")}]}]}}}},\n        strategic=True)\n    report(\"%s=%s on %s\" % (E, args.get(\"value\", \"\"), c))\nstep(\"verify\")\nif not wait_rollout(ns, kind, name, timeout=300):\n    fail(\"rollout did not settle\")\n"
   },
   "set_image": {
     "kind": "set_image",
@@ -477,7 +477,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
       "StatefulSet",
       "DaemonSet"
     ],
-    "source": "#\n# Snapshot the whole workload, then strategic-merge just the target container's\n# image (preserves other containers/fields). Rollback restores the captured\n# containers array (a whole-object JSON-merge restore replaces it back).\nns = args[\"namespace\"]; kind = args[\"kind\"]; name = args[\"name\"]\ncontainer = args.get(\"container\", \"\")\nif container == \"\":\n    fail(\"set_image needs a container name\")\nstep(\"set image\")\nk8s.patch(ns, kind, name,\n    {\"spec\": {\"template\": {\"spec\": {\"containers\": [{\"name\": container, \"image\": args[\"image\"]}]}}}},\n    strategic=True)\nstep(\"verify\")\nif not wait_rollout(ns, kind, name, timeout=300):\n    fail(\"rollout did not complete\")\n"
+    "source": "#\n# Snapshot the whole workload, then strategic-merge just the target container's\n# image (preserves other containers/fields). Rollback restores the captured\n# containers array (a whole-object JSON-merge restore replaces it back).\nns = args[\"namespace\"]; kind = args[\"kind\"]; name = args[\"name\"]\ncontainer = args.get(\"container\", \"\")\nif container == \"\":\n    fail(\"set_image needs a container name\")\nstep(\"snapshot\")\nsnapshot(ns, kind, name)\nstep(\"set image\")\nk8s.patch(ns, kind, name,\n    {\"spec\": {\"template\": {\"spec\": {\"containers\": [{\"name\": container, \"image\": args[\"image\"]}]}}}},\n    strategic=True)\nstep(\"verify\")\nif not wait_rollout(ns, kind, name, timeout=300):\n    fail(\"rollout did not complete\")\n"
   },
   "set_label": {
     "kind": "set_label",
@@ -502,7 +502,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
       "StatefulSet",
       "DaemonSet"
     ],
-    "source": "#\n# Strategic-merge just the target container's resources so sibling containers\n# survive. The whole-object snapshot restores the prior requests/limits.\nns = args[\"namespace\"]; kind = args[\"kind\"]; name = args[\"name\"]\nc = args.get(\"container\", \"\")\nif c == \"\":\n    fail(\"set_resources needs a container name\")\nrequests = {}\nlimits = {}\nif args.get(\"requestsCpu\", \"\") != \"\":\n    requests[\"cpu\"] = args[\"requestsCpu\"]\nif args.get(\"requestsMemory\", \"\") != \"\":\n    requests[\"memory\"] = args[\"requestsMemory\"]\nif args.get(\"limitsCpu\", \"\") != \"\":\n    limits[\"cpu\"] = args[\"limitsCpu\"]\nif args.get(\"limitsMemory\", \"\") != \"\":\n    limits[\"memory\"] = args[\"limitsMemory\"]\nresources = {}\nif requests:\n    resources[\"requests\"] = requests\nif limits:\n    resources[\"limits\"] = limits\nif not resources:\n    fail(\"no resources given\")\nstep(\"set resources\")\nk8s.patch(ns, kind, name,\n    {\"spec\": {\"template\": {\"spec\": {\"containers\": [{\"name\": c, \"resources\": resources}]}}}},\n    strategic=True)\nstep(\"verify\")\nif not wait_rollout(ns, kind, name, timeout=300):\n    fail(\"rollout did not settle\")\nreport(\"resources set on %s\" % c)\n"
+    "source": "#\n# Strategic-merge just the target container's resources so sibling containers\n# survive. The whole-object snapshot restores the prior requests/limits.\nns = args[\"namespace\"]; kind = args[\"kind\"]; name = args[\"name\"]\nc = args.get(\"container\", \"\")\nif c == \"\":\n    fail(\"set_resources needs a container name\")\nrequests = {}\nlimits = {}\nif args.get(\"requestsCpu\", \"\") != \"\":\n    requests[\"cpu\"] = args[\"requestsCpu\"]\nif args.get(\"requestsMemory\", \"\") != \"\":\n    requests[\"memory\"] = args[\"requestsMemory\"]\nif args.get(\"limitsCpu\", \"\") != \"\":\n    limits[\"cpu\"] = args[\"limitsCpu\"]\nif args.get(\"limitsMemory\", \"\") != \"\":\n    limits[\"memory\"] = args[\"limitsMemory\"]\nresources = {}\nif requests:\n    resources[\"requests\"] = requests\nif limits:\n    resources[\"limits\"] = limits\nif not resources:\n    fail(\"no resources given\")\nstep(\"snapshot\")\nsnapshot(ns, kind, name)\nstep(\"set resources\")\nk8s.patch(ns, kind, name,\n    {\"spec\": {\"template\": {\"spec\": {\"containers\": [{\"name\": c, \"resources\": resources}]}}}},\n    strategic=True)\nstep(\"verify\")\nif not wait_rollout(ns, kind, name, timeout=300):\n    fail(\"rollout did not settle\")\nreport(\"resources set on %s\" % c)\n"
   },
   "statefulset_partition": {
     "kind": "statefulset_partition",
@@ -513,7 +513,7 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "StatefulSet"
     ],
-    "source": "#\n# Snapshot the StatefulSet, patch the rolling-update partition; rollback restores\n# the prior partition.\nstep(\"partition\")\nk8s.patch(args[\"namespace\"], \"StatefulSet\", args[\"name\"],\n    {\"spec\": {\"updateStrategy\": {\"rollingUpdate\": {\"partition\": int(args[\"partition\"])}}}})\n"
+    "source": "#\n# Snapshot the StatefulSet, patch the rolling-update partition; rollback restores\n# the prior partition.\nstep(\"snapshot\")\nsnapshot(args[\"namespace\"], \"StatefulSet\", args[\"name\"])\nstep(\"partition\")\nk8s.patch(args[\"namespace\"], \"StatefulSet\", args[\"name\"],\n    {\"spec\": {\"updateStrategy\": {\"rollingUpdate\": {\"partition\": int(args[\"partition\"])}}}})\n"
   },
   "uncordon": {
     "kind": "uncordon",
@@ -524,6 +524,6 @@ export const BUILTIN_ACTIONS: Record<string, BuiltinMeta> = {
     "targets": [
       "Node"
     ],
-    "source": "#\n# Patch spec.unschedulable=false. Node is cluster-scoped, so the namespace is \"-\".\nstep(\"uncordon\")\nk8s.patch(\"-\", \"Node\", args[\"name\"], {\"spec\": {\"unschedulable\": False}})\nreport(\"uncordoned %s\" % args[\"name\"])\n"
+    "source": "#\n# Patch spec.unschedulable=false. Node is cluster-scoped, so the namespace is \"-\".\nstep(\"snapshot\")\nsnapshot(\"-\", \"Node\", args[\"name\"])\nstep(\"uncordon\")\nk8s.patch(\"-\", \"Node\", args[\"name\"], {\"spec\": {\"unschedulable\": False}})\nreport(\"uncordoned %s\" % args[\"name\"])\n"
   }
 };

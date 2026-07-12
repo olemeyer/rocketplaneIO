@@ -11,6 +11,8 @@ c = args.get("container", "")
 if c == "":
     fail("set_env needs a container name")
 E = args["envName"]
+step("snapshot")
+snapshot(ns, kind, name)
 step("set env")
 if args.get("remove", "") == "true":
     k8s.patch(ns, kind, name,

@@ -5,6 +5,8 @@
 # @targets Node
 #
 # Patch spec.unschedulable=false. Node is cluster-scoped, so the namespace is "-".
+step("snapshot")
+snapshot("-", "Node", args["name"])
 step("uncordon")
 k8s.patch("-", "Node", args["name"], {"spec": {"unschedulable": False}})
 report("uncordoned %s" % args["name"])

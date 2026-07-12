@@ -9,5 +9,7 @@ ns = args["namespace"]; name = args["name"]
 spec = {}
 if args.get("minReplicas", "") != "": spec["minReplicas"] = int(args["minReplicas"])
 if args.get("maxReplicas", "") != "": spec["maxReplicas"] = int(args["maxReplicas"])
+step("snapshot")
+snapshot(ns, "HorizontalPodAutoscaler", name)
 step("hpa bounds")
 k8s.patch(ns, "HorizontalPodAutoscaler", name, {"spec": spec})

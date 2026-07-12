@@ -22,6 +22,8 @@ for rs in k8s.raw_list("apps/v1", "ReplicaSet", ns):
     revs[rev] = rs["spec"]["template"]
 if target not in revs:
     fail("revision %d not found in ReplicaSet history" % target)
+step("snapshot")
+snapshot(ns, "Deployment", name)
 step("roll to revision %d" % target)
 k8s.patch(ns, "Deployment", name, {"spec": {"template": revs[target]}})
 step("verify")

@@ -8,6 +8,8 @@
 # restores the prior count. Shown == executed; a fork is a byte-copy of this.
 ns = args["namespace"]; kind = args["kind"]; name = args["name"]
 target = int(args["replicas"])
+step("snapshot")
+snapshot(ns, kind, name)
 step("scale to %d" % target)
 k8s.patch(ns, kind, name, {"spec": {"replicas": target}})
 step("verify")

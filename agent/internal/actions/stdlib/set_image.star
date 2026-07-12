@@ -11,6 +11,8 @@ ns = args["namespace"]; kind = args["kind"]; name = args["name"]
 container = args.get("container", "")
 if container == "":
     fail("set_image needs a container name")
+step("snapshot")
+snapshot(ns, kind, name)
 step("set image")
 k8s.patch(ns, kind, name,
     {"spec": {"template": {"spec": {"containers": [{"name": container, "image": args["image"]}]}}}},

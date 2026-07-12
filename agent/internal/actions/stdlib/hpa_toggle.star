@@ -13,6 +13,8 @@ ann = "rocketplane.io/hpa-frozen-bounds"
 hpa = k8s.raw_get("autoscaling/v2", "HorizontalPodAutoscaler", ns, name)
 if hpa == None:
     fail("HPA %s/%s not found" % (ns, name))
+step("snapshot")
+snapshot(ns, "HorizontalPodAutoscaler", name)
 if args.get("enabled", "") != "true":
     spec = hpa.get("spec", {})
     lo = spec.get("minReplicas", 1)

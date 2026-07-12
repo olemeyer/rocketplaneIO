@@ -31,6 +31,8 @@ for rev in revs:
         prev = rev
 if prev < 0:
     fail("no previous revision to roll back to")
+step("snapshot")
+snapshot(ns, "Deployment", name)
 step("roll back to revision %d" % prev)
 k8s.patch(ns, "Deployment", name, {"spec": {"template": revs[prev]}})
 step("verify")

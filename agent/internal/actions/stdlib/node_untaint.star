@@ -12,6 +12,8 @@ if not n:
     fail("node %s not found" % node)
 taints = n.get("spec", {}).get("taints", []) or []
 newlist = [t for t in taints if t.get("key") != key]
+step("snapshot")
+snapshot("-", "Node", node)
 step("untaint %s" % node)
 k8s.patch("-", "Node", node, {"spec": {"taints": newlist}})
 report("removed taint %s from %s" % (key, node))

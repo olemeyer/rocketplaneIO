@@ -5,6 +5,8 @@
 # @targets CronJob
 #
 # Patch spec.suspend=true. Running jobs are unaffected; only future runs are paused.
+step("snapshot")
+snapshot(args["namespace"], "CronJob", args["name"])
 step("suspend")
 k8s.patch(args["namespace"], "CronJob", args["name"], {"spec": {"suspend": True}})
 report("suspended cronjob %s/%s" % (args["namespace"], args["name"]))

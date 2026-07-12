@@ -27,6 +27,8 @@ if limits:
     resources["limits"] = limits
 if not resources:
     fail("no resources given")
+step("snapshot")
+snapshot(ns, kind, name)
 step("set resources")
 k8s.patch(ns, kind, name,
     {"spec": {"template": {"spec": {"containers": [{"name": c, "resources": resources}]}}}},

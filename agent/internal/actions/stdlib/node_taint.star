@@ -18,6 +18,8 @@ newlist.append({
     "value": args.get("value", ""),
     "effect": args.get("effect", "NoSchedule"),
 })
+step("snapshot")
+snapshot("-", "Node", node)
 step("taint %s" % node)
 k8s.patch("-", "Node", node, {"spec": {"taints": newlist}})
 report("tainted %s with %s=%s:%s" % (node, key, args.get("value", ""), args.get("effect", "NoSchedule")))
