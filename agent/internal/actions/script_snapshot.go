@@ -231,6 +231,40 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		return starlark.None, nil
 	})
 
+	// k8s.apply — snapshot the whole object, then server-side-apply the given
+	// manifest as the desired truth (force). Used by restore_resource to re-apply a
+	// prior before-snapshot; the whole-object capture makes even a re-apply revertible.
+	k8sApply := starlark.NewBuiltin("apply", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
+		var manifest *starlark.Dict
+		if err := starlark.UnpackArgs("apply", a, kw, "manifest", &manifest); err != nil {
+			return nil, err
+		}
+		obj, err := starToGo(manifest)
+		if err != nil {
+			return nil, err
+		}
+		m, _ := obj.(map[string]any)
+		u := &unstructured.Unstructured{Object: m}
+		kind, name, ns := u.GetKind(), u.GetName(), u.GetNamespace()
+		if kind == "" || name == "" {
+			return nil, fmt.Errorf("apply: manifest needs kind + metadata.name")
+		}
+		if _, err := r.captureObject(ctx, log, kind, ns, name); err != nil {
+			return nil, fmt.Errorf("apply: cannot snapshot %s/%s (strict mode): %w", kind, name, err)
+		}
+		iface, err := r.dynIface(kind, ns)
+		if err != nil {
+			return nil, err
+		}
+		data, _ := json.Marshal(m)
+		force := true
+		if _, err := iface.Patch(ctx, name, types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: "rocketplane-agent", Force: &force}); err != nil {
+			return nil, err
+		}
+		rep(fmt.Sprintf("applied %s/%s (server-side apply)", kind, name))
+		return starlark.None, nil
+	})
+
 	// k8s.create — snapshot the (absent) target, then create it. The generic
 	// Restore deletes what this run created. Used by create_configmap/run_debug_pod.
 	k8sCreate := starlark.NewBuiltin("create", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
@@ -448,10 +482,19 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		"patch_configmap": k8sPatchCM,
 		"delete":          k8sDelete,
 		"create":          k8sCreate,
+		"apply":           k8sApply,
 		"raw_get":         k8sRawGet,
 		"raw_list":        k8sRawList,
 		"pods":            k8sPods,
 		"events":          k8sEvents,
+		// host-capability primitives (script_host.go): exec/logs/evict/node_pods/
+		// pod_status. Generic + reusable like patch/scale — the per-kind logic stays
+		// in the .star, so shown == executed with no native plan() behind it.
+		"exec":       r.hostExec(ctx, rep),
+		"logs":       r.hostLogs(ctx),
+		"evict":      r.hostEvict(ctx, rep),
+		"node_pods":  r.hostNodePods(ctx),
+		"pod_status": r.hostPodStatus(ctx),
 		// k8s.get — workload status summary {desired, ready, updated, available}
 		// (matches the custom-script surface). For the full object use raw_get.
 		"get": starlark.NewBuiltin("get", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
@@ -544,6 +587,7 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 	return starlark.StringDict{
 		"snapshot":     snapshot,
 		"k8s":          k8s,
+		"net_probe":    r.hostNetProbe(ctx), // network diagnostics from the agent's vantage
 		"json":         starlarkjson.Module, // json.decode/encode for generic patches
 		"fail":         failFn,
 		"step":         stepFn,
@@ -605,12 +649,21 @@ func (r *Runner) runSnapshotAction(ctx context.Context, a Action, source string,
 	ctx, cancel := context.WithTimeout(ctx, monitorTimeout)
 	defer cancel()
 
+	// Register the run so an SSE cancel signal aborts it: cancelling the context
+	// makes the next k8s call / sleep / wait in the script error, which fails the
+	// run and (for a reversible action) triggers the generic auto-rollback.
+	r.registerCancel(a.ID, cancel)
+	defer r.unregisterCancel(a.ID)
+
 	// A structured step pipeline built from the script's step() calls, so the run
 	// emits the SAME timeline the script (and the UI detail view) declares.
 	t := &stepTracker{cur: -1}
 	emit := func(status string) { r.report(ctx, a.ID, status, "", "", append([]stepState(nil), t.states...)) }
 	onStep := func(name string) { t.step(name); emit("running") }
-	report := func(msg string) { t.report(msg); r.report(ctx, a.ID, "running", "", msg, append([]stepState(nil), t.states...)) }
+	report := func(msg string) {
+		t.report(msg)
+		r.report(ctx, a.ID, "running", "", msg, append([]stepState(nil), t.states...))
+	}
 
 	log := newCaptureLog()
 	if reversible {

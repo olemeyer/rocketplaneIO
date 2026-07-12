@@ -2,12 +2,10 @@ package actions
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -24,48 +22,53 @@ func testRunner(t *testing.T, objs ...runtime.Object) *Runner {
 	return r
 }
 
-func runSteps(t *testing.T, steps []step) (string, error) {
+// runStdlib runs an embedded built-in .star against the fake clients and returns
+// the concatenated report/step output — the real snapshot-surface execution path.
+func runStdlib(t *testing.T, r *Runner, kind string, args map[string]string) (string, error) {
 	t.Helper()
-	var last string
-	for _, s := range steps {
-		out, err := s.run(context.Background(), func(string) {})
-		if err != nil {
-			return last, err
-		}
-		last = out
+	src, ok := stdlibScripts[kind]
+	if !ok {
+		t.Fatalf("no embedded script for %q", kind)
 	}
-	return last, nil
+	var out strings.Builder
+	_, err := r.runCapturedScript(context.Background(), src, args, func(s string) {
+		out.WriteString(s)
+		out.WriteByte('\n')
+	})
+	return out.String(), err
 }
 
+// get_secret surfaces only key names — values are redacted by the runtime before
+// they ever cross into script logic.
 func TestGetSecretNeverRevealsValues(t *testing.T) {
 	sec := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "db-cred", Namespace: "prod"},
 		Data:       map[string][]byte{"password": []byte("super-geheim"), "user": []byte("admin")},
 	}
 	r := testRunner(t, sec)
-	out, err := runSteps(t, r.planGetSecret(Action{TargetNamespace: "prod", TargetKind: "Secret", TargetName: "db-cred"}))
+	out, err := runStdlib(t, r, "get_secret", map[string]string{"namespace": "prod", "kind": "Secret", "name": "db-cred"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out, "super-geheim") || strings.Contains(out, "admin") {
+	if strings.Contains(out, "super-geheim") || strings.Contains(out, "c3VwZXItZ2VoZWlt") {
 		t.Fatalf("secret values leaked: %q", out)
 	}
-	if !strings.Contains(out, "password: len=12 sha256=") {
-		t.Fatalf("expected redacted metadata, got %q", out)
+	if !strings.Contains(out, "password") || !strings.Contains(out, "user") {
+		t.Fatalf("expected key names, got %q", out)
 	}
 }
 
+// get_resource on a Secret shows the redaction marker, never the value (or its base64).
 func TestGetResourceRedactsSecrets(t *testing.T) {
 	sec := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "db-cred", Namespace: "prod"},
 		Data:       map[string][]byte{"password": []byte("super-geheim")},
 	}
 	r := testRunner(t, sec)
-	out, err := runSteps(t, r.planGetResource(Action{TargetNamespace: "prod", TargetKind: "Secret", TargetName: "db-cred"}))
+	out, err := runStdlib(t, r, "get_resource", map[string]string{"namespace": "prod", "kind": "Secret", "name": "db-cred", "apiVersion": "v1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// base64 vom Klartext darf ebenfalls nicht auftauchen.
 	if strings.Contains(out, "super-geheim") || strings.Contains(out, "c3VwZXItZ2VoZWlt") {
 		t.Fatalf("secret leaked through get_resource: %q", out)
 	}
@@ -74,18 +77,26 @@ func TestGetResourceRedactsSecrets(t *testing.T) {
 	}
 }
 
-func TestGetResourceConfigMapFullData(t *testing.T) {
-	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: "app-config", Namespace: "prod"},
-		Data:       map[string]string{"cluster.xml": "<yandex><remote_servers/></yandex>"},
+// restore_resource refuses a snapshot whose identity does not match the target —
+// no object smuggling. The guard fails before any apply, so no cluster is needed.
+func TestRestoreResourceIdentityGuard(t *testing.T) {
+	r := testRunner(t)
+	_, err := runStdlib(t, r, "restore_resource", map[string]string{
+		"namespace": "ns", "kind": "ConfigMap", "name": "app-config",
+		"snapshot": `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"other","namespace":"ns"}}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "match") {
+		t.Fatalf("mismatched snapshot identity must be rejected, got %v", err)
 	}
-	r := testRunner(t, cm)
-	out, err := runSteps(t, r.planGetResource(Action{TargetNamespace: "prod", TargetKind: "ConfigMap", TargetName: "app-config"}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out, "remote_servers") {
-		t.Fatalf("configmap data must be fully readable, got %q", out)
+}
+
+// redactSecretData replaces every value with a {len, sha256} marker in place.
+func TestRedactSecretData(t *testing.T) {
+	obj := map[string]any{"data": map[string]any{"token": "secret-value"}}
+	redactSecretData(obj)
+	got := obj["data"].(map[string]any)["token"].(string)
+	if strings.Contains(got, "secret-value") || !strings.HasPrefix(got, "REDACTED len=12 sha256=") {
+		t.Fatalf("value not redacted: %q", got)
 	}
 }
 
@@ -114,68 +125,6 @@ func TestExecArgvValidation(t *testing.T) {
 		if err := validExecArgv(argv); err != nil {
 			t.Errorf("argv %v must be allowed, got %v", argv, err)
 		}
-	}
-}
-
-func TestPatchSecretUndoRestoresValue(t *testing.T) {
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "cred", Namespace: "ns"},
-		Data:       map[string][]byte{"token": []byte("old-value")},
-	}
-	r := testRunner(t, sec)
-	params, _ := json.Marshal(map[string]any{"key": "token", "value": "new-value"})
-	a := Action{Kind: "patch_secret", TargetNamespace: "ns", TargetKind: "Secret", TargetName: "cred", Params: params}
-
-	desc, undo := r.prepareUndo(context.Background(), a)
-	if undo == nil || desc == "" {
-		t.Fatal("patch_secret must be undoable")
-	}
-	if _, err := runSteps(t, r.planPatchSecret(a)); err != nil {
-		t.Fatal(err)
-	}
-	got, _ := r.clientset.CoreV1().Secrets("ns").Get(context.Background(), "cred", metav1.GetOptions{})
-	if string(got.Data["token"]) != "new-value" {
-		t.Fatalf("patch did not apply: %q", got.Data["token"])
-	}
-	if err := undo(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	got, _ = r.clientset.CoreV1().Secrets("ns").Get(context.Background(), "cred", metav1.GetOptions{})
-	if string(got.Data["token"]) != "old-value" {
-		t.Fatalf("undo did not restore: %q", got.Data["token"])
-	}
-}
-
-func TestPVCExpandOnlyGrows(t *testing.T) {
-	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "ns"},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("10Gi")},
-			},
-		},
-	}
-	r := testRunner(t, pvc)
-	shrink, _ := json.Marshal(map[string]any{"size": "5Gi"})
-	if _, err := runSteps(t, r.planPVCExpand(Action{TargetNamespace: "ns", TargetKind: "PersistentVolumeClaim", TargetName: "data", Params: shrink})); err == nil {
-		t.Fatal("shrink must be rejected")
-	}
-	grow, _ := json.Marshal(map[string]any{"size": "20Gi"})
-	if _, err := runSteps(t, r.planPVCExpand(Action{TargetNamespace: "ns", TargetKind: "PersistentVolumeClaim", TargetName: "data", Params: grow})); err != nil {
-		t.Fatalf("grow must be allowed: %v", err)
-	}
-}
-
-func TestRestoreResourceIdentityGuard(t *testing.T) {
-	r := testRunner(t)
-	snap := map[string]any{
-		"apiVersion": "v1", "kind": "ConfigMap",
-		"metadata": map[string]any{"name": "other", "namespace": "ns"},
-	}
-	params, _ := json.Marshal(map[string]any{"snapshot": snap})
-	_, err := runSteps(t, r.planRestoreResource(Action{Kind: "restore_resource", TargetNamespace: "ns", TargetKind: "ConfigMap", TargetName: "app-config", Params: params}))
-	if err == nil || !strings.Contains(err.Error(), "identity") {
-		t.Fatalf("mismatched snapshot identity must be rejected, got %v", err)
 	}
 }
 

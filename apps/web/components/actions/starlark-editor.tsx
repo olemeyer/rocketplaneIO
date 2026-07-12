@@ -45,6 +45,7 @@ const BUILTIN_COMPLETIONS: Completion[] = [
   { label: 'json', type: 'namespace', detail: 'module', info: 'json.decode(str) / json.encode(value) — parse or build JSON (e.g. a merge patch).' },
   snip('wait_rollout', 'wait_rollout(${ns}, "${Deployment}", ${name}, timeout=${120})', 'wait_rollout(namespace, kind, name, timeout=120) → bool', 'Wait until the new generation is fully rolled out on POD level (old gone, new ready). Returns False on timeout — you decide (fail() → auto-rollback).'),
   snip('wait_ready', 'wait_ready(${ns}, "${Deployment}", ${name}, timeout=${120})', 'wait_ready(namespace, kind, name, timeout=120) → bool', 'Wait until pods == desired and every pod is ready. Returns False on timeout.'),
+  snip('net_probe', 'net_probe("${http}", "${target}")', 'net_probe(mode, target, method="GET") → str', 'Reachability/TLS/DNS diagnostics from the agent (mode: http|tcp|dns|tls). Read-only.'),
 ];
 
 // k8s.<member> — the snapshot surface (script_snapshot.go). Mutators auto-capture
@@ -64,6 +65,13 @@ const K8S_COMPLETIONS: Completion[] = [
   snip('patch_configmap', 'patch_configmap(${ns}, ${name}, "${key}", "${value}")', 'k8s.patch_configmap(namespace, name, key, value)', 'Set one ConfigMap key (field-scoped).', 'method'),
   snip('create', 'create(${manifest})', 'k8s.create(manifest)', 'Create an object (manifest needs apiVersion, kind, metadata.name). Restore deletes it.', 'method'),
   snip('delete', 'delete(${ns}, "${Pod}", ${name})', 'k8s.delete(namespace, kind, name)', 'Snapshot + delete. Restore recreates it from the capture.', 'method'),
+  snip('apply', 'apply(${manifest})', 'k8s.apply(manifest)', 'Server-side apply a whole object as desired truth (snapshots first, so it stays revertible).', 'method'),
+  // host-capability primitives (script_host.go) — generic like patch/scale
+  snip('exec', 'exec(${ns}, ${pod}, [${"cat", "/path"}])', 'k8s.exec(namespace, name, command, container="", retry=False) → str', 'Run ONE read-only whitelisted argv in a container (no shell). retry catches a CrashLooping pod.', 'method'),
+  snip('logs', 'logs(${ns}, ${pod})', 'k8s.logs(namespace, name, container="", previous=False, tail=200) → str', "Read a pod's logs from the kubelet (previous=True for the crashed container).", 'method'),
+  snip('evict', 'evict(${ns}, ${pod})', 'k8s.evict(namespace, name, grace_seconds=None) → str', 'PDB-aware Eviction API for one pod. Returns "evicted"|"notfound"|"blocked". Final (not revertible).', 'method'),
+  snip('node_pods', 'node_pods(${node})', 'k8s.node_pods(node) → list', 'Drainable pods on a node ([{namespace, name}]); DaemonSet/mirror/terminating pods excluded.', 'method'),
+  snip('pod_status', 'pod_status(${ns}, ${pod})', 'k8s.pod_status(namespace, name) → dict|None', 'One pod run status {phase, terminated, exit_code, reason, stuck}.', 'method'),
 ];
 
 // Front-matter completions — the `# @key value` block the editor co-evaluates.

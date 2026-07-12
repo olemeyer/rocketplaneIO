@@ -11,7 +11,6 @@ package actions
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -21,34 +20,12 @@ import (
 	"time"
 )
 
+// netProbeParams carries a probe request; the net_probe primitive (script_host.go)
+// builds it from the .star args and dispatches to the probe* helpers below.
 type netProbeParams struct {
 	Mode   string `json:"mode"`   // http | tcp | dns | tls
 	Target string `json:"target"` // URL (http) bzw. host:port (tcp/tls) bzw. name (dns)
 	Method string `json:"method"` // http: GET (default) | HEAD
-}
-
-func (r *Runner) planNetProbe(a Action) []step {
-	return []step{
-		{name: "probe", run: func(ctx context.Context, report func(string)) (string, error) {
-			var p netProbeParams
-			if err := json.Unmarshal(a.Params, &p); err != nil || p.Target == "" {
-				return "", fmt.Errorf("net_probe requires params.mode and params.target")
-			}
-			pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			defer cancel()
-			switch p.Mode {
-			case "http":
-				return probeHTTP(pctx, p)
-			case "tcp":
-				return probeTCP(p.Target)
-			case "dns":
-				return probeDNS(pctx, p.Target)
-			case "tls":
-				return probeTLS(p.Target)
-			}
-			return "", fmt.Errorf("net_probe mode must be http, tcp, dns or tls")
-		}},
-	}
 }
 
 func probeHTTP(ctx context.Context, p netProbeParams) (string, error) {

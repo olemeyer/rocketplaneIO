@@ -21,6 +21,7 @@ import (
 var scriptEnv = []string{
 	"args", "step", "report", "fail", "sleep",
 	"k8s", "json", "snapshot", "wait_rollout", "wait_ready",
+	"net_probe", // host-capability primitive (script_host.go)
 }
 
 // scriptFileOptions spiegelt die Agent-Engine (While/Recursion aus).

@@ -1,22 +1,18 @@
 package actions
 
-// snapshot.go — generischer Before-Snapshot: VOR jeder Mutation wird das
-// Zielobjekt über den dynamic client geholt, um Rausch-Felder (managedFields,
-// status, resourceVersion …) gestrippt und als JSON an die Control-Plane
-// gemeldet (cluster_actions.snapshot). Er ist die Grundlage für
-// restore_resource-Reverts und den Audit-Trail.
+// snapshot.go — the whitelisted kind→GVR map and the object helpers the snapshot
+// substrate shares: generic get, and the strip that makes a captured object
+// re-appliable (managedFields/status/resourceVersion removed). The before-state
+// itself is captured by the snapshot surface (script_snapshot.go), not here.
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
-
-const maxSnapshotBytes = 256 * 1024
 
 // kindGVR: statische Kind→GroupVersionResource-Karte für alle whitelisted
 // Ziel-Kinds. Statisch statt RESTMapper: kein Discovery-Roundtrip, keine
@@ -83,42 +79,4 @@ func stripForSnapshot(u *unstructured.Unstructured) map[string]any {
 		}
 	}
 	return obj
-}
-
-// mutatingSnapshotKinds: für diese Action-Kinds wird ein Before-Snapshot des
-// Ziels erstellt. Reads und Kinds ohne konkretes Einzelobjekt (cleanup_*)
-// bleiben draußen.
-var mutatingSnapshotKinds = map[string]bool{
-	"scale": true, "rollout_restart": true, "rollout_undo": true, "rollout_pause": true,
-	"rollout_resume": true, "rollout_to_revision": true, "set_image": true, "set_env": true,
-	"set_resources": true, "statefulset_partition": true, "hpa_set": true, "hpa_toggle": true,
-	"patch_configmap": true, "patch_secret": true, "delete_configmap": true, "pdb_set": true,
-	"patch_resource": true, "pvc_expand": true, "annotate": true, "set_label": true,
-	"node_taint": true, "node_untaint": true, "cordon": true, "uncordon": true,
-	"delete_pod": true, "evict_pod": true, "delete_job": true, "restore_resource": true,
-	"cronjob_suspend": true, "cronjob_resume": true,
-}
-
-// prepareSnapshot liefert das gestrippte Before-Objekt als JSON (nil, wenn
-// nicht anwendbar/lesbar — der Snapshot ist best effort, nie blockierend).
-func (r *Runner) prepareSnapshot(ctx context.Context, a Action) json.RawMessage {
-	if !mutatingSnapshotKinds[a.Kind] || kindGVR[a.TargetKind] == (schema.GroupVersionResource{}) {
-		return nil
-	}
-	u, err := r.getUnstructured(ctx, a.TargetKind, a.TargetNamespace, a.TargetName)
-	if err != nil {
-		return nil
-	}
-	obj := stripForSnapshot(u)
-	// Secrets: Werte hashen — der Snapshot landet in der CP-Datenbank und im
-	// UI-Audit; Klartext-Secrets gehören da nicht hin.
-	if a.TargetKind == "Secret" {
-		redactSecretData(obj)
-	}
-	b, err := json.Marshal(obj)
-	if err != nil || len(b) > maxSnapshotBytes {
-		meta := map[string]any{"kind": a.TargetKind, "name": a.TargetName, "namespace": a.TargetNamespace, "note": "snapshot too large — metadata only"}
-		b, _ = json.Marshal(meta)
-	}
-	return b
 }

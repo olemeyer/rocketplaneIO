@@ -15,9 +15,11 @@ package actions
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -431,6 +433,62 @@ func TestStdlibLive(t *testing.T) {
 	t.Run("debug_bundle", func(t *testing.T) {
 		roundtrip(t, r, "debug_bundle",
 			map[string]string{"namespace": ns, "kind": "Deployment", "name": "web"}, nil, nil)
+	})
+
+	// ── host-capability primitives: real kubelet (SPDY exec, log stream, pod lifecycle) ──
+	// These cannot run against the fake client; they are the whole point of the
+	// live suite. Wait for the web pod so exec/logs have a live target.
+	var webPod string
+	for i := 0; i < 90; i++ {
+		pl, _ := r.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: "app=web"})
+		for j := range pl.Items {
+			if pl.Items[j].Status.Phase == corev1.PodRunning && isPodReady(&pl.Items[j]) {
+				webPod = pl.Items[j].Name
+			}
+		}
+		if webPod != "" {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if webPod == "" {
+		t.Fatal("web pod never became ready")
+	}
+
+	t.Run("exec_readonly", func(t *testing.T) {
+		out, err := runStdlib(t, r, "exec_readonly", map[string]string{
+			"namespace": ns, "name": webPod, "command": `["ls","/"]`,
+		})
+		if err != nil {
+			t.Fatalf("exec_readonly: %v", err)
+		}
+		if !strings.Contains(out, "etc") {
+			t.Fatalf("expected ls output to list /, got %q", out)
+		}
+	})
+
+	t.Run("pod_logs", func(t *testing.T) {
+		if _, err := runStdlib(t, r, "pod_logs", map[string]string{
+			"namespace": ns, "name": webPod, "tailLines": "50",
+		}); err != nil {
+			t.Fatalf("pod_logs: %v", err)
+		}
+	})
+
+	t.Run("run_debug_pod", func(t *testing.T) {
+		out, err := runStdlib(t, r, "run_debug_pod", map[string]string{
+			"namespace": ns, "id": "livetest01", "image": "busybox:1.36", "command": `["echo","hello-probe"]`,
+		})
+		if err != nil {
+			t.Fatalf("run_debug_pod: %v", err)
+		}
+		if !strings.Contains(out, "hello-probe") || !strings.Contains(out, "exit 0") {
+			t.Fatalf("expected probe stdout + clean exit, got %q", out)
+		}
+		// the ephemeral probe pod must always be cleaned up
+		if _, err := r.clientset.CoreV1().Pods(ns).Get(ctx, "rp-debug-livetest", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+			t.Fatalf("debug pod not cleaned up: %v", err)
+		}
 	})
 }
 

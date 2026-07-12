@@ -31,10 +31,12 @@ export const PARAM_TYPES = ['string', 'int', 'bool', 'enum', 'namespace', 'workl
 const NAME_RE = /^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$/;
 
 // mutating builtins on the snapshot surface (whole-object capture)
-const WHOLE_OBJECT_MUT = /\bk8s\.(patch|scale|delete|create)\s*\(/;
+const WHOLE_OBJECT_MUT = /\bk8s\.(patch|scale|delete|create|apply)\s*\(/;
 // field-scoped mutators — self-capturing, no explicit snapshot() needed
 const FIELD_MUT = /\bk8s\.(set_field|set_fields|patch_configmap)\s*\(/;
-const ANY_MUT = /\bk8s\.(patch|scale|delete|create|set_field|set_fields|patch_configmap)\s*\(/;
+// any cluster mutation — used to reject mutators in a @reversible readonly workflow.
+// evict is final (@reversible none): a mutation, but never whole-object-snapshotted.
+const ANY_MUT = /\bk8s\.(patch|scale|delete|create|apply|set_field|set_fields|patch_configmap|evict)\s*\(/;
 const SNAPSHOT_CALL = /\bsnapshot\s*\(/;
 
 export type Diag = { line: number; severity: 'error' | 'warning' | 'info'; message: string };

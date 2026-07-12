@@ -94,5 +94,8 @@ func snapshotArgs(a Action) map[string]string {
 	args["namespace"] = a.TargetNamespace
 	args["kind"] = a.TargetKind
 	args["name"] = a.TargetName
+	// The action ID lets a script build a deterministic per-run resource name
+	// (run_debug_pod names its probe pod rp-debug-<id> so cleanup finds it again).
+	args["id"] = a.ID
 	return args
 }
