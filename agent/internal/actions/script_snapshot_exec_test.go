@@ -45,14 +45,12 @@ func secret(ns, name string, data map[string]any) *unstructured.Unstructured {
 	}}
 }
 
-// Secret data must NEVER be durably reported to the control plane (no plaintext at
-// rest). The mutation still happens; auto-rollback-on-failure still works from the
-// in-memory log — only the durable copy is withheld.
-func TestSecretCapturesNotDurablyReported(t *testing.T) {
+// Secret snapshots are persisted ENCRYPTED (no plaintext at rest), and the
+// encrypted durable copy still round-trips through the generic Restore.
+func TestSecretCapturesEncryptedAndRevertible(t *testing.T) {
 	cp := newStubCP()
 	defer cp.Close()
 	r := snapExecRunner(t, cp.URL, secret("shop", "creds", map[string]any{"token": "b2xk"}))
-	// patch the secret, then fail → in-memory auto-rollback must restore it.
 	src := `
 k8s.patch("shop", "Secret", "creds", {"stringData": {"token": "new"}})
 fail("boom")
@@ -60,20 +58,55 @@ fail("boom")
 	params, _ := json.Marshal(map[string]any{"source": src})
 	r.execute(context.Background(), Action{ID: "act-sec", Kind: "snapshot_script", Params: params})
 
-	// no durable report may carry a Secret capture
+	// the durable report must carry ciphertext ("enc"), never the plaintext value
+	// or the secret key name.
+	var durable json.RawMessage
 	for _, rep := range cp.snapshot() {
 		if len(rep.Snapshots) > 0 && string(rep.Snapshots) != "null" {
-			if strings.Contains(string(rep.Snapshots), "\"Secret\"") || strings.Contains(string(rep.Snapshots), "\"token\"") {
-				t.Fatalf("secret data leaked into a durable snapshot report: %s", rep.Snapshots)
+			s := string(rep.Snapshots)
+			if strings.Contains(s, "b2xk") || strings.Contains(s, "\"token\"") {
+				t.Fatalf("secret plaintext leaked into a durable snapshot: %s", s)
+			}
+			if strings.Contains(s, "\"enc\"") {
+				durable = rep.Snapshots
 			}
 		}
 	}
+	if durable == nil {
+		t.Fatal("no encrypted durable snapshot was reported for the Secret")
+	}
 	// auto-rollback (in-memory) restored the original value
-	u, _ := r.dyn.Resource(secretGVR).Namespace("shop").Get(context.Background(), "creds", metav1.GetOptions{})
-	d, _, _ := unstructured.NestedMap(u.Object, "data")
-	if d["token"] != "b2xk" {
+	if d := getSecretData(t, r, "shop", "creds"); d["token"] != "b2xk" {
 		t.Fatalf("secret not rolled back in-memory: %v", d)
 	}
+	// and the ENCRYPTED durable copy decrypts + restores independently
+	var caps []Capture
+	if err := json.Unmarshal(durable, &caps); err != nil {
+		t.Fatalf("durable unmarshal: %v", err)
+	}
+	if caps[0].Enc == "" || caps[0].Object != nil {
+		t.Fatalf("durable Secret capture not encrypted: %+v", caps[0])
+	}
+	// tamper the live object, then restore from the encrypted durable list
+	_ = r.applyMergePatch(context.Background(), "Secret", "shop", "creds", map[string]any{"data": map[string]any{"token": "tampered"}})
+	for _, x := range r.Restore(context.Background(), caps) {
+		if !x.OK {
+			t.Fatalf("restore from encrypted snapshot failed: %s", x.Detail)
+		}
+	}
+	if d := getSecretData(t, r, "shop", "creds"); d["token"] != "b2xk" {
+		t.Fatalf("encrypted durable snapshot did not restore the secret: %v", d)
+	}
+}
+
+func getSecretData(t *testing.T, r *Runner, ns, name string) map[string]any {
+	t.Helper()
+	u, err := r.dyn.Resource(secretGVR).Namespace(ns).Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	d, _, _ := unstructured.NestedMap(u.Object, "data")
+	return d
 }
 
 // The full execute() path for a snapshot_script action: captures are reported
@@ -132,15 +165,10 @@ fail("verify failed")
 	}
 }
 
-// A custom "script" workflow (and thus a fork of a built-in) runs on the SAME
-// snapshot surface as the built-ins: k8s.patch is a snapshot-surface primitive the
-// legacy raw surface does NOT have, so this only passes because kind=script now
-// routes to executeSnapshotScript. Proves fork → edit → run works + is revertible.
+// A custom "script" workflow (and thus a fork of a built-in) runs on the snapshot
+// surface: k8s.patch is a snapshot-surface primitive, so this proves kind=script
+// routes to executeSnapshotScript — fork → edit → run works + is revertible.
 func TestExecuteScriptRunsOnSnapshotSurface(t *testing.T) {
-	old := actionsSnapshotDispatch
-	actionsSnapshotDispatch = true
-	defer func() { actionsSnapshotDispatch = old }()
-
 	cp := newStubCP()
 	defer cp.Close()
 	r := snapExecRunner(t, cp.URL, dep("shop", "api", 2))

@@ -47,6 +47,11 @@ type Capture struct {
 	Scope     string         `json:"scope"`   // "object" | "field"
 	Object    map[string]any `json:"object,omitempty"`
 	Fields    []FieldDelta   `json:"fields,omitempty"`
+	// Enc holds the AES-GCM ciphertext of {object,fields} for Secret captures, so
+	// the durable copy persisted on the control plane never carries plaintext. The
+	// in-memory log keeps Object/Fields for same-run auto-rollback; only the durable
+	// report is encrypted, and Restore decrypts it.
+	Enc string `json:"enc,omitempty"`
 }
 
 // CaptureLog is the ordered undo state bound to one run. First-capture wins per
@@ -166,7 +171,7 @@ type RestoreResult struct {
 func (r *Runner) Restore(ctx context.Context, captures []Capture) []RestoreResult {
 	out := make([]RestoreResult, 0, len(captures))
 	for i := len(captures) - 1; i >= 0; i-- {
-		c := captures[i]
+		c := r.decryptCapture(captures[i]) // Secret payloads arrive encrypted
 		res := RestoreResult{Kind: c.Kind, Namespace: c.Namespace, Name: c.Name, OK: true}
 		iface, err := r.dynIface(c.Kind, c.Namespace)
 		if err != nil {

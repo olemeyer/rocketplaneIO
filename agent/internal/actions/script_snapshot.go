@@ -561,7 +561,12 @@ func (r *Runner) reportSnapshots(ctx context.Context, actionID string, captures 
 	if len(captures) == 0 {
 		return
 	}
-	snaps, _ := json.Marshal(captures)
+	// Encrypt Secret payloads before they leave the cluster — no plaintext at rest.
+	safe := make([]Capture, len(captures))
+	for i, c := range captures {
+		safe[i] = r.encryptForDurable(c)
+	}
+	snaps, _ := json.Marshal(safe)
 	body, _ := json.Marshal(map[string]any{"status": "running", "snapshots": json.RawMessage(snaps)})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		r.baseURL+"/api/agent/actions/"+actionID+"/result", strings.NewReader(string(body)))
@@ -610,15 +615,9 @@ func (r *Runner) runSnapshotAction(ctx context.Context, a Action, source string,
 	log := newCaptureLog()
 	if reversible {
 		log.onAdd = func(c Capture) {
-			// NEVER persist Secret data to the control plane — a durable snapshot
-			// carries the real (base64) values, which must not land in the DB/audit.
-			// Auto-rollback-on-failure still works: it replays the IN-MEMORY log
-			// (real values), not the durable copy. The trade-off is no manual revert
-			// for a Secret change (re-run patch_secret with the prior value).
-			if c.Kind == "Secret" {
-				return
-			}
 			// durable the instant a mutation is captured — survives a crash mid-run.
+			// Secret payloads are encrypted in reportSnapshots (no plaintext at rest),
+			// so a Secret change stays revertible via its encrypted snapshot.
 			r.reportSnapshots(context.WithoutCancel(ctx), a.ID, []Capture{c})
 		}
 	}
