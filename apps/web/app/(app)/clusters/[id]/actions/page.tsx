@@ -724,7 +724,7 @@ const ACTION_META: Record<string, { category: Category; klass: ActionClass }> = 
   debug_bundle: { category: 'investigate', klass: 'read' },
   pod_events: { category: 'investigate', klass: 'read' },
   set_image: { category: 'deploy', klass: 'reversible' },
-  rollout_restart: { category: 'deploy', klass: 'reversible' },
+  rollout_restart: { category: 'deploy', klass: 'disruptive' },
   rollout_pause: { category: 'deploy', klass: 'reversible' },
   rollout_resume: { category: 'deploy', klass: 'reversible' },
   rollout_undo: { category: 'deploy', klass: 'disruptive' },
