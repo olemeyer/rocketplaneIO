@@ -210,25 +210,19 @@ func (r *Runner) execute(ctx context.Context, a Action) {
 		r.executeSnapshotRestore(ctx, a)
 		return
 	}
-	// snapshot substrate: dispatch a built-in kind to its embedded .star script
-	// (flag-gated per rollout; the released plan()/revert.go path is the default).
-	if actionsSnapshotDispatch {
-		if src, ok := builtinSnapshotScript(a.Kind); ok {
-			r.runSnapshotAction(ctx, a, src, snapshotArgs(a), builtinReversible(a.Kind))
-			return
-		}
+	// snapshot substrate: a built-in kind runs as its embedded .star script — the
+	// single execution surface (shown == executed). The 6 host-capability kinds
+	// (drain/evict_pod/exec_readonly/net_probe/pod_logs/run_debug_pod) have no
+	// script and fall through to the native plan() below.
+	if src, ok := builtinSnapshotScript(a.Kind); ok {
+		r.runSnapshotAction(ctx, a, src, snapshotArgs(a), builtinReversible(a.Kind))
+		return
 	}
-	// Custom workflows (Starlark) run on the SAME snapshot surface as the built-in
-	// scripts and a fork of one — shown == executed, built-in == custom. They get
-	// the step timeline, durable snapshots, auto-rollback on failure and a revert
-	// button, exactly like a dispatched built-in. (RP_ACTIONS_SNAPSHOT=0 falls back
-	// to the legacy raw-surface executeScript for a rollback.)
+	// Custom workflows run on the SAME snapshot surface as the built-in scripts and
+	// a fork of one — shown == executed, built-in == custom: step timeline, durable
+	// (encrypted-for-secrets) snapshots, auto-rollback on failure, and a revert.
 	if a.Kind == "script" {
-		if actionsSnapshotDispatch {
-			r.executeSnapshotScript(ctx, a)
-		} else {
-			r.executeScript(ctx, a)
-		}
+		r.executeSnapshotScript(ctx, a)
 		return
 	}
 	// v4: every built-in kind is a declarative Effect manifest. If one exists,

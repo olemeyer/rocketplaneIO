@@ -28,14 +28,9 @@ func TestAllStdlibScriptsParse(t *testing.T) {
 	}
 }
 
-// The full flag-gated dispatch: a built-in kind routes through execute() to its
-// embedded .star, which snapshots + mutates + reports the capture durably. This
-// is the substrate wired as a real action path.
+// A built-in kind routes through execute() to its embedded .star, which
+// snapshots + mutates + reports the capture durably — the single execution path.
 func TestBuiltinDispatchViaFlag(t *testing.T) {
-	old := actionsSnapshotDispatch
-	actionsSnapshotDispatch = true
-	defer func() { actionsSnapshotDispatch = old }()
-
 	cp := newStubCP()
 	defer cp.Close()
 	r := snapExecRunner(t, cp.URL, node("worker-7", false))

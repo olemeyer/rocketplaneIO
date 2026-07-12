@@ -3,23 +3,17 @@ package actions
 // stdlib.go — the embedded built-in action scripts (snapshot substrate). Each
 // built-in kind is a real .star file that snapshots what it touches + mutates
 // over the generic primitives; a fork is a byte-copy of it. This is the honest
-// "shown == executed, built-in == custom" surface. Dispatch is behind a flag
-// (RP_ACTIONS_SNAPSHOT=1) so the released plan()/revert.go path is untouched
-// until each kind's parity is proven and flipped.
+// "shown == executed, built-in == custom" surface, and the ONLY script execution
+// path — built-in kinds and custom workflows both run here. The 6 host-capability
+// kinds (drain/evict_pod/exec_readonly/net_probe/pod_logs/run_debug_pod) have no
+// script and fall through to the native plan().
 
 import (
 	"embed"
 	"encoding/json"
-	"os"
 	"strconv"
 	"strings"
 )
-
-// actionsSnapshotDispatch routes built-in kinds to their embedded .star (the
-// snapshot substrate) instead of the native plan(). ON by default — the
-// substrate IS the execution path now, so what the UI shows is what runs. The
-// escape hatch RP_ACTIONS_SNAPSHOT=0 falls back to native plan() for a rollback.
-var actionsSnapshotDispatch = os.Getenv("RP_ACTIONS_SNAPSHOT") != "0"
 
 //go:embed stdlib/*.star
 var stdlibFS embed.FS
