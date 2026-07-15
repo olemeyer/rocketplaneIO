@@ -163,7 +163,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: agent
-          image: ghcr.io/olemeyer/rocketplaneio/agent:0.7.12
+          image: ghcr.io/olemeyer/rocketplaneio/agent:0.7.13
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -233,7 +233,7 @@ spec:
         - operator: Exists
       containers:
         - name: agent
-          image: ghcr.io/olemeyer/rocketplaneio/agent:0.7.12
+          image: ghcr.io/olemeyer/rocketplaneio/agent:0.7.13
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

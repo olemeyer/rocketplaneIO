@@ -20,7 +20,7 @@ clusterName: ""
 image:
   repository: ghcr.io/olemeyer/rocketplaneio/agent
   # Pin to a released version — never float on `edge`. Bump on upgrade.
-  tag: "0.7.12"
+  tag: "0.7.13"
   pullPolicy: IfNotPresent
 
 # -- Optional image pull secrets for private registries.

@@ -63,7 +63,7 @@ services:
         condition: service_healthy
 
   controlplane:
-    image: ghcr.io/olemeyer/rocketplaneio/controlplane:${RP_VERSION:-0.7.12}
+    image: ghcr.io/olemeyer/rocketplaneio/controlplane:${RP_VERSION:-0.7.13}
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-rocketplane}:${POSTGRES_PASSWORD:-rocketplane}@postgres:5432/${POSTGRES_DB:-rocketplane}?sslmode=disable
       CLICKHOUSE_URL: http://clickhouse:8123
@@ -92,7 +92,7 @@ services:
         condition: service_healthy
 
   web:
-    image: ghcr.io/olemeyer/rocketplaneio/web:${RP_VERSION:-0.7.12}
+    image: ghcr.io/olemeyer/rocketplaneio/web:${RP_VERSION:-0.7.13}
     ports:
       - "4173:4173"
     depends_on:

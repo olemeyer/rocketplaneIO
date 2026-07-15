@@ -113,7 +113,7 @@ spec:
     spec:
       containers:
         - name: controlplane
-          image: ghcr.io/olemeyer/rocketplaneio/controlplane:0.7.12
+          image: ghcr.io/olemeyer/rocketplaneio/controlplane:0.7.13
           imagePullPolicy: Always
           env:
             - name: RP_LISTEN
@@ -188,7 +188,7 @@ spec:
     spec:
       containers:
         - name: web
-          image: ghcr.io/olemeyer/rocketplaneio/web:0.7.12
+          image: ghcr.io/olemeyer/rocketplaneio/web:0.7.13
           imagePullPolicy: Always
           ports:
             - containerPort: 4173
