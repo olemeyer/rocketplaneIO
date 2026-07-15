@@ -16,7 +16,7 @@ name: rocketplane-prod
 
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:24.12
+    image: clickhouse/clickhouse-server:24.12.3.47
     environment:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-rocketplane}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-rocketplane}

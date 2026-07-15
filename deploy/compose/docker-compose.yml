@@ -12,7 +12,7 @@ name: rocketplane
 
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:24.12
+    image: clickhouse/clickhouse-server:24.12.3.47
     container_name: rp-clickhouse
     environment:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-rocketplane}

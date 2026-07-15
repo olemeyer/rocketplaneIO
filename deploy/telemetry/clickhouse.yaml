@@ -43,7 +43,10 @@ spec:
         fsGroup: 101
       containers:
         - name: clickhouse
-          image: clickhouse/clickhouse-server:24.12
+          # Pin an exact patch — do NOT float on :24.12. The 24.12.6.70 build ships a
+          # broken executable checksum (Code 246 CORRUPTED_DATA on startup, CrashLoop);
+          # a floating tag silently drifted onto it. Bump deliberately after verifying.
+          image: clickhouse/clickhouse-server:24.12.3.47
           env:
             - name: CLICKHOUSE_USER
               valueFrom: { secretKeyRef: { name: rocketplane-clickhouse, key: CLICKHOUSE_USER } }
