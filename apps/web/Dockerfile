@@ -4,7 +4,7 @@
 # NOTE: Next.js freezes rewrites() at build time, so the control-plane origin
 # the UI proxies to is baked in via the RP_CONTROLPLANE_URL build arg. The
 # default matches the compose service name (http://controlplane:8090).
-FROM node:22-alpine AS build
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS build
 ARG RP_CONTROLPLANE_URL=http://controlplane:8090
 ENV RP_CONTROLPLANE_URL=$RP_CONTROLPLANE_URL
 RUN corepack enable
@@ -22,7 +22,7 @@ COPY apps/web/ apps/web/
 ENV NODE_OPTIONS=--max-old-space-size=4096
 RUN pnpm --filter @rocketplane/web build
 
-FROM node:22-alpine
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2
 ENV NODE_ENV=production PORT=4173 HOSTNAME=0.0.0.0
 WORKDIR /app
 # standalone output carries the monorepo shape: apps/web/server.js + pruned node_modules

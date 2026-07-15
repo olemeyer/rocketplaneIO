@@ -92,7 +92,7 @@ spec:
     spec:
       containers:
         - name: otel-collector
-          image: otel/opentelemetry-collector-contrib:0.116.1
+          image: otel/opentelemetry-collector-contrib:0.116.1@sha256:d0ebf65280da2e1b1491d1b93648281afd353d4b9ea19160090303cec9a233bd
           args: ["--config=/etc/otelcol/config.yaml"]
           env:
             - name: CLICKHOUSE_USER

@@ -16,7 +16,7 @@ name: rocketplane-prod
 
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:24.12.3.47
+    image: clickhouse/clickhouse-server:24.12.3.47@sha256:3fb2bd1a2fa9e095a1844b2b559eb580795773cf459a994f53be86e7ec999704
     environment:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-rocketplane}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-rocketplane}
@@ -33,7 +33,7 @@ services:
       retries: 20
 
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-rocketplane}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rocketplane}
@@ -47,7 +47,7 @@ services:
       retries: 20
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.116.1
+    image: otel/opentelemetry-collector-contrib:0.116.1@sha256:d0ebf65280da2e1b1491d1b93648281afd353d4b9ea19160090303cec9a233bd
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes:
       - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
@@ -63,7 +63,7 @@ services:
         condition: service_healthy
 
   controlplane:
-    image: ghcr.io/olemeyer/rocketplaneio/controlplane:${RP_VERSION:-edge}
+    image: ghcr.io/olemeyer/rocketplaneio/controlplane:${RP_VERSION:-0.7.12}
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-rocketplane}:${POSTGRES_PASSWORD:-rocketplane}@postgres:5432/${POSTGRES_DB:-rocketplane}?sslmode=disable
       CLICKHOUSE_URL: http://clickhouse:8123
@@ -92,7 +92,7 @@ services:
         condition: service_healthy
 
   web:
-    image: ghcr.io/olemeyer/rocketplaneio/web:${RP_VERSION:-edge}
+    image: ghcr.io/olemeyer/rocketplaneio/web:${RP_VERSION:-0.7.12}
     ports:
       - "4173:4173"
     depends_on:

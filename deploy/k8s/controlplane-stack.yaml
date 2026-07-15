@@ -48,7 +48,7 @@ spec:
         fsGroup: 999
       containers:
         - name: postgres
-          image: postgres:17-alpine
+          image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
           env:
             - name: POSTGRES_USER
               value: rocketplane
@@ -113,7 +113,7 @@ spec:
     spec:
       containers:
         - name: controlplane
-          image: ghcr.io/olemeyer/rocketplaneio/controlplane:edge
+          image: ghcr.io/olemeyer/rocketplaneio/controlplane:0.7.12
           imagePullPolicy: Always
           env:
             - name: RP_LISTEN
@@ -188,7 +188,7 @@ spec:
     spec:
       containers:
         - name: web
-          image: ghcr.io/olemeyer/rocketplaneio/web:edge
+          image: ghcr.io/olemeyer/rocketplaneio/web:0.7.12
           imagePullPolicy: Always
           ports:
             - containerPort: 4173

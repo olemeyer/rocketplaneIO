@@ -19,7 +19,8 @@ clusterName: ""
 
 image:
   repository: ghcr.io/olemeyer/rocketplaneio/agent
-  tag: edge
+  # Pin to a released version — never float on `edge`. Bump on upgrade.
+  tag: "0.7.12"
   pullPolicy: IfNotPresent
 
 # -- Optional image pull secrets for private registries.
@@ -101,8 +102,9 @@ beyla:
   image:
     # -- Beyla image repository.
     repository: grafana/beyla
-    # -- Beyla image tag. Pinned — eBPF programs are kernel/version-sensitive.
-    tag: "2.2"
+    # -- Beyla image tag, pinned by digest — eBPF programs are kernel/version-
+    # sensitive, and a floating minor must never drift a probe onto every node.
+    tag: "2.2@sha256:9ad8e1c88fe6ce5a429763d1fc068997ecacc7e124147556fde9ae6430717e37"
     # -- Beyla image pull policy.
     pullPolicy: IfNotPresent
   # -- Ports Beyla instruments (BEYLA_OPEN_PORT). Common HTTP/gRPC app ports plus

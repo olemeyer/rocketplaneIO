@@ -32,7 +32,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.27-alpine
+          image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
           ports: [{containerPort: 8080}]
           volumeMounts:
             - {name: conf, mountPath: /etc/nginx/conf.d}
@@ -65,5 +65,5 @@ spec:
     spec:
       containers:
         - name: client
-          image: busybox
+          image: busybox:1.37@sha256:9532d8c39891ca2ecde4d30d7710e01fb739c87a8b9299685c63704296b16028
           command: ["/bin/sh", "-c", "while true; do wget -q -O- http://frontdoor:8080/catalog >/dev/null 2>&1; wget -q -O- http://frontdoor:8080/orders >/dev/null 2>&1; wget -q -O- http://frontdoor:8080/payments >/dev/null 2>&1; sleep 2; done"]

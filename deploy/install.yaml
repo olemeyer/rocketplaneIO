@@ -163,7 +163,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: agent
-          image: ghcr.io/olemeyer/rocketplaneio/agent:edge
+          image: ghcr.io/olemeyer/rocketplaneio/agent:0.7.12
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -233,7 +233,7 @@ spec:
         - operator: Exists
       containers:
         - name: agent
-          image: ghcr.io/olemeyer/rocketplaneio/agent:edge
+          image: ghcr.io/olemeyer/rocketplaneio/agent:0.7.12
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -344,7 +344,7 @@ spec:
         - operator: Exists
       containers:
         - name: beyla
-          image: grafana/beyla:2.2
+          image: grafana/beyla:2.2@sha256:9ad8e1c88fe6ce5a429763d1fc068997ecacc7e124147556fde9ae6430717e37
           securityContext:
             privileged: true
           env:

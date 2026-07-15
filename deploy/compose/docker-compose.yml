@@ -12,7 +12,7 @@ name: rocketplane
 
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:24.12.3.47
+    image: clickhouse/clickhouse-server:24.12.3.47@sha256:3fb2bd1a2fa9e095a1844b2b559eb580795773cf459a994f53be86e7ec999704
     container_name: rp-clickhouse
     environment:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-rocketplane}
@@ -33,7 +33,7 @@ services:
       retries: 20
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     container_name: rp-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-rocketplane}
