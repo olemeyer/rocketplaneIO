@@ -131,7 +131,7 @@ func main() {
 			}
 		}()
 		// K8s-Inventar (Services/Ingress/Config/Batch/… als kompakte Zusammenfassung)
-		// für die Resources-Seite + das list_resources-Tool des Copilots.
+		// für die Resources-Seite + Inventory-Konsumenten (z.B. MCP-Tools).
 		go func() {
 			if err := syncer.RunInventory(runCtx); err != nil && runCtx.Err() == nil {
 				log.Printf("inventory: %v", err)

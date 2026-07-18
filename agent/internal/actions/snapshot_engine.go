@@ -38,15 +38,21 @@ type FieldDelta struct {
 // Capture is one entry in the log: either a whole stripped object (Scope=object)
 // or a set of field deltas (Scope=field). It is JSON-serializable so it can be
 // persisted to the control plane for crash-recovery + later manual revert.
+//
+// APIVersion and Resource are optional: when set they override the static kindGVR
+// map so the Restore path resolves arbitrary GVKs (CRDs etc.). Old persisted
+// captures that lack these fields continue to resolve via kindGVR (backward compat).
 type Capture struct {
-	Seq       int            `json:"seq"`
-	Kind      string         `json:"kind"`
-	Namespace string         `json:"namespace"`
-	Name      string         `json:"name"`
-	Existed   bool           `json:"existed"` // whole object existed before (Scope=object)
-	Scope     string         `json:"scope"`   // "object" | "field"
-	Object    map[string]any `json:"object,omitempty"`
-	Fields    []FieldDelta   `json:"fields,omitempty"`
+	Seq        int            `json:"seq"`
+	Kind       string         `json:"kind"`
+	Namespace  string         `json:"namespace"`
+	Name       string         `json:"name"`
+	APIVersion string         `json:"apiVersion,omitempty"`
+	Resource   string         `json:"resource,omitempty"`
+	Existed    bool           `json:"existed"` // whole object existed before (Scope=object)
+	Scope      string         `json:"scope"`   // "object" | "field"
+	Object     map[string]any `json:"object,omitempty"`
+	Fields     []FieldDelta   `json:"fields,omitempty"`
 	// Enc holds the AES-GCM ciphertext of {object,fields} for Secret captures, so
 	// the durable copy persisted on the control plane never carries plaintext. The
 	// in-memory log keeps Object/Fields for same-run auto-rollback; only the durable
@@ -100,15 +106,16 @@ func (l *CaptureLog) markSeen(key string) bool {
 	return true
 }
 
-// dynIface resolves the dynamic client for a whitelisted kind (namespaced or
-// cluster-scoped). Mirrors getUnstructured's resolution.
-func (r *Runner) dynIface(kind, namespace string) (dynamicResource, error) {
+// dynIface resolves the dynamic client interface for the given kind. apiVersion
+// and resource are optional overrides: when both are empty and the kind is in
+// the static map the fast path is used; otherwise rawGVR resolves the GVR.
+func (r *Runner) dynIface(apiVersion, kind, namespace, resource string) (dynamicResource, error) {
 	if r.dyn == nil {
 		return nil, fmt.Errorf("generic access unavailable (no dynamic client)")
 	}
-	gvr, ok := kindGVR[kind]
-	if !ok {
-		return nil, fmt.Errorf("kind %q not in the generic whitelist", kind)
+	gvr, err := resolveGVR(apiVersion, kind, resource)
+	if err != nil {
+		return nil, err
 	}
 	if clusterScopedKind(kind) || namespace == "-" || namespace == "" {
 		return r.dyn.Resource(gvr), nil
@@ -117,35 +124,37 @@ func (r *Runner) dynIface(kind, namespace string) (dynamicResource, error) {
 }
 
 // captureObject records the whole stripped before-state of a resource (or that
-// it was absent). Used before an object-level mutation (scale, set_image, SSA
-// replace, create). First-wins per (kind/ns/name).
-func (r *Runner) captureObject(ctx context.Context, log *CaptureLog, kind, namespace, name string) (*Capture, error) {
-	key := "obj|" + kind + "|" + namespace + "|" + name
+// it was absent). Used before an object-level mutation (patch, apply, create,
+// delete). First-wins per (apiVersion/kind/ns/name). apiVersion and resource are
+// optional: leave empty for well-known kinds in kindGVR.
+func (r *Runner) captureObject(ctx context.Context, log *CaptureLog, apiVersion, kind, namespace, name, resource string) (*Capture, error) {
+	key := "obj|" + apiVersion + "|" + kind + "|" + namespace + "|" + name + "|" + resource
 	if !log.markSeen(key) {
 		return nil, nil // already captured — keep the earlier before-state
 	}
-	u, err := r.getUnstructured(ctx, kind, namespace, name)
+	u, err := r.getUnstructured(ctx, apiVersion, kind, namespace, name, resource)
 	if apierrors.IsNotFound(err) {
-		c := log.add(Capture{Kind: kind, Namespace: namespace, Name: name, Existed: false, Scope: "object"})
+		c := log.add(Capture{Kind: kind, Namespace: namespace, Name: name, APIVersion: apiVersion, Resource: resource, Existed: false, Scope: "object"})
 		return &c, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 	obj := stripForSnapshot(u)
-	c := log.add(Capture{Kind: kind, Namespace: namespace, Name: name, Existed: true, Scope: "object", Object: obj})
+	c := log.add(Capture{Kind: kind, Namespace: namespace, Name: name, APIVersion: apiVersion, Resource: resource, Existed: true, Scope: "object", Object: obj})
 	return &c, nil
 }
 
 // captureFields records the before-value of the exact paths a key-level mutation
 // will touch (ConfigMap data[key], one container's env var, a metadata key). The
-// restore is then surgical — sibling keys are untouched.
-func (r *Runner) captureFields(ctx context.Context, log *CaptureLog, kind, namespace, name string, paths [][]string) (*Capture, error) {
-	key := "fld|" + kind + "|" + namespace + "|" + name + "|" + fieldsKey(paths)
+// restore is surgical — sibling keys are untouched. apiVersion and resource are
+// optional overrides (same semantics as captureObject).
+func (r *Runner) captureFields(ctx context.Context, log *CaptureLog, apiVersion, kind, namespace, name, resource string, paths [][]string) (*Capture, error) {
+	key := "fld|" + apiVersion + "|" + kind + "|" + namespace + "|" + name + "|" + resource + "|" + fieldsKey(paths)
 	if !log.markSeen(key) {
 		return nil, nil
 	}
-	u, err := r.getUnstructured(ctx, kind, namespace, name)
+	u, err := r.getUnstructured(ctx, apiVersion, kind, namespace, name, resource)
 	if err != nil {
 		return nil, err // a field mutation on an absent object is the caller's error
 	}
@@ -154,7 +163,7 @@ func (r *Runner) captureFields(ctx context.Context, log *CaptureLog, kind, names
 		before, ok := nestedGet(u.Object, p)
 		deltas = append(deltas, FieldDelta{Path: append([]string(nil), p...), Before: before, Existed: ok})
 	}
-	c := log.add(Capture{Kind: kind, Namespace: namespace, Name: name, Existed: true, Scope: "field", Fields: deltas})
+	c := log.add(Capture{Kind: kind, Namespace: namespace, Name: name, APIVersion: apiVersion, Resource: resource, Existed: true, Scope: "field", Fields: deltas})
 	return &c, nil
 }
 
@@ -168,12 +177,14 @@ type RestoreResult struct {
 // Restore replays the capture log in REVERSE order — the ONE generic rollback,
 // used for both auto-rollback-on-failure and later manual revert. No per-kind
 // logic: absent→delete, field→surgical merge-patch, object→server-side apply.
+// Each capture's own APIVersion/Resource fields (when set) drive resolution so
+// the restore works for arbitrary GVKs, including CRDs.
 func (r *Runner) Restore(ctx context.Context, captures []Capture) []RestoreResult {
 	out := make([]RestoreResult, 0, len(captures))
 	for i := len(captures) - 1; i >= 0; i-- {
 		c := r.decryptCapture(captures[i]) // Secret payloads arrive encrypted
 		res := RestoreResult{Kind: c.Kind, Namespace: c.Namespace, Name: c.Name, OK: true}
-		iface, err := r.dynIface(c.Kind, c.Namespace)
+		iface, err := r.dynIface(c.APIVersion, c.Kind, c.Namespace, c.Resource)
 		if err != nil {
 			res.OK, res.Detail = false, err.Error()
 			out = append(out, res)
@@ -201,7 +212,7 @@ func (r *Runner) Restore(ctx context.Context, captures []Capture) []RestoreResul
 			// separate `update` verb the agent does not have. The captured object
 			// is identity/status-stripped, so the patch carries no resourceVersion.
 			u := (&unstructured.Unstructured{Object: c.Object}).DeepCopy()
-			ensureGVK(u, c.Kind)
+			ensureGVK(u, c.Kind, c.APIVersion)
 			got, gerr := iface.Get(ctx, c.Name, metav1.GetOptions{})
 			if apierrors.IsNotFound(gerr) {
 				// deleted since → recreate best-effort (new identity, orphaned).
@@ -319,8 +330,10 @@ func setNested(root map[string]any, path []string, val any) {
 	}
 }
 
-// ensureGVK makes a stripped object SSA-applyable (apiVersion+kind must be set).
-func ensureGVK(u *unstructured.Unstructured, kind string) {
+// ensureGVK makes a stripped object re-applyable (apiVersion+kind must be set).
+// captureAPIVersion (from Capture.APIVersion) is preferred when the static map
+// does not cover the kind, enabling CRD captures to round-trip correctly.
+func ensureGVK(u *unstructured.Unstructured, kind, captureAPIVersion string) {
 	if u.GetKind() == "" {
 		u.SetKind(kind)
 	}
@@ -328,6 +341,8 @@ func ensureGVK(u *unstructured.Unstructured, kind string) {
 		if gvr, ok := kindGVR[kind]; ok {
 			gv := schema.GroupVersion{Group: gvr.Group, Version: gvr.Version}
 			u.SetAPIVersion(gv.String())
+		} else if captureAPIVersion != "" {
+			u.SetAPIVersion(captureAPIVersion)
 		}
 	}
 }

@@ -1,7 +1,7 @@
 package sync
 
 // inventory.go — das VOLLSTÄNDIGE Kubernetes-Inventar für die Resources-Seite
-// und das list_resources-Tool des Copilots: der Agent listet periodisch alle
+// und Konsumenten wie das MCP-Interface: der Agent listet periodisch alle
 // relevanten Ressourcen-Kinds und pusht eine KOMPAKTE Zusammenfassung (nie
 // Secret-DATEN — nur Metadaten). Generisches Item-Format {namespace, name,
 // createdAt, info{k:v}}, damit CP/UI ohne Schema-Wissen rendern können.

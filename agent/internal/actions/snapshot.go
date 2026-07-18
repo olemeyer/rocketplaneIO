@@ -1,9 +1,9 @@
 package actions
 
-// snapshot.go — the whitelisted kind→GVR map and the object helpers the snapshot
-// substrate shares: generic get, and the strip that makes a captured object
-// re-appliable (managedFields/status/resourceVersion removed). The before-state
-// itself is captured by the snapshot surface (script_snapshot.go), not here.
+// snapshot.go — the well-known kind→GVR static map plus generic object helpers
+// the snapshot substrate shares: get, dynamic interface resolution, and the strip
+// that makes a captured object re-appliable (managedFields/status/resourceVersion
+// removed). The before-state itself is captured by script_snapshot.go, not here.
 
 import (
 	"context"
@@ -14,9 +14,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// kindGVR: statische Kind→GroupVersionResource-Karte für alle whitelisted
-// Ziel-Kinds. Statisch statt RESTMapper: kein Discovery-Roundtrip, keine
-// Cache-Invalidierung — und die Whitelist ist ohnehin geschlossen.
+// kindGVR: well-known kind→GVR fast-path (no Discovery round-trip). When a
+// kind is absent here the caller must supply apiVersion+resource explicitly so
+// rawGVR can resolve it (CRDs, less-common built-ins).
 var kindGVR = map[string]schema.GroupVersionResource{
 	"Deployment":              {Group: "apps", Version: "v1", Resource: "deployments"},
 	"StatefulSet":             {Group: "apps", Version: "v1", Resource: "statefulsets"},
@@ -47,14 +47,26 @@ func clusterScopedKind(kind string) bool {
 	return false
 }
 
-// getUnstructured holt das Zielobjekt generisch (nil-sicher ohne dyn).
-func (r *Runner) getUnstructured(ctx context.Context, kind, namespace, name string) (*unstructured.Unstructured, error) {
+// resolveGVR returns the GVR for a resource. Fast path: kind in kindGVR and no
+// overrides. Slow path: rawGVR(apiVersion, kind, resource) for CRDs and any kind
+// not in the static map.
+func resolveGVR(apiVersion, kind, resource string) (schema.GroupVersionResource, error) {
+	if gvr, ok := kindGVR[kind]; ok && apiVersion == "" && resource == "" {
+		return gvr, nil
+	}
+	return rawGVR(apiVersion, kind, resource)
+}
+
+// getUnstructured fetches the target object via the dynamic client. apiVersion
+// and resource are optional: when both are empty and the kind is in the static
+// map the fast path is used; otherwise rawGVR resolves the GVR.
+func (r *Runner) getUnstructured(ctx context.Context, apiVersion, kind, namespace, name, resource string) (*unstructured.Unstructured, error) {
 	if r.dyn == nil {
 		return nil, fmt.Errorf("generic access unavailable (no dynamic client)")
 	}
-	gvr, ok := kindGVR[kind]
-	if !ok {
-		return nil, fmt.Errorf("kind %q not in the generic whitelist", kind)
+	gvr, err := resolveGVR(apiVersion, kind, resource)
+	if err != nil {
+		return nil, err
 	}
 	if clusterScopedKind(kind) || namespace == "-" || namespace == "" {
 		return r.dyn.Resource(gvr).Get(ctx, name, metav1.GetOptions{})

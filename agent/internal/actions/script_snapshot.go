@@ -26,17 +26,19 @@ import (
 )
 
 // applyMergePatch is the low-level mutate primitive the snapshot mutators share.
-func (r *Runner) applyMergePatch(ctx context.Context, kind, namespace, name string, patch map[string]any) error {
-	return r.applyPatch(ctx, kind, namespace, name, patch, types.MergePatchType)
+// apiVersion and resource are optional (empty = well-known kind fast path).
+func (r *Runner) applyMergePatch(ctx context.Context, apiVersion, kind, namespace, name, resource string, patch map[string]any) error {
+	return r.applyPatch(ctx, apiVersion, kind, namespace, name, resource, patch, types.MergePatchType)
 }
 
-// applyPatch applies a patch of the given type. Strategic-merge (for container
-// arrays like set_image/set_env) merges arrays by their patch-merge-key so it
-// updates one container without dropping the others; the whole-object snapshot
-// captured before still restores correctly (a JSON-merge restore replaces the
-// array back to the captured one).
-func (r *Runner) applyPatch(ctx context.Context, kind, namespace, name string, patch map[string]any, pt types.PatchType) error {
-	iface, err := r.dynIface(kind, namespace)
+// applyPatch applies a patch of the given type. apiVersion and resource are
+// optional overrides (for CRDs). Strategic-merge (for container arrays like
+// set_image/set_env) merges arrays by their patch-merge-key so it updates one
+// container without dropping the others; the whole-object snapshot captured
+// before still restores correctly (a JSON-merge restore replaces the array back
+// to the captured one).
+func (r *Runner) applyPatch(ctx context.Context, apiVersion, kind, namespace, name, resource string, patch map[string]any, pt types.PatchType) error {
+	iface, err := r.dynIface(apiVersion, kind, namespace, resource)
 	if err != nil {
 		return err
 	}
@@ -56,14 +58,15 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		}
 	}
 
-	// snapshot(namespace, kind, name) — explicit whole-object capture, bound to
-	// the run. Returns the redacted before-state so the script can read it.
+	// snapshot(namespace, kind, name, api_version?=, resource?=) — explicit
+	// whole-object capture, bound to the run. Returns the redacted before-state so
+	// the script can read it.
 	snapshot := starlark.NewBuiltin("snapshot", func(_ *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-		var ns, kind, name string
-		if err := starlark.UnpackArgs("snapshot", args, kwargs, "namespace", &ns, "kind", &kind, "name", &name); err != nil {
+		var ns, kind, name, apiVersion, resource string
+		if err := starlark.UnpackArgs("snapshot", args, kwargs, "namespace", &ns, "kind", &kind, "name", &name, "api_version?", &apiVersion, "resource?", &resource); err != nil {
 			return nil, err
 		}
-		c, err := r.captureObject(ctx, log, kind, ns, name)
+		c, err := r.captureObject(ctx, log, apiVersion, kind, ns, name, resource)
 		if err != nil {
 			return nil, err
 		}
@@ -90,10 +93,10 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		if err := starlark.UnpackArgs("scale", args, kwargs, "namespace", &ns, "kind", &kind, "name", &name, "replicas", &replicas); err != nil {
 			return nil, err
 		}
-		if _, err := r.captureObject(ctx, log, kind, ns, name); err != nil {
+		if _, err := r.captureObject(ctx, log, "", kind, ns, name, ""); err != nil {
 			return nil, fmt.Errorf("scale: cannot snapshot %s/%s (strict mode): %w", kind, name, err)
 		}
-		if err := r.applyMergePatch(ctx, kind, ns, name, map[string]any{"spec": map[string]any{"replicas": replicas}}); err != nil {
+		if err := r.applyMergePatch(ctx, "", kind, ns, name, "", map[string]any{"spec": map[string]any{"replicas": replicas}}); err != nil {
 			return nil, err
 		}
 		rep(fmt.Sprintf("scaled %s/%s to %d", kind, name, replicas))
@@ -106,10 +109,10 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		if err := starlark.UnpackArgs("patch_configmap", args, kwargs, "namespace", &ns, "name", &name, "key", &key, "value", &value); err != nil {
 			return nil, err
 		}
-		if _, err := r.captureFields(ctx, log, "ConfigMap", ns, name, [][]string{{"data", key}}); err != nil {
+		if _, err := r.captureFields(ctx, log, "", "ConfigMap", ns, name, "", [][]string{{"data", key}}); err != nil {
 			return nil, fmt.Errorf("patch_configmap: cannot snapshot data[%s] (strict mode): %w", key, err)
 		}
-		if err := r.applyMergePatch(ctx, "ConfigMap", ns, name, map[string]any{"data": map[string]any{key: value}}); err != nil {
+		if err := r.applyMergePatch(ctx, "", "ConfigMap", ns, name, "", map[string]any{"data": map[string]any{key: value}}); err != nil {
 			return nil, err
 		}
 		rep(fmt.Sprintf("patched configmap %s data[%s]", name, key))
@@ -136,14 +139,15 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 	// then apply a merge patch the SCRIPT provides. One primitive expresses most
 	// mutating kinds (scale/cordon/hpa/set_image/annotate/…): the engine only
 	// executes + snapshots; the per-kind "what to change" lives in the script.
+	// api_version= and resource= are optional kwargs for CRDs and non-static kinds.
 	k8sPatch := starlark.NewBuiltin("patch", func(_ *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-		var ns, kind, name string
+		var ns, kind, name, apiVersion, resource string
 		var patch *starlark.Dict
 		strategic := false
-		if err := starlark.UnpackArgs("patch", args, kwargs, "namespace", &ns, "kind", &kind, "name", &name, "patch", &patch, "strategic?", &strategic); err != nil {
+		if err := starlark.UnpackArgs("patch", args, kwargs, "namespace", &ns, "kind", &kind, "name", &name, "patch", &patch, "strategic?", &strategic, "api_version?", &apiVersion, "resource?", &resource); err != nil {
 			return nil, err
 		}
-		if _, err := r.captureObject(ctx, log, kind, ns, name); err != nil {
+		if _, err := r.captureObject(ctx, log, apiVersion, kind, ns, name, resource); err != nil {
 			return nil, fmt.Errorf("patch: cannot snapshot %s/%s (strict mode): %w", kind, name, err)
 		}
 		obj, err := starToGo(patch)
@@ -155,7 +159,7 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		if strategic {
 			pt = types.StrategicMergePatchType
 		}
-		if err := r.applyPatch(ctx, kind, ns, name, m, pt); err != nil {
+		if err := r.applyPatch(ctx, apiVersion, kind, ns, name, resource, m, pt); err != nil {
 			return nil, err
 		}
 		rep(fmt.Sprintf("patched %s/%s", kind, name))
@@ -165,13 +169,13 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 	// k8s.set_field — the GENERIC field-scoped mutate primitive. Captures the
 	// exact path (surgical), then sets it. Restore is field-scoped: it removes a
 	// key this run ADDED (merge-null) or restores a changed key — never touching
-	// sibling keys. Use for key-level kinds (annotate/set_label/set_env/
-	// patch_configmap) where whole-object restore would clobber or leak.
+	// sibling keys. Use for key-level mutations where whole-object restore would
+	// clobber or leak. api_version= and resource= are optional for CRDs.
 	k8sSetField := starlark.NewBuiltin("set_field", func(_ *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-		var ns, kind, name string
+		var ns, kind, name, apiVersion, resource string
 		var path *starlark.List
 		var value starlark.Value
-		if err := starlark.UnpackArgs("set_field", args, kwargs, "namespace", &ns, "kind", &kind, "name", &name, "path", &path, "value", &value); err != nil {
+		if err := starlark.UnpackArgs("set_field", args, kwargs, "namespace", &ns, "kind", &kind, "name", &name, "path", &path, "value", &value, "api_version?", &apiVersion, "resource?", &resource); err != nil {
 			return nil, err
 		}
 		segs := make([]string, 0, path.Len())
@@ -185,7 +189,7 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		if len(segs) == 0 {
 			return nil, fmt.Errorf("set_field: empty path")
 		}
-		if _, err := r.captureFields(ctx, log, kind, ns, name, [][]string{segs}); err != nil {
+		if _, err := r.captureFields(ctx, log, apiVersion, kind, ns, name, resource, [][]string{segs}); err != nil {
 			return nil, fmt.Errorf("set_field: cannot snapshot %v (strict mode): %w", segs, err)
 		}
 		goVal, err := starToGo(value)
@@ -194,7 +198,7 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		}
 		patch := map[string]any{}
 		setNested(patch, segs, goVal)
-		if err := r.applyMergePatch(ctx, kind, ns, name, patch); err != nil {
+		if err := r.applyMergePatch(ctx, apiVersion, kind, ns, name, resource, patch); err != nil {
 			return nil, err
 		}
 		rep(fmt.Sprintf("set %s/%s %v", kind, name, segs))
@@ -203,16 +207,15 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 
 	// k8s.delete — snapshot the WHOLE object, then delete it. The generic Restore
 	// recreates it from the capture (Get→NotFound→Create), so a delete is
-	// reversible like any other mutation. Used by delete_pod/delete_job/
-	// delete_configmap/cleanup_* (owners recreate pods; the snapshot recreates the
-	// rest). NOTE: an owner-managed pod is recreated by its controller too — undo
-	// is idempotent (Create is a no-op if it already exists again).
+	// reversible like any other mutation. NOTE: an owner-managed pod is recreated
+	// by its controller too — undo is idempotent (Create is a no-op if it already
+	// exists again). api_version= and resource= are optional for CRDs.
 	k8sDelete := starlark.NewBuiltin("delete", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
-		var ns, kind, name string
-		if err := starlark.UnpackArgs("delete", a, kw, "namespace", &ns, "kind", &kind, "name", &name); err != nil {
+		var ns, kind, name, apiVersion, resource string
+		if err := starlark.UnpackArgs("delete", a, kw, "namespace", &ns, "kind", &kind, "name", &name, "api_version?", &apiVersion, "resource?", &resource); err != nil {
 			return nil, err
 		}
-		c, err := r.captureObject(ctx, log, kind, ns, name)
+		c, err := r.captureObject(ctx, log, apiVersion, kind, ns, name, resource)
 		if err != nil {
 			return nil, fmt.Errorf("delete: cannot snapshot %s/%s (strict mode): %w", kind, name, err)
 		}
@@ -220,7 +223,7 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 			rep(fmt.Sprintf("%s/%s already gone", kind, name))
 			return starlark.None, nil
 		}
-		iface, err := r.dynIface(kind, ns)
+		iface, err := r.dynIface(apiVersion, kind, ns, resource)
 		if err != nil {
 			return nil, err
 		}
@@ -232,11 +235,13 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 	})
 
 	// k8s.apply — snapshot the whole object, then server-side-apply the given
-	// manifest as the desired truth (force). Used by restore_resource to re-apply a
-	// prior before-snapshot; the whole-object capture makes even a re-apply revertible.
+	// manifest as the desired truth (force). The whole-object capture makes even a
+	// re-apply revertible. apiVersion/kind come from the manifest; resource= is an
+	// optional kwarg for CRD plural override.
 	k8sApply := starlark.NewBuiltin("apply", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
 		var manifest *starlark.Dict
-		if err := starlark.UnpackArgs("apply", a, kw, "manifest", &manifest); err != nil {
+		var resource string
+		if err := starlark.UnpackArgs("apply", a, kw, "manifest", &manifest, "resource?", &resource); err != nil {
 			return nil, err
 		}
 		obj, err := starToGo(manifest)
@@ -246,13 +251,14 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		m, _ := obj.(map[string]any)
 		u := &unstructured.Unstructured{Object: m}
 		kind, name, ns := u.GetKind(), u.GetName(), u.GetNamespace()
+		apiVersion := u.GetAPIVersion()
 		if kind == "" || name == "" {
 			return nil, fmt.Errorf("apply: manifest needs kind + metadata.name")
 		}
-		if _, err := r.captureObject(ctx, log, kind, ns, name); err != nil {
+		if _, err := r.captureObject(ctx, log, apiVersion, kind, ns, name, resource); err != nil {
 			return nil, fmt.Errorf("apply: cannot snapshot %s/%s (strict mode): %w", kind, name, err)
 		}
-		iface, err := r.dynIface(kind, ns)
+		iface, err := r.dynIface(apiVersion, kind, ns, resource)
 		if err != nil {
 			return nil, err
 		}
@@ -266,10 +272,12 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 	})
 
 	// k8s.create — snapshot the (absent) target, then create it. The generic
-	// Restore deletes what this run created. Used by create_configmap/run_debug_pod.
+	// Restore deletes what this run created. apiVersion/kind come from the manifest;
+	// resource= is an optional kwarg for CRD plural override.
 	k8sCreate := starlark.NewBuiltin("create", func(_ *starlark.Thread, _ *starlark.Builtin, a starlark.Tuple, kw []starlark.Tuple) (starlark.Value, error) {
 		var manifest *starlark.Dict
-		if err := starlark.UnpackArgs("create", a, kw, "manifest", &manifest); err != nil {
+		var resource string
+		if err := starlark.UnpackArgs("create", a, kw, "manifest", &manifest, "resource?", &resource); err != nil {
 			return nil, err
 		}
 		obj, err := starToGo(manifest)
@@ -279,13 +287,14 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		m, _ := obj.(map[string]any)
 		u := &unstructured.Unstructured{Object: m}
 		kind, name, ns := u.GetKind(), u.GetName(), u.GetNamespace()
+		apiVersion := u.GetAPIVersion()
 		if kind == "" || name == "" {
 			return nil, fmt.Errorf("create: manifest needs kind + metadata.name")
 		}
-		if _, err := r.captureObject(ctx, log, kind, ns, name); err != nil {
+		if _, err := r.captureObject(ctx, log, apiVersion, kind, ns, name, resource); err != nil {
 			return nil, fmt.Errorf("create: cannot snapshot %s/%s (strict mode): %w", kind, name, err)
 		}
-		iface, err := r.dynIface(kind, ns)
+		iface, err := r.dynIface(apiVersion, kind, ns, resource)
 		if err != nil {
 			return nil, err
 		}
@@ -420,16 +429,17 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		return starlark.NewList(out), nil
 	})
 
-	// k8s.set_field — the GENERIC multi-field variant. Captures several exact
+	// k8s.set_fields — the GENERIC multi-field variant. Captures several exact
 	// paths (one field-scoped snapshot) and applies them in ONE merge patch, so a
 	// mutually-exclusive pair (PDB minAvailable/maxUnavailable) is set atomically
 	// and the field-scoped restore removes an added key / restores a changed one
 	// without ever passing through an invalid intermediate. entries is a list of
 	// (path_list, value) tuples; value=None removes the key.
+	// api_version= and resource= are optional for CRDs.
 	k8sSetFields := starlark.NewBuiltin("set_fields", func(_ *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-		var ns, kind, name string
+		var ns, kind, name, apiVersion, resource string
 		var entries *starlark.List
-		if err := starlark.UnpackArgs("set_fields", args, kwargs, "namespace", &ns, "kind", &kind, "name", &name, "entries", &entries); err != nil {
+		if err := starlark.UnpackArgs("set_fields", args, kwargs, "namespace", &ns, "kind", &kind, "name", &name, "entries", &entries, "api_version?", &apiVersion, "resource?", &resource); err != nil {
 			return nil, err
 		}
 		paths := make([][]string, 0, entries.Len())
@@ -461,14 +471,14 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 			paths = append(paths, segs)
 			vals = append(vals, gv)
 		}
-		if _, err := r.captureFields(ctx, log, kind, ns, name, paths); err != nil {
+		if _, err := r.captureFields(ctx, log, apiVersion, kind, ns, name, resource, paths); err != nil {
 			return nil, fmt.Errorf("set_fields: cannot snapshot %v (strict mode): %w", paths, err)
 		}
 		patch := map[string]any{}
 		for i, segs := range paths {
 			setNested(patch, segs, vals[i])
 		}
-		if err := r.applyMergePatch(ctx, kind, ns, name, patch); err != nil {
+		if err := r.applyMergePatch(ctx, apiVersion, kind, ns, name, resource, patch); err != nil {
 			return nil, err
 		}
 		rep(fmt.Sprintf("set %d field(s) on %s/%s", len(paths), kind, name))
@@ -488,10 +498,11 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		"list":            k8sList,
 		"pods":            k8sPods,
 		"events":          k8sEvents,
-		// host-capability primitives (script_host.go): exec/logs/evict/node_pods/
-		// pod_status. Generic + reusable like patch/scale — the per-kind logic stays
-		// in the .star, so shown == executed with no native plan() behind it.
+		// host-capability primitives (script_host.go): exec/exec_raw/logs/evict/
+		// node_pods/pod_status. Generic + reusable like patch/scale — the per-kind
+		// logic stays in the .star, so shown == executed with no native plan() behind.
 		"exec":       r.hostExec(ctx, rep),
+		"exec_raw":   r.hostExecRaw(ctx, rep),
 		"logs":       r.hostLogs(ctx),
 		"evict":      r.hostEvict(ctx, rep),
 		"node_pods":  r.hostNodePods(ctx),

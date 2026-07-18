@@ -20,8 +20,8 @@ func TestAllStdlibScriptsParse(t *testing.T) {
 			t.Fatalf("stdlib/%s.star does not parse: %v", kind, err)
 		}
 	}
-	// the reversible kinds we shipped scripts for must be present
-	for _, k := range []string{"scale", "cordon", "uncordon", "hpa_set", "annotate", "set_label", "patch_configmap", "rollout_pause", "cronjob_suspend", "statefulset_partition"} {
+	// the six generic action kinds must be present
+	for _, k := range []string{"k8s_get", "k8s_list", "k8s_patch", "k8s_apply", "k8s_delete", "k8s_exec"} {
 		if _, ok := stdlibScripts[k]; !ok {
 			t.Fatalf("missing stdlib script for %q", k)
 		}
@@ -35,18 +35,27 @@ func TestBuiltinDispatchViaFlag(t *testing.T) {
 	defer cp.Close()
 	r := snapExecRunner(t, cp.URL, node("worker-7", false))
 
-	// a cordon action (no per-kind Go — just the embedded script)
-	a := Action{ID: "act-cordon", Kind: "cordon", TargetNamespace: "-", TargetKind: "Node", TargetName: "worker-7"}
+	// k8s_patch: cordon the node via the generic patch kind
+	patchJSON := `{"spec":{"unschedulable":true}}`
+	params, _ := json.Marshal(map[string]any{"patch": patchJSON})
+	a := Action{
+		ID:              "act-patch",
+		Kind:            "k8s_patch",
+		TargetNamespace: "-",
+		TargetKind:      "Node",
+		TargetName:      "worker-7",
+		Params:          params,
+	}
 	r.execute(context.Background(), a)
 
-	// the node was cordoned by the embedded script
+	// the node was cordoned by the embedded k8s_patch script
 	u, err := r.dyn.Resource(nodeGVR).Get(context.Background(), "worker-7", metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	un, _, _ := nestedBool(u.Object, "spec", "unschedulable")
 	if !un {
-		t.Fatal("dispatched cordon script did not cordon the node")
+		t.Fatal("dispatched k8s_patch script did not cordon the node")
 	}
 
 	// and its snapshot was reported DURABLY (so a later revert can undo it)
@@ -59,7 +68,7 @@ func TestBuiltinDispatchViaFlag(t *testing.T) {
 		}
 	}
 	if !durable {
-		t.Fatal("cordon dispatch did not report a durable snapshot")
+		t.Fatal("k8s_patch dispatch did not report a durable snapshot")
 	}
 
 	// prove the durable snapshot restores the node (uncordons it)
@@ -67,7 +76,7 @@ func TestBuiltinDispatchViaFlag(t *testing.T) {
 	u2, _ := r.dyn.Resource(nodeGVR).Get(context.Background(), "worker-7", metav1.GetOptions{})
 	un2, _, _ := nestedBool(u2.Object, "spec", "unschedulable")
 	if un2 {
-		t.Fatal("restore from the dispatched cordon's durable snapshot did not uncordon")
+		t.Fatal("restore from the dispatched k8s_patch durable snapshot did not uncordon")
 	}
 }
 

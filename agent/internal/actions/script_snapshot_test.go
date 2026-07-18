@@ -106,10 +106,10 @@ func TestCaptureOnAddFiresPerCapture(t *testing.T) {
 	var reported []Capture
 	log.onAdd = func(c Capture) { reported = append(reported, c) } // execute() would POST each to the CP
 
-	if _, err := r.captureObject(ctx, log, "Deployment", "shop", "api"); err != nil {
+	if _, err := r.captureObject(ctx, log, "", "Deployment", "shop", "api", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.captureFields(ctx, log, "ConfigMap", "shop", "cfg", [][]string{{"data", "k"}}); err != nil {
+	if _, err := r.captureFields(ctx, log, "", "ConfigMap", "shop", "cfg", "", [][]string{{"data", "k"}}); err != nil {
 		t.Fatal(err)
 	}
 	if len(reported) != 2 {
@@ -117,6 +117,71 @@ func TestCaptureOnAddFiresPerCapture(t *testing.T) {
 	}
 	if reported[0].Seq != 0 || reported[0].Kind != "Deployment" || reported[1].Seq != 1 || reported[1].Scope != "field" {
 		t.Fatalf("captures reported out of order/shape: %+v", reported)
+	}
+}
+
+// Captures with APIVersion+Resource set restore via rawGVR; old captures (no
+// apiVersion) still resolve via kindGVR — backward compatibility is proven.
+func TestCaptureGenericGVRResolution(t *testing.T) {
+	r := snapRunner(t, dep("shop", "api", 2), cm("shop", "cfg", map[string]any{"k": "v0"}))
+	ctx := context.Background()
+
+	// Case 1: capture with explicit apiVersion+resource (generic path — simulates a CRD
+	// captured with the new generic fields). We reuse Deployment here since the fake
+	// client only has the statically registered GVRs; what matters is that the
+	// Capture carries APIVersion+Resource and Restore resolves it via rawGVR.
+	logGeneric := newCaptureLog()
+	c, err := r.captureObject(ctx, logGeneric, "apps/v1", "Deployment", "shop", "api", "deployments")
+	if err != nil {
+		t.Fatalf("captureObject with apiVersion/resource: %v", err)
+	}
+	if c == nil || !c.Existed {
+		t.Fatal("expected existing object")
+	}
+	if c.APIVersion != "apps/v1" || c.Resource != "deployments" {
+		t.Fatalf("capture missing apiVersion/resource: %+v", c)
+	}
+	// mutate, then restore via the generic capture
+	mergePatch(t, r, depGVR, "shop", "api", map[string]any{"spec": map[string]any{"replicas": int64(9)}})
+	for _, x := range r.Restore(ctx, logGeneric.List()) {
+		if !x.OK {
+			t.Fatalf("generic restore failed: %s", x.Detail)
+		}
+	}
+	if getDepReplicas(t, r, "shop", "api") != 2 {
+		t.Fatal("deployment not restored via generic rawGVR capture")
+	}
+
+	// Case 2: old-style capture (no apiVersion/resource) still resolves via kindGVR.
+	logOld := newCaptureLog()
+	blob, _ := json.Marshal([]Capture{{
+		Seq:       0,
+		Kind:      "ConfigMap",
+		Namespace: "shop",
+		Name:      "cfg",
+		Existed:   true,
+		Scope:     "object",
+		// deliberately omit APIVersion and Resource (backward-compat path)
+		Object: map[string]any{
+			"apiVersion": "v1", "kind": "ConfigMap",
+			"metadata": map[string]any{"namespace": "shop", "name": "cfg"},
+			"data":     map[string]any{"k": "v0"},
+		},
+	}})
+	var oldCaptures []Capture
+	if err := json.Unmarshal(blob, &oldCaptures); err != nil {
+		t.Fatalf("unmarshal old capture: %v", err)
+	}
+	// mutate the cm, then restore from the old-style capture
+	mergePatch(t, r, cmGVR, "shop", "cfg", map[string]any{"data": map[string]any{"k": "changed"}})
+	for _, x := range r.Restore(ctx, oldCaptures) {
+		if !x.OK {
+			t.Fatalf("old-style restore failed: %s", x.Detail)
+		}
+	}
+	_ = logOld // unused, restore is driven by the pre-built slice above
+	if getCMData(t, r, "shop", "cfg")["k"] != "v0" {
+		t.Fatal("configmap not restored from old-style (no apiVersion) capture")
 	}
 }
 

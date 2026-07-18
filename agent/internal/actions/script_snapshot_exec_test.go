@@ -88,7 +88,7 @@ fail("boom")
 		t.Fatalf("durable Secret capture not encrypted: %+v", caps[0])
 	}
 	// tamper the live object, then restore from the encrypted durable list
-	_ = r.applyMergePatch(context.Background(), "Secret", "shop", "creds", map[string]any{"data": map[string]any{"token": "tampered"}})
+	_ = r.applyMergePatch(context.Background(), "", "Secret", "shop", "creds", "", map[string]any{"data": map[string]any{"token": "tampered"}})
 	for _, x := range r.Restore(context.Background(), caps) {
 		if !x.OK {
 			t.Fatalf("restore from encrypted snapshot failed: %s", x.Detail)

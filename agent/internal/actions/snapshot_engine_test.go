@@ -95,7 +95,7 @@ func TestFieldScopedRestoreLeavesSiblingsUntouched(t *testing.T) {
 	log := newCaptureLog()
 
 	// capture only data.timeout, then mutate it
-	if _, err := r.captureFields(ctx, log, "ConfigMap", "shop", "cfg", [][]string{{"data", "timeout"}}); err != nil {
+	if _, err := r.captureFields(ctx, log, "", "ConfigMap", "shop", "cfg", "", [][]string{{"data", "timeout"}}); err != nil {
 		t.Fatal(err)
 	}
 	mergePatch(t, r, cmGVR, "shop", "cfg", map[string]any{"data": map[string]any{"timeout": "5"}})
@@ -118,7 +118,7 @@ func TestFieldScopedRestoreRemovesAddedKey(t *testing.T) {
 	r := snapRunner(t, cm("shop", "cfg", map[string]any{"a": "1"}))
 	ctx := context.Background()
 	log := newCaptureLog()
-	if _, err := r.captureFields(ctx, log, "ConfigMap", "shop", "cfg", [][]string{{"data", "new"}}); err != nil {
+	if _, err := r.captureFields(ctx, log, "", "ConfigMap", "shop", "cfg", "", [][]string{{"data", "new"}}); err != nil {
 		t.Fatal(err)
 	}
 	mergePatch(t, r, cmGVR, "shop", "cfg", map[string]any{"data": map[string]any{"new": "x"}})
@@ -137,7 +137,7 @@ func TestObjectRestore(t *testing.T) {
 	r := snapRunner(t, dep("shop", "api", 3))
 	ctx := context.Background()
 	log := newCaptureLog()
-	if _, err := r.captureObject(ctx, log, "Deployment", "shop", "api"); err != nil {
+	if _, err := r.captureObject(ctx, log, "", "Deployment", "shop", "api", ""); err != nil {
 		t.Fatal(err)
 	}
 	mergePatch(t, r, depGVR, "shop", "api", map[string]any{"spec": map[string]any{"replicas": int64(1)}})
@@ -159,10 +159,10 @@ func TestMultiMutationReverseRestore(t *testing.T) {
 	ctx := context.Background()
 	log := newCaptureLog()
 	// mutation 1: scale
-	r.captureObject(ctx, log, "Deployment", "shop", "api")
+	r.captureObject(ctx, log, "", "Deployment", "shop", "api", "")
 	mergePatch(t, r, depGVR, "shop", "api", map[string]any{"spec": map[string]any{"replicas": int64(0)}})
 	// mutation 2: configmap key
-	r.captureFields(ctx, log, "ConfigMap", "shop", "cfg", [][]string{{"data", "k"}})
+	r.captureFields(ctx, log, "", "ConfigMap", "shop", "cfg", "", [][]string{{"data", "k"}})
 	mergePatch(t, r, cmGVR, "shop", "cfg", map[string]any{"data": map[string]any{"k": "changed"}})
 
 	seqs := log.List()
@@ -183,7 +183,7 @@ func TestDeleteIfCreated(t *testing.T) {
 	r := snapRunner(t) // empty cluster
 	ctx := context.Background()
 	log := newCaptureLog()
-	c, err := r.captureObject(ctx, log, "ConfigMap", "shop", "fresh")
+	c, err := r.captureObject(ctx, log, "", "ConfigMap", "shop", "fresh", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,8 +208,8 @@ func TestCaptureLogSerializable(t *testing.T) {
 	r := snapRunner(t, dep("shop", "api", 2), cm("shop", "cfg", map[string]any{"k": "v0"}))
 	ctx := context.Background()
 	log := newCaptureLog()
-	r.captureObject(ctx, log, "Deployment", "shop", "api")
-	r.captureFields(ctx, log, "ConfigMap", "shop", "cfg", [][]string{{"data", "k"}})
+	r.captureObject(ctx, log, "", "Deployment", "shop", "api", "")
+	r.captureFields(ctx, log, "", "ConfigMap", "shop", "cfg", "", [][]string{{"data", "k"}})
 	mergePatch(t, r, depGVR, "shop", "api", map[string]any{"spec": map[string]any{"replicas": int64(9)}})
 	mergePatch(t, r, cmGVR, "shop", "cfg", map[string]any{"data": map[string]any{"k": "v1"}})
 

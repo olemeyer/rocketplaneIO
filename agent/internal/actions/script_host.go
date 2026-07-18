@@ -124,6 +124,85 @@ func (r *Runner) hostExec(ctx context.Context, rep func(string)) *starlark.Built
 	})
 }
 
+// hostExecRaw backs k8s.exec_raw — run an ARBITRARY command in a container with
+// no argv whitelist and no shell-metacharacter check. The caller (a builtin
+// script trusted by the control plane) is responsible for command safety.
+// Still: no TTY, output capped at 64 KB, timeout clamped 1..300 s (default 30).
+func (r *Runner) hostExecRaw(ctx context.Context, rep func(string)) *starlark.Builtin {
+	return starlark.NewBuiltin("exec_raw", func(_ *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+		var ns, name, container string
+		var command *starlark.List
+		timeout := 30
+		if err := starlark.UnpackArgs("exec_raw", args, kwargs, "namespace", &ns, "name", &name, "command", &command, "container?", &container, "timeout?", &timeout); err != nil {
+			return nil, err
+		}
+		if r.restCfg == nil {
+			return nil, fmt.Errorf("exec_raw unavailable (no rest config)")
+		}
+		if timeout < 1 {
+			timeout = 1
+		}
+		if timeout > 300 {
+			timeout = 300
+		}
+		argv := make([]string, 0, command.Len())
+		for i := 0; i < command.Len(); i++ {
+			s, ok := command.Index(i).(starlark.String)
+			if !ok {
+				return nil, fmt.Errorf("exec_raw: command must be a list of strings")
+			}
+			argv = append(argv, string(s))
+		}
+		if len(argv) == 0 {
+			return nil, fmt.Errorf("exec_raw: command must not be empty")
+		}
+		pod, err := r.clientset.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return nil, err
+		}
+		if container == "" && len(pod.Spec.Containers) > 0 {
+			container = pod.Spec.Containers[0].Name
+		}
+		rep(fmt.Sprintf("exec_raw %s (container %s): %s", name, container, strings.Join(argv, " ")))
+
+		execReq := r.clientset.CoreV1().RESTClient().Post().
+			Resource("pods").Namespace(ns).Name(name).
+			SubResource("exec").
+			VersionedParams(&corev1.PodExecOptions{
+				Container: container,
+				Command:   argv,
+				Stdout:    true,
+				Stderr:    true,
+			}, scheme.ParameterCodec)
+		executor, err := remotecommand.NewSPDYExecutor(r.restCfg, "POST", execReq.URL())
+		if err != nil {
+			return nil, err
+		}
+		ectx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+		defer cancel()
+		const rawOutputCap = 64 * 1024
+		var stdout, stderr bytes.Buffer
+		streamErr := executor.StreamWithContext(ectx, remotecommand.StreamOptions{
+			Stdout: limitWriter{&stdout, rawOutputCap},
+			Stderr: limitWriter{&stderr, 16 * 1024},
+		})
+		out := strings.TrimRight(stdout.String(), "\n")
+		if stderr.Len() > 0 {
+			out += "\n[stderr] " + strings.TrimRight(stderr.String(), "\n")
+		}
+		if streamErr != nil && out == "" {
+			return nil, streamErr
+		}
+		if streamErr != nil {
+			out += "\n[exit] " + streamErr.Error()
+		}
+		if out == "" {
+			out = "(no output)"
+		}
+		return starlark.String(out), nil
+	})
+}
+
 // hostLogs backs k8s.logs — stream a pod's log (optionally the previous, crashed
 // container) straight from the kubelet, independent of the log pipeline. Capped.
 func (r *Runner) hostLogs(ctx context.Context) *starlark.Builtin {

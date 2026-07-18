@@ -10,11 +10,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// stdlib_parity_test.go — Phase 3 proof: the built-in kinds, expressed as
-// snapshot-aware scripts over the GENERIC k8s.patch primitive, restore to the
-// EXACT before-state (which is what revert.go's per-kind inverse achieves). One
-// primitive + one generic restore replaces ~40 hand-written inverses. Each test
-// covers a distinct restore shape.
+// stdlib_parity_test.go — proves the snapshot substrate restores to the exact
+// before-state when driven by the generic k8s.patch/set_field/delete/create
+// primitives. Each test covers a distinct restore shape.
 
 func node(name string, unschedulable bool) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
@@ -47,8 +45,8 @@ func getField(t *testing.T, r *Runner, gvr schema.GroupVersionResource, ns, name
 	return v
 }
 
-// runParity runs a built-in-style script (snapshot + generic patch) then
-// restores, asserting the whole run round-trips to the before-state.
+// runParity runs a script (snapshot + generic patch) then restores, asserting
+// the whole run round-trips to the before-state.
 func runParity(t *testing.T, r *Runner, src string) {
 	t.Helper()
 	log, err := r.runCapturedScript(context.Background(), src, nil, nil)
@@ -122,8 +120,7 @@ func TestParitySetImage(t *testing.T) {
 	}
 }
 
-// delete_pod/delete_configmap/delete_job shape: k8s.delete snapshots the whole
-// object then deletes; the generic restore RECREATES it from the capture.
+// k8s.delete snapshots the whole object then deletes; the generic restore RECREATES it.
 func TestParityDeleteRecreate(t *testing.T) {
 	r := snapRunner(t, cm("shop", "cfg", map[string]any{"mode": "prod", "keep": "x"}))
 	runParity(t, r, `k8s.delete("shop", "ConfigMap", "cfg")`)
@@ -133,14 +130,23 @@ func TestParityDeleteRecreate(t *testing.T) {
 	}
 }
 
-// create_configmap shape: k8s.create snapshots the ABSENT target then creates;
-// the generic restore DELETES what the run created.
+// k8s.create snapshots the ABSENT target then creates; the generic restore DELETES it.
 func TestParityCreateDelete(t *testing.T) {
 	r := snapRunner(t)
 	runParity(t, r, `k8s.create({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "new", "namespace": "shop"}, "data": {"k": "v"}})`)
 	_, err := r.dyn.Resource(cmGVR).Namespace("shop").Get(context.Background(), "new", metav1.GetOptions{})
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("created configmap not deleted on restore: err=%v", err)
+	}
+}
+
+// k8s.patch with explicit api_version= and resource= (generic CRD path). Uses a
+// well-known GVR backed by the fake client to prove the kwarg wiring works.
+func TestParityPatchWithExplicitGVR(t *testing.T) {
+	r := snapRunner(t, dep("shop", "api", 2))
+	runParity(t, r, `k8s.patch("shop", "Deployment", "api", {"spec": {"replicas": 5}}, api_version="apps/v1", resource="deployments")`)
+	if v := getField(t, r, depGVR, "shop", "api", "spec", "replicas"); toI(v) != 2 {
+		t.Fatalf("replicas not restored via explicit GVR kwarg: %v", v)
 	}
 }
 
