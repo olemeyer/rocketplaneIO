@@ -1,8 +1,8 @@
 <div align="center">
 
-<h2>An AI SRE for your Kubernetes cluster —<br>that can actually fix things, safely.</h2>
+<h2>Give your AI agent kubectl —<br>inside a transaction that can always roll back.</h2>
 
-<p><b>Self-hosted · Apache-2.0 · bring your own LLM · air-gapped capable</b></p>
+<p><b>Self-hosted · Apache-2.0 · works with Claude Code, Cursor & any MCP client · air-gapped capable</b></p>
 
 ![Status](https://img.shields.io/badge/status-alpha-e5484d)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -15,7 +15,7 @@
 <br>
 
 <a href=".github/assets/demo.mp4">
-  <img alt="rocketplaneIO walkthrough: connect a cluster and the live service map draws itself in, then the Copilot investigates a checkout latency spike across logs, traces and metrics and names the root cause" src=".github/assets/demo.gif" width="100%">
+  <img alt="rocketplaneIO walkthrough: connect a cluster and the live service map draws itself in, then an external AI agent opens a transaction over MCP, acts on the cluster, a human approves the hard part — and one click rolls everything back" src=".github/assets/demo.gif" width="100%">
 </a>
 
 <br>
@@ -25,31 +25,34 @@
 
 ## Three things you don't get anywhere else
 
-### 1 · An AI SRE with a safety catalog — not an AI with kubectl
+### 1 · Transactions for AI agents — full freedom, zero trust required
 
-The Copilot investigates on its own: eBPF traces, logs, PromQL metrics, the live service map and
-the **full Kubernetes inventory** (Services, Ingress, ConfigMaps, policies — everything). But it
-can only change the cluster through **~30 named, reversible action pipelines**. No shell, no
-`kubectl`, no YAML it could hallucinate.
+rocketplaneIO doesn't ship its own AI. It is the **MCP interface** your existing agent (Claude
+Code, Claude Desktop, Cursor — anything that speaks MCP) connects to. The agent gets
+kubectl-shaped primitives — `k8s_get` / `k8s_list` / `k8s_patch` / `k8s_apply` / `k8s_delete` /
+`k8s_exec` / Starlark workflows — on **any resource, CRDs included**. It also gets the full
+observability surface: eBPF traces, logs, PromQL metrics, the live service map.
 
-Every action is risk-graded — and *you* set the approval rule per level:
+The catch: **nothing mutates outside a transaction.** `begin_transaction` first — then every
+change is captured durably *before* it commits. `commit` keeps it. `cancel` — or the transaction's
+deadline expiring because the agent died mid-surgery — restores every before-state in reverse
+order. The whole session is one auditable timeline: every read, every mutation, every approval.
 
-| Level | Examples | Default approval |
+Each operation is risk-classified by rocketplaneIO, not by the model:
+
+| Level | Examples | Default policy |
 |---|---|---|
-| ◎ read-only | debug bundle, rollout history, drain preview | runs automatically |
-| ↺ reversible | scale up, restart, set image, config edits | one click |
-| ◇ disruptive | evict pod, rollout undo, cleanup | one click |
-| △ destructive | drain, **scale-to-0**, NoExecute taint | **type the target's name to arm** |
+| ◎ read | `k8s_get`, `k8s_list`, logs, traces, PromQL | runs immediately, no transaction needed |
+| ↺ reversible | `k8s_patch`, `k8s_apply` (snapshot-backed) | runs inside the transaction |
+| ◇ disruptive | `k8s_delete` on Pods/Jobs | **human approves in the UI** |
+| △ destructive | any other delete, `k8s_exec`, workflows, **scale-to-0** | **human approves in the UI** |
 
-Risk is parameter-aware (`scale replicas=3` is reversible; `replicas=0` is destructive), scope is
-enforced server-side (a namespace-scoped session cannot touch nodes or other namespaces), and
-every level can be set to `auto`, `click`, `confirm` or `off`.
+Classification is parameter-aware (`spec.replicas: 3` is reversible; `: 0` is destructive) and
+fail-closed — anything unknown lands in the strictest gate. The approval thresholds are org
+policy, and approvals are session-only: **an API token can never approve its own proposals.**
 
-**The model proposes. Deterministic pipelines execute, verify at pod level, and roll back.**
-The LLM never touches the cluster directly.
-
-Bring any Anthropic- or OpenAI-compatible model — including a fully local, air-gapped one. Your
-telemetry never leaves your infrastructure either way.
+**The agent proposes and acts. rocketplaneIO classifies, gates, snapshots, audits — and can
+always roll back.**
 
 ### 2 · Traces for services you never instrumented
 
@@ -65,15 +68,17 @@ An ERROR log line is two clicks away from this view. PromQL runs on the real Pro
 
 ### 3 · Every change proves itself — or undoes itself
 
-Actions aren't fire-and-forget `kubectl` calls. Each one is a pipeline —
-**trigger → observe → verify** — that only reports success when the cluster actually converged:
-old pods gone, new pods Ready, stable. Cancel, timeout or a failed verify triggers automatic
-rollback from a snapshot taken *before* the mutation.
+Mutations aren't fire-and-forget `kubectl` calls. Every operation runs over a snapshot substrate
+that captures the **minimal restorable before-state the instant a change commits** — durably, on
+the control plane, so even an agent crash mid-mutation stays fully restorable. The transaction is
+the rollback unit: cancel it, let it expire, or hit **Revert** on a committed one days later — one
+synthetic restore run replays every capture in reverse (LIFO), CRDs included.
 
-<img alt="The Runs audit trail: every execution as an expandable row with its full pipeline, and a one-click revert" src=".github/assets/shot-runs.png" width="100%">
-<div align="center"><sub><b>Runs</b> — the audit trail. Who ran what, the full step timeline, and
-<b>↺ revert</b>: one click re-applies the exact state captured before the change. Cancel always
-terminates — a reaper finalizes anything a dead agent leaves behind, and force-cancel never waits.</sub></div>
+<img alt="A transaction timeline: every tool call, the parked approval, the human decision, and the rollback — one auditable spine" src=".github/assets/shot-transactions.png" width="100%">
+<div align="center"><sub><b>Transactions</b> — the audit trail. What the agent read, what it
+changed, who approved what, and <b>↺ revert</b> at run- or transaction-level. Cancel always
+terminates — a reaper finalizes anything a dead agent leaves behind and drives the rollback to
+its end.</sub></div>
 
 ## Quick start
 
@@ -107,11 +112,20 @@ touching a line of your code.
 > Local minikube note: your cluster reaches the control plane at `http://host.minikube.internal:8090`,
 > not `localhost` — set `RP_AGENT_CONTROLPLANE_URL` to that in `.env` before connecting.
 
-**3 — turn on the Copilot**
+**3 — connect your AI agent**
 
-Open it from the top bar and connect any Anthropic- or OpenAI-compatible provider (including a
-local one). The key stays on your instance; requests go straight from your control plane to the
-provider you chose.
+Create an API token under **Settings → API keys** (role `admin` for mutations), then:
+
+```bash
+claude mcp add --transport http rocketplaneio \
+  http://localhost:8090/mcp/orgs/<org>/clusters/<cluster> \
+  --header "Authorization: Bearer rp_..."
+```
+
+The **Settings → MCP** tab generates this snippet (and the `.mcp.json` / Cursor variants) with
+your real IDs filled in. From that moment your agent can investigate freely — and every change it
+wants to make runs through a transaction you can watch, gate and roll back live under
+**Transactions**.
 
 <sub>Images ship as pinned releases (see <code>RP_VERSION</code> in <code>.env</code>);
 <code>edge</code> tracks <code>main</code> for the latest unreleased changes. A platform Helm
@@ -132,16 +146,20 @@ The section every platform team reads first:
   reverse proxy (or the platform Helm chart's ingress) for anything past `localhost`. The OTLP
   ingest ports `4317`/`4318` are unauthenticated by design; keep them on a trusted network
   (in-cluster or behind the proxy), not on the public internet.
-- **Enumerated RBAC, two blocks** ([`deploy/install.yaml`](deploy/install.yaml)): *observe* is
-  read-only; *act* holds exactly the write verbs the action catalog needs. Delete the act block
-  (or set `rbac.actions=false` in Helm) for a strictly observe-only agent. No wildcards, no
-  cluster-admin.
+- **RBAC, two blocks** ([`deploy/install.yaml`](deploy/install.yaml)): *observe* is enumerated
+  read-only; *act* is deliberately broad — the generic operation set works on any kind, CRDs
+  included. The guardrails are architectural, not a resource list: **no mutation outside a
+  transaction, risk classification, human approval for hard operations, durable pre-mutation
+  snapshots, LIFO rollback, full audit.** Delete the act block (or set `rbac.actions=false` in
+  Helm) for a strictly observe-only agent.
 - **Secrets:** the inventory shows names, types and key counts — never values. That restraint is
   enforced in agent code; if you'd rather enforce it with RBAC too, delete the one `secrets` rule
   and the agent degrades gracefully.
-- **The LLM is caged.** It reads through the same authenticated APIs you use, and mutates only
-  via the whitelisted, validated, risk-gated action catalog. Every proposal, approval and result
-  lands in the audit trail.
+- **The agent is fenced, not trusted.** It authenticates with an org-scoped API token against
+  the same RBAC you use; mutations demand an admin token AND an open transaction; disruptive and
+  destructive operations park until a human approves them in the UI — and a token can never
+  approve its own proposals. Every tool call, decision and result lands in the transaction
+  timeline.
 - **eBPF:** Beyla runs as a privileged DaemonSet (kernel ≥ 5.8 with BTF). The capture layer is
   upstream OpenTelemetry tooling — rocketplaneIO is the investigation-and-action loop on top.
 - **Footprint** (measured on single-node minikube under continuous synthetic load — indicative,
@@ -153,7 +171,7 @@ The section every platform team reads first:
 ## What else is in the box
 
 <details>
-<summary><b>Live service map · alerts with auto-remediation · PromQL on ClickHouse · full K8s inventory · Starlark workflows · more screens</b></summary>
+<summary><b>Live service map · alerts with auto-remediation · PromQL on ClickHouse · full K8s inventory · approval gate · more screens</b></summary>
 <br>
 
 <img alt="Live service map with automatic technology detection" src=".github/assets/shot-servicemap.png" width="100%">
@@ -178,15 +196,15 @@ codemirror-promql. Custom metrics are named PromQL expressions, validated at sav
 
 <img alt="Full Kubernetes inventory, tabbed by resource kind" src=".github/assets/shot-resources.png" width="100%">
 <sub><b>Resources</b> — the complete cluster inventory (Services, Ingress, ConfigMaps, batch,
-policies, volumes, quotas), synced every 60s. The same data the Copilot reads via
-<code>list_resources</code>.</sub>
+policies, volumes, quotas), synced every 60s. The same data an agent reads via
+<code>k8s_list</code>.</sub>
 
 <br><br>
 
-<img alt="Actions catalog, grouped by category with risk levels" src=".github/assets/shot-actions.png" width="100%">
-<sub><b>Actions</b> — the catalog, searchable and risk-graded. Every built-in is also readable,
-forkable <b>Starlark</b>: automate what an operator does by hand, with typed parameters that
-render as forms. Deterministic, compiled at save.</sub>
+<img alt="A parked destructive operation waiting for human approval inside a transaction" src=".github/assets/shot-approval.png" width="100%">
+<sub><b>Approvals</b> — a destructive operation proposed by an external agent parks as
+<i>awaiting approval</i>; the agent waits, you decide. Approve releases it to the cluster,
+reject cancels it — either way it's on the timeline forever.</sub>
 
 <br><br>
 
@@ -197,8 +215,8 @@ trace.</sub>
 <br><br>
 
 <img alt="Node infrastructure with kubelet stats" src=".github/assets/shot-nodes.png" width="100%">
-<sub><b>Nodes</b> — kubelet-level stats; cordon/drain are verified actions, with a read-only
-<code>drain preview</code> that shows the blast radius first.</sub>
+<sub><b>Nodes</b> — kubelet-level stats for every node: CPU, memory, disk pressure and
+schedulability at a glance.</sub>
 
 <br><br>
 
@@ -214,30 +232,30 @@ anomalies speak.</sub>
                         │ HTTPS                                          │ OTLP
                         ▼                                                ▼
  CONTROL PLANE  control plane (Go, single binary)                OTel collector → ClickHouse
-                API · auth/orgs · alert evaluator · action queue · Copilot loop
+                MCP endpoint (Streamable HTTP) · transactions + approval gate
+                API · auth/orgs · alert evaluator · operation queue · rollback reaper
                 embedded Prometheus engine (PromQL → ClickHouse) · SSE broker
                         │
- DATA           PostgreSQL (state, rules, runs, chats)  ·  ClickHouse (logs, traces, metrics)
- ACCESS         web (Next.js) — service map · copilot · logs · traces · metrics · alerts · actions · runs
+ DATA           PostgreSQL (state, rules, transactions, runs)  ·  ClickHouse (logs, traces, metrics)
+ ACCESS         web (Next.js) — service map · transactions · logs · traces · metrics · alerts · incidents
 ```
 
-The Copilot is a tool-calling loop inside the control plane: 16 read tools (logs, traces —
-including single-trace waterfalls and trace↔log correlation — PromQL, service map, inventory,
-debug bundles) plus exactly one mutating tool, `run_safe_action`, which pauses the stream for
-human approval. The same toolbox is exposed as an [MCP server](services/controlplane/cmd/mcp),
-so Claude Code or Cursor can operate your cluster through the identical guardrails.
+The MCP endpoint lives in the control plane (`/mcp/orgs/{org}/clusters/{cluster}`, Streamable
+HTTP, stateless — no sticky sessions across replicas). Read tools cover logs, traces (incl.
+single-trace waterfalls and trace↔log correlation), PromQL, the service map and any Kubernetes
+object; the mutating tools are the transaction-gated primitives above. Auth is a bearer API
+token; every tool call reuses the exact HTTP handlers, validation and RBAC the browser uses.
 
 <details>
 <summary><b>Monorepo layout</b></summary>
 
 ```
-├── agent/                      # in-cluster agent (Go): sync, logs, inventory, action pipelines + revert snapshots
-├── services/controlplane/      # control plane (Go): API, auth, alerts, Copilot loop, PromQL engine
+├── agent/                      # in-cluster agent (Go): sync, logs, inventory, snapshot substrate + generic restore
+├── services/controlplane/      # control plane (Go): API, auth, alerts, MCP endpoint, PromQL engine
 │   └── internal/
-│       ├── api/                #   REST + SSE + copilot_* (loop, guardrails, approval gate)
+│       ├── api/                #   REST + SSE + mcp_* (Streamable HTTP, tools, transactions, approvals)
 │       ├── promqlx/            #   embedded Prometheus engine on ClickHouse
-│       ├── alerts/ · telemetry/ · events/ · store/ · migrations/
-│       └── ../cmd/mcp/         #   MCP server — same tools for external agents
+│       └── alerts/ · telemetry/ · events/ · store/ · migrations/
 ├── apps/web/                   # Next.js UI (RETICLE design system)
 └── deploy/                     # compose (platform + dev stores), helm chart, install.yaml, demo shop
 ```
@@ -270,11 +288,11 @@ docker build -t rocketplaneio/agent        -f agent/Dockerfile .
 
 | Works end-to-end today | On the roadmap |
 |---|---|
-| Copilot: BYO-LLM investigation → guardrailed fixes | Tagged releases + platform Helm chart |
-| eBPF traces incl. compiled Go, log→trace correlation | Hosted demo |
-| ~30 safe actions with verify, rollback and revert | Production-scale overhead benchmarks |
-| Runs audit trail, guaranteed-terminating cancel | Multi-user RBAC hardening |
-| Alerts with auto-remediation dispatch | Server-side LLM key vault |
+| MCP endpoint: transactions, classification, approval gate | Tagged releases + platform Helm chart |
+| LIFO snapshot rollback on cancel/expiry — CRDs included | Hosted demo |
+| eBPF traces incl. compiled Go, log→trace correlation | Production-scale overhead benchmarks |
+| Transaction timeline, revert at run and transaction level | Multi-user RBAC hardening |
+| Alerts with auto-remediation (audited as transactions) | Namespace-scoped transaction policies |
 | PromQL + custom metrics on ClickHouse, full K8s inventory | |
 | Published multi-arch images (`edge`) + agent install.yaml | |
 
