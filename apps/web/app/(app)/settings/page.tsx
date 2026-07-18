@@ -7,19 +7,20 @@ import { Spinner } from '@/components/ui';
 import { PageHeader } from '@/components/app/page-header';
 import { useMe } from '@/components/app/me-context';
 import {
-  changePassword, createAPIToken, createInvitation, deleteAPIToken, deleteOrg, listAPITokens,
-  listAudit, listInvitations, listMembers, removeMember, renameOrg, revokeAPIToken,
-  revokeInvitation, transferOwnership, updateMemberRole,
+  changePassword, createAPIToken, createInvitation, deleteAPIToken, deleteOrg, getAlertProviders,
+  getMCPPolicy, listAPITokens, listAudit, listClusters, listInvitations, listMembers, removeMember,
+  renameOrg, revokeAPIToken, revokeInvitation, setMCPPolicy, transferOwnership, updateMemberRole,
 } from '@/lib/api/controlplane';
-import type { APIToken, AuditEntry, Invitation, Member, OrgRole } from '@/lib/api/types';
+import type { APIToken, AlertProvider, AuditEntry, Cluster, Invitation, MCPPolicy, Member, OrgRole } from '@/lib/api/types';
 import { ApiError } from '@/lib/api/client';
+import { CopyButton } from '@/components/app/copy-box';
 
 // Settings — org-level Access Control: who is in the org (members + pending
 // invites), what happened (audit), and the org itself (rename / transfer /
 // delete). Gated by the caller's role: members read, admins manage people,
 // owners manage the org. Mirrors the control-plane RBAC exactly.
 
-type Tab = 'members' | 'api keys' | 'account' | 'audit' | 'organization';
+type Tab = 'members' | 'api keys' | 'mcp' | 'account' | 'audit' | 'organization';
 const ROLE_RANK: Record<OrgRole, number> = { owner: 3, admin: 2, member: 1 };
 
 function relTime(iso: string): string {
@@ -72,7 +73,7 @@ export default function SettingsPage() {
       </PageHeader>
 
       <div className="mt-3 -mx-4 flex shrink-0 gap-1 overflow-x-auto px-4 sm:mx-0 sm:px-0">
-        {(['members', 'api keys', 'account', 'audit', 'organization'] as Tab[]).map((t) => (
+        {(['members', 'api keys', 'mcp', 'account', 'audit', 'organization'] as Tab[]).map((t) => (
           <button
             key={t}
             type="button"
@@ -83,7 +84,7 @@ export default function SettingsPage() {
             )}
             style={tab === t ? { boxShadow: 'inset 0 0 0 1px var(--rp-line-strong)' } : undefined}
           >
-            {t}
+            {t === 'mcp' ? 'MCP' : t}
           </button>
         ))}
       </div>
@@ -92,6 +93,9 @@ export default function SettingsPage() {
         {tab === 'api keys' ? (
           // API keys work for both personal and team orgs (solo automation too).
           <ApiKeysTab orgId={currentOrg.id} isAdmin={isAdmin} />
+        ) : tab === 'mcp' ? (
+          // MCP works for personal orgs too (solo agents on your own clusters).
+          <MCPTab orgId={currentOrg.id} isAdmin={isAdmin} onGoToApiKeys={() => setTab('api keys')} />
         ) : tab === 'account' ? (
           // Account (password) is per-user, so it works regardless of org kind.
           <AccountTab />
@@ -484,6 +488,244 @@ function ApiKeysTab({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
         </div>
       )}
     </div>
+  );
+}
+
+// MCPTab — connect external AI agents (Claude Code, Cursor …) to the cluster
+// via the control plane's remote MCP endpoint, plus the org's approval policy:
+// which risk levels park for human approval, transaction TTLs and who gets
+// notified when an agent's action waits for a decision.
+function MCPTab({ orgId, isAdmin, onGoToApiKeys }: { orgId: string; isAdmin: boolean; onGoToApiKeys: () => void }) {
+  const [origin, setOrigin] = useState('http://localhost:8090');
+  const [clusters, setClusters] = useState<Cluster[]>([]);
+  const [clusterId, setClusterId] = useState('');
+
+  // Best guess for the control-plane origin: same host as the web UI on the
+  // default CP port. The user can edit it — the snippets below follow along.
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setOrigin(`${window.location.protocol}//${window.location.hostname}:8090`);
+    }
+  }, []);
+  useEffect(() => {
+    listClusters(orgId).then((cs) => {
+      setClusters(cs);
+      setClusterId((cur) => cur || cs[0]?.id || '');
+    }).catch(() => {});
+  }, [orgId]);
+
+  const endpoint = `${origin.replace(/\/+$/, '')}/mcp/orgs/${orgId}/clusters/${clusterId || '<cluster-id>'}`;
+  const cliSnippet = `claude mcp add --transport http rocketplaneio ${endpoint} --header "Authorization: Bearer rp_…"`;
+  const jsonSnippet = JSON.stringify(
+    { mcpServers: { rocketplaneio: { type: 'http', url: endpoint, headers: { Authorization: 'Bearer rp_…' } } } },
+    null,
+    2,
+  );
+
+  return (
+    <div className="max-w-[720px] space-y-4">
+      {/* what this is */}
+      <section className="rounded-skin border border-line bg-raised p-3" style={{ boxShadow: 'var(--rp-rim)' }}>
+        <p className="rp-micro !text-[10px] mb-1.5">external ai agents (mcp)</p>
+        <p className="font-mono text-[10.5px] leading-relaxed text-muted">
+          External agents connect to this org over the control plane&apos;s remote MCP endpoint.
+          Reads work immediately; <span className="text-ink">any mutation requires a transaction</span>:
+          the agent calls <code className="rounded-skin-chip bg-inset px-1 py-px text-mid">begin_transaction</code>, acts, then commits or cancels.
+          Every change is snapshotted — cancel or deadline expiry <span className="text-ink">rolls everything back automatically</span>.
+          Disruptive/destructive actions park until a human approves them on the cluster&apos;s Transactions page.
+        </p>
+      </section>
+
+      {/* endpoint + snippets */}
+      <section className="rounded-skin border border-line bg-raised p-3" style={{ boxShadow: 'var(--rp-rim)' }}>
+        <p className="rp-micro !text-[10px] mb-2">endpoint</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            value={origin}
+            onChange={(e) => setOrigin(e.target.value)}
+            spellCheck={false}
+            className="rp-focus h-9 min-w-[220px] flex-1 rounded-skin-sm border border-line bg-inset px-3 font-mono text-[11.5px] text-ink"
+            title="control-plane origin"
+          />
+          <select value={clusterId} onChange={(e) => setClusterId(e.target.value)} className="rp-focus h-9 rounded-skin-sm border border-line bg-inset px-2 font-mono text-[11.5px] text-ink" title="cluster">
+            {clusters.length === 0 ? <option value="">no clusters</option> : null}
+            {clusters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+        <p className="mt-1.5 font-mono text-[9.5px] leading-relaxed text-faint">
+          This is the <span className="text-muted">control-plane</span> URL, not the web UI — adjust it to where agents can reach your control plane.
+        </p>
+        <div className="mt-2 rounded-skin-sm border border-line bg-inset p-2">
+          <div className="flex items-center gap-2">
+            <code className="min-w-0 flex-1 break-all font-mono text-[10.5px] text-ink">{endpoint}</code>
+            <CopyButton value={endpoint} />
+          </div>
+        </div>
+
+        <p className="rp-micro !text-[10px] mb-1.5 mt-4">claude code cli</p>
+        <div className="rounded-skin-sm border border-line bg-inset p-2">
+          <div className="flex items-start gap-2">
+            <pre className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-[10.5px] leading-relaxed text-mid">{cliSnippet}</pre>
+            <CopyButton value={cliSnippet} />
+          </div>
+        </div>
+
+        <p className="rp-micro !text-[10px] mb-1.5 mt-3">.mcp.json (project scope)</p>
+        <div className="rounded-skin-sm border border-line bg-inset p-2">
+          <div className="flex items-start gap-2">
+            <pre className="min-w-0 flex-1 overflow-x-auto font-mono text-[10.5px] leading-relaxed text-mid">{jsonSnippet}</pre>
+            <CopyButton value={jsonSnippet} />
+          </div>
+        </div>
+
+        <p className="mt-3 font-mono text-[9.5px] leading-relaxed text-faint">
+          Claude Desktop and Cursor use the same HTTP URL + <code className="text-muted">Authorization</code> header.
+          Replace <code className="text-muted">rp_…</code> with an org API token — mutations require an{' '}
+          <span className="text-muted">admin</span>-role token; create one under{' '}
+          <button type="button" onClick={onGoToApiKeys} className="rp-focus text-mid underline decoration-dotted underline-offset-2 transition-colors hover:text-ink">API keys</button>.
+        </p>
+      </section>
+
+      <MCPPolicyEditor orgId={orgId} isAdmin={isAdmin} />
+    </div>
+  );
+}
+
+// MCPPolicyEditor — the org's approval policy for agent transactions. Reads
+// are never gated; the checkboxes decide which mutation levels park for a
+// human decision. Fail-closed defaults: disruptive + destructive.
+const MCP_LEVELS = [
+  { id: 'reversible', label: 'reversible', hint: 'clean auto-rollback (scale, restart, config)' },
+  { id: 'disruptive', label: 'disruptive', hint: 'interrupts pods, self-heals (evict, delete pod)' },
+  { id: 'destructive', label: 'destructive', hint: 'real blast radius (drain, scale-to-0, patches)' },
+] as const;
+
+function MCPPolicyEditor({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
+  const [policy, setPolicy] = useState<MCPPolicy | null>(null);
+  const [providers, setProviders] = useState<AlertProvider[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    getMCPPolicy(orgId).then(setPolicy).catch(() => {});
+    getAlertProviders(orgId).then((r) => setProviders(r.providers)).catch(() => {});
+  }, [orgId]);
+
+  if (policy === null) {
+    return <div className="flex items-center gap-2 py-3 text-muted"><Spinner /> <span className="font-mono text-[11px]">loading policy…</span></div>;
+  }
+
+  const toggleLevel = (lvl: string) => {
+    setPolicy((p) => p && ({
+      ...p,
+      approvalLevels: p.approvalLevels.includes(lvl) ? p.approvalLevels.filter((l) => l !== lvl) : [...p.approvalLevels, lvl],
+    }));
+  };
+  const toggleProvider = (id: string) => {
+    setPolicy((p) => {
+      if (!p) return p;
+      const cur = p.notifyProviderIds ?? [];
+      return { ...p, notifyProviderIds: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] };
+    });
+  };
+  const minutes = (s: number) => (s > 0 && s % 60 === 0 ? `${s / 60} min` : `${s} s`);
+
+  const save = async () => {
+    setBusy(true); setMsg(null); setErr(null);
+    try {
+      const saved = await setMCPPolicy(orgId, policy);
+      setPolicy(saved);
+      setMsg('policy saved');
+    } catch (e) { setErr(e instanceof ApiError ? String(e.message) : 'failed to save policy'); }
+    setBusy(false);
+  };
+
+  return (
+    <section className="rounded-skin border border-line bg-raised p-3" style={{ boxShadow: 'var(--rp-rim)' }}>
+      <p className="rp-micro !text-[10px] mb-2">approval policy</p>
+      {!isAdmin ? (
+        <p className="mb-2 rounded-skin-sm px-2.5 py-1.5 font-mono text-[10.5px]" style={{ color: 'var(--rp-tone-yellow-fg)', background: 'var(--rp-tone-yellow-bg)' }}>
+          The policy is managed by org admins — shown read-only.
+        </p>
+      ) : null}
+
+      <p className="mb-1.5 font-mono text-[10px] text-muted">These risk levels require a human approval before an agent&apos;s action runs (reads are never gated):</p>
+      <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+        {MCP_LEVELS.map((l) => (
+          <label key={l.id} className="flex cursor-pointer items-center gap-1.5 font-mono text-[10.5px] text-ink" title={l.hint}>
+            <input
+              type="checkbox"
+              disabled={!isAdmin}
+              checked={policy.approvalLevels.includes(l.id)}
+              onChange={() => toggleLevel(l.id)}
+              className="rp-focus h-3.5 w-3.5 accent-[var(--rp-ink)]"
+            />
+            {l.label}
+          </label>
+        ))}
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-end gap-4">
+        <div>
+          <label className="block font-mono text-[10px] uppercase tracking-[0.05em] text-muted">default TTL (seconds)</label>
+          <div className="mt-1 flex items-center gap-2">
+            <input
+              type="number" min={30} max={86400} step={30} disabled={!isAdmin}
+              value={policy.defaultTtlSeconds}
+              onChange={(e) => setPolicy((p) => p && { ...p, defaultTtlSeconds: Number(e.target.value) })}
+              className="rp-focus h-8 w-[110px] rounded-skin-sm border border-line bg-inset px-2 font-mono text-[11px] text-ink tnum"
+            />
+            <span className="font-mono text-[10px] text-faint tnum">{minutes(policy.defaultTtlSeconds)}</span>
+          </div>
+        </div>
+        <div>
+          <label className="block font-mono text-[10px] uppercase tracking-[0.05em] text-muted">max TTL (seconds)</label>
+          <div className="mt-1 flex items-center gap-2">
+            <input
+              type="number" min={30} max={86400} step={30} disabled={!isAdmin}
+              value={policy.maxTtlSeconds}
+              onChange={(e) => setPolicy((p) => p && { ...p, maxTtlSeconds: Number(e.target.value) })}
+              className="rp-focus h-8 w-[110px] rounded-skin-sm border border-line bg-inset px-2 font-mono text-[11px] text-ink tnum"
+            />
+            <span className="font-mono text-[10px] text-faint tnum">{minutes(policy.maxTtlSeconds)}</span>
+          </div>
+        </div>
+      </div>
+      <p className="mt-1.5 font-mono text-[9.5px] leading-relaxed text-faint">
+        A transaction that outlives its TTL is rolled back automatically — an agent can never leave changes dangling.
+      </p>
+
+      <p className="rp-micro !text-[10px] mb-1.5 mt-4">notify on approval requests</p>
+      {providers.length === 0 ? (
+        <p className="font-mono text-[10px] text-faint">No alert providers configured — add one under Alerts to get pinged when an agent&apos;s action waits for approval.</p>
+      ) : (
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+          {providers.map((pr) => (
+            <label key={pr.id} className="flex cursor-pointer items-center gap-1.5 font-mono text-[10.5px] text-ink">
+              <input
+                type="checkbox"
+                disabled={!isAdmin}
+                checked={(policy.notifyProviderIds ?? []).includes(pr.id)}
+                onChange={() => toggleProvider(pr.id)}
+                className="rp-focus h-3.5 w-3.5 accent-[var(--rp-ink)]"
+              />
+              {pr.name} <span className="text-faint">({pr.type})</span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      {isAdmin ? (
+        <div className="mt-3 flex items-center gap-2">
+          <button type="button" disabled={busy} onClick={save} className="rp-focus h-9 rounded-skin-sm px-3.5 font-mono text-[11.5px] font-semibold transition-opacity hover:opacity-90 disabled:opacity-40" style={{ background: 'var(--rp-btn-bg)', color: 'var(--rp-btn-fg)' }}>
+            {busy ? 'saving…' : 'Save policy'}
+          </button>
+          {msg ? <span className="font-mono text-[10.5px]" style={{ color: 'var(--rp-tone-green-fg)' }}>✓ {msg}</span> : null}
+          {err ? <span className="font-mono text-[10.5px]" style={{ color: 'var(--rp-tone-red-fg)' }}>{err}</span> : null}
+        </div>
+      ) : null}
+    </section>
   );
 }
 

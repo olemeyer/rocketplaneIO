@@ -12,6 +12,8 @@ type Tone = { fg: string; bg: string; glyph: string; rail: string };
 const FALLBACK: Tone = { fg: 'var(--rp-ink-muted)', bg: 'var(--rp-tone-neutral-bg)', glyph: '○', rail: 'var(--rp-line-strong)' };
 const STATUS: Record<string, Tone> = {
   pending: { ...FALLBACK, glyph: '◌' },
+  // MCP approval gate: parked until a human decides on the Transactions page.
+  awaiting_approval: { fg: 'var(--rp-tone-yellow-fg)', bg: 'var(--rp-tone-yellow-bg)', glyph: '◆', rail: 'var(--rp-yellow)' },
   running: { fg: 'var(--rp-ink-mid)', bg: 'var(--rp-tone-neutral-bg)', glyph: '◌', rail: 'var(--rp-green)' },
   succeeded: { fg: 'var(--rp-tone-green-fg)', bg: 'var(--rp-tone-green-bg)', glyph: '●', rail: 'var(--rp-green)' },
   failed: { fg: 'var(--rp-tone-red-fg)', bg: 'var(--rp-tone-red-bg)', glyph: '▲', rail: 'var(--rp-red)' },
@@ -106,7 +108,7 @@ export function ActionRunCard({
           <div className="mt-1 truncate leading-snug text-mid">{a.progress}</div>
         ) : null}
 
-        {/* Step-TIMELINE — geteilte, kanonische Darstellung (auch im Copilot-Chat) */}
+        {/* Step timeline — the shared, canonical rendering */}
         <StepTimeline steps={steps} className="mt-2" />
 
         {/* Ergebnis */}

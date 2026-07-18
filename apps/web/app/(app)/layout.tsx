@@ -6,8 +6,8 @@ import { ScopeProvider } from '@/components/app/scope-context';
 import { Sidebar, MobileNav, NavProvider } from '@/components/app/sidebar';
 import { Topbar } from '@/components/app/topbar';
 
-// App-Shell hinter dem Auth-Gate: Sidebar (≥md) + Mobile-Drawer (<md) + Topbar
-// (mit AI-Copilot-Button, Primärfeature, ⌘J → eigene Seite) + Kontexte.
+// App shell behind the auth gate: sidebar (≥md) + mobile drawer (<md) + topbar
+// + shared contexts.
 export default function AppLayout({ children }: { children: ReactNode }) {
   return (
     <MeProvider>

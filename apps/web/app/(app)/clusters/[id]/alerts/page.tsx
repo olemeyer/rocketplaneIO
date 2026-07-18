@@ -9,9 +9,13 @@ import { PageHeader } from '@/components/app/page-header';
 import { useClusterEvents } from '@/lib/hooks/use-cluster-events';
 import { LineChart } from '@/components/metrics/line-chart';
 import { PromQLEditor } from '@/components/metrics/promql-editor';
+import { StarlarkEditor } from '@/components/actions/starlark-editor';
 import {
+  checkWorkflow,
+  createActionDefinition,
   createAlertProvider,
   createAlertRule,
+  deleteActionDefinition,
   deleteAlertProvider,
   deleteAlertRule,
   getActionDefinitions,
@@ -23,9 +27,11 @@ import {
   getServiceMap,
   muteAlertRule,
   testAlertProvider,
+  updateActionDefinition,
   updateAlertRule,
 } from '@/lib/api/controlplane';
 import type {
+  ActionDefParam,
   ActionDefinition,
   AlertEvent,
   MetricDefinition,
@@ -53,6 +59,18 @@ const KINDS: { kind: RuleKind; label: string; unit: string; params: ('service' |
   { kind: 'workload_unready', label: 'pods unready', unit: 'pods', params: ['workload'], hint: 'desired − ready' },
   { kind: 'derived', label: 'custom metric', unit: '', params: [], hint: 'a metric you defined' },
 ];
+
+// Default Starlark source shown in the workflow editor for new definitions.
+const DEFAULT_WORKFLOW_SOURCE = `# Remediation workflow — runs when the alert fires.
+# args["<param>"] gives you the rule's configured arguments.
+
+step("diagnose")
+info = k8s.list("apps/v1", "Deployment", args.get("namespace", "default"))
+report("found " + str(len(info)) + " deployments")
+
+step("remediate")
+# TODO: add your remediation logic here
+`;
 
 const FALLBACK_STATE = { fg: 'var(--rp-tone-green-fg)', bg: 'var(--rp-tone-green-bg)', glyph: '●' };
 const STATE_CHIP: Record<string, { fg: string; bg: string; glyph: string }> = {
@@ -85,6 +103,7 @@ export default function AlertsPage() {
   const [defs, setDefs] = useState<ActionDefinition[]>([]);
   const [ruleEditor, setRuleEditor] = useState<Partial<AlertRule> | null>(null);
   const [provEditor, setProvEditor] = useState(false);
+  const [workflowEditor, setWorkflowEditor] = useState<Partial<ActionDefinition> | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -104,11 +123,16 @@ export default function AlertsPage() {
     return () => clearInterval(t);
   }, [load, live]);
 
+  const loadDefs = useCallback(() => {
+    if (!orgId) return;
+    getActionDefinitions(orgId).then((r) => setDefs(r.definitions)).catch(() => {});
+  }, [orgId]);
+
   useEffect(() => {
     if (!orgId) return;
     getServiceMap(orgId, clusterId).then(setMap).catch(() => {});
-    getActionDefinitions(orgId).then((r) => setDefs(r.definitions)).catch(() => {});
-  }, [orgId, clusterId]);
+    loadDefs();
+  }, [orgId, clusterId, loadDefs]);
 
   const sorted = useMemo(() => [...(rules ?? [])].sort((a, b) => ruleRank(a) - ruleRank(b) || a.name.localeCompare(b.name)), [rules]);
   const firing = (rules ?? []).filter((r) => r.enabled && r.state === 'firing').length;
@@ -176,7 +200,7 @@ export default function AlertsPage() {
           )}
         </section>
 
-        {/* ── Providers + Events ── */}
+        {/* ── Providers + Workflows + Events ── */}
         <section className="flex min-h-0 flex-col gap-3 overflow-hidden">
           <div className="shrink-0 rounded-skin border border-line bg-raised p-3" style={{ boxShadow: 'var(--rp-rim)' }}>
             <div className="flex items-center justify-between">
@@ -231,6 +255,42 @@ export default function AlertsPage() {
               </div>
             )}
             {err ? <div className="mt-2 font-mono text-[10.5px]" style={{ color: 'var(--rp-tone-red-fg)' }}>{err}</div> : null}
+          </div>
+
+          {/* Remediation workflows — list + create/edit/delete (no run button) */}
+          <div className="shrink-0 rounded-skin border border-line bg-raised p-3" style={{ boxShadow: 'var(--rp-rim)' }}>
+            <div className="flex items-center justify-between">
+              <span className="rp-micro !text-[10px]">remediation workflows · org-wide</span>
+              <button
+                type="button"
+                onClick={() => setWorkflowEditor({ name: '', description: '', params: [], source: DEFAULT_WORKFLOW_SOURCE, timeoutSeconds: 120 })}
+                className="rounded-skin-chip border border-line px-1.5 py-0.5 font-mono text-[10px] text-muted transition-colors hover:text-ink"
+              >
+                + new
+              </button>
+            </div>
+            {defs.length === 0 ? (
+              <div className="mt-2 font-mono text-[10.5px] text-faint">no workflows yet — create one to attach to a rule</div>
+            ) : (
+              <div className="mt-2 space-y-1">
+                {defs.map((d) => (
+                  <div key={d.id} className="flex items-center gap-2 rounded-skin-sm border border-line px-2 py-1.5 font-mono text-[10.5px]">
+                    <span className="min-w-0 flex-1">
+                      <span className="truncate text-ink">{d.name}</span>
+                      {d.description ? <span className="ml-2 text-faint">{d.description.slice(0, 48)}</span> : null}
+                    </span>
+                    <span className="shrink-0 text-[9.5px] text-faint tnum">{(d.params ?? []).length}p</span>
+                    <button
+                      type="button"
+                      onClick={() => setWorkflowEditor({ ...d })}
+                      className="shrink-0 rounded-skin-chip border border-line px-1.5 py-0.5 text-[9.5px] text-muted transition-colors hover:text-ink"
+                    >
+                      edit
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-skin border border-line bg-raised" style={{ boxShadow: 'var(--rp-rim)' }}>
@@ -300,6 +360,43 @@ export default function AlertsPage() {
             setProvEditor(false);
             load();
           }}
+        />
+      ) : null}
+      {workflowEditor && orgId ? (
+        <WorkflowEditor
+          def={workflowEditor}
+          orgId={orgId}
+          onClose={() => setWorkflowEditor(null)}
+          onSave={async (d) => {
+            if (d.id) {
+              await updateActionDefinition(orgId, d.id, {
+                name: d.name!,
+                description: d.description ?? '',
+                params: d.params ?? [],
+                source: d.source!,
+                timeoutSeconds: d.timeoutSeconds,
+              });
+            } else {
+              await createActionDefinition(orgId, {
+                name: d.name!,
+                description: d.description ?? '',
+                params: d.params ?? [],
+                source: d.source!,
+                timeoutSeconds: d.timeoutSeconds,
+              });
+            }
+            setWorkflowEditor(null);
+            loadDefs();
+          }}
+          onDelete={
+            workflowEditor.id
+              ? async () => {
+                  await deleteActionDefinition(orgId, workflowEditor.id!).catch(() => {});
+                  setWorkflowEditor(null);
+                  loadDefs();
+                }
+              : undefined
+          }
         />
       ) : null}
     </div>
@@ -667,7 +764,7 @@ function RuleEditor({
             ) : null}
             {remediationDef ? (
               <p className="mt-1.5 font-mono text-[9.5px] leading-relaxed text-faint">
-                dispatched once per firing transition · full pipeline with verify + rollback · shows up under actions → runs
+                dispatched once per firing transition · full pipeline with verify + rollback · visible in Transactions
               </p>
             ) : null}
           </div>
@@ -872,6 +969,196 @@ function ProviderEditor({
           <button type="button" onClick={onClose} className="h-8 rounded-skin-sm border border-line px-3 font-mono text-[11.5px] text-mid transition-colors hover:bg-hover hover:text-ink">
             Cancel
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Workflow editor (create / edit / delete — NO run button) ──────────── */
+
+function WorkflowEditor({
+  def,
+  orgId,
+  onClose,
+  onSave,
+  onDelete,
+}: {
+  def: Partial<ActionDefinition>;
+  orgId: string;
+  onClose: () => void;
+  onSave: (d: Partial<ActionDefinition>) => Promise<void>;
+  onDelete?: () => Promise<void>;
+}) {
+  const [d, setD] = useState<Partial<ActionDefinition>>({ ...def });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const set = (patch: Partial<ActionDefinition>) => setD((cur) => ({ ...cur, ...patch }));
+
+  const addParam = () =>
+    setD((cur) => ({
+      ...cur,
+      params: [...(cur.params ?? []), { name: '', label: '', description: '', required: false }],
+    }));
+  const removeParam = (i: number) =>
+    setD((cur) => ({ ...cur, params: (cur.params ?? []).filter((_, idx) => idx !== i) }));
+  const setParam = (i: number, patch: Partial<ActionDefParam>) =>
+    setD((cur) => ({
+      ...cur,
+      params: (cur.params ?? []).map((p, idx) => (idx === i ? { ...p, ...patch } : p)),
+    }));
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const inputCls = 'rp-focus mt-1 h-9 w-full rounded-skin-sm border border-line bg-inset px-2.5 font-mono text-[12px] text-ink placeholder:text-faint';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-3" role="dialog" aria-modal="true" aria-label="Workflow editor">
+      <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0 cursor-default" style={{ backgroundColor: 'var(--rp-scrim)' }} />
+      <div
+        className="relative flex max-h-[92vh] w-full flex-col overflow-hidden rounded-skin border border-line bg-raised sm:w-[700px]"
+        style={{ boxShadow: 'var(--rp-rim), var(--rp-shadow-pop)', animation: 'reveal-up var(--rp-dur-med) var(--rp-ease-enter)' }}
+      >
+        <div className="shrink-0 border-b border-line px-4 py-3">
+          <span className="font-mono text-[13px] font-semibold text-ink">{d.id ? 'Edit workflow' : 'New remediation workflow'}</span>
+        </div>
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="rp-micro !text-[10px]">name</span>
+              <input
+                value={d.name ?? ''}
+                onChange={(e) => set({ name: e.target.value })}
+                placeholder="restart-crashlooping-pods"
+                className={inputCls}
+              />
+            </label>
+            <label className="block">
+              <span className="rp-micro !text-[10px]">timeout (s)</span>
+              <input
+                type="number"
+                min={10}
+                max={3600}
+                value={d.timeoutSeconds ?? 120}
+                onChange={(e) => set({ timeoutSeconds: Number(e.target.value) })}
+                className={inputCls}
+              />
+            </label>
+          </div>
+          <label className="block">
+            <span className="rp-micro !text-[10px]">description <span className="text-faint">(optional)</span></span>
+            <input
+              value={d.description ?? ''}
+              onChange={(e) => set({ description: e.target.value })}
+              placeholder="Restarts pods matching the crashloop pattern"
+              className={inputCls}
+            />
+          </label>
+
+          {/* Parameters */}
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="rp-micro !text-[10px]">parameters <span className="text-faint">— passed as args["name"] in Starlark</span></span>
+              <button
+                type="button"
+                onClick={addParam}
+                className="rounded-skin-chip border border-line px-1.5 py-0.5 font-mono text-[10px] text-muted transition-colors hover:text-ink"
+              >
+                + add
+              </button>
+            </div>
+            {(d.params ?? []).length === 0 ? (
+              <div className="mt-1.5 font-mono text-[10px] text-faint">no params — workflow uses fixed logic</div>
+            ) : (
+              <div className="mt-1.5 space-y-1.5">
+                {(d.params ?? []).map((p, i) => (
+                  <div key={i} className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
+                    <label className="block">
+                      {i === 0 ? <span className="rp-micro !text-[10px]">name</span> : null}
+                      <input
+                        value={p.name}
+                        onChange={(e) => setParam(i, { name: e.target.value })}
+                        placeholder="namespace"
+                        className={inputCls}
+                      />
+                    </label>
+                    <label className="block">
+                      {i === 0 ? <span className="rp-micro !text-[10px]">default value <span className="text-faint">(optional)</span></span> : null}
+                      <input
+                        value={p.default ?? ''}
+                        onChange={(e) => setParam(i, { default: e.target.value })}
+                        placeholder="default"
+                        className={inputCls}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => removeParam(i)}
+                      className="mb-px h-9 rounded-skin-sm border border-line px-2 font-mono text-[11px] text-muted transition-colors hover:text-ink"
+                      aria-label="Remove parameter"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Starlark source — live compile via the check prop */}
+          <div>
+            <span className="rp-micro !text-[10px]">starlark source <span className="text-faint">— squiggles appear as you type</span></span>
+            <div className="mt-1.5 overflow-hidden rounded-skin-sm border border-line" style={{ height: 280 }}>
+              <StarlarkEditor
+                value={d.source ?? DEFAULT_WORKFLOW_SOURCE}
+                onChange={(src) => set({ source: src })}
+                check={(src) => checkWorkflow(orgId, src)}
+              />
+            </div>
+          </div>
+
+          {err ? <div className="font-mono text-[11px]" style={{ color: 'var(--rp-tone-red-fg)' }}>{err}</div> : null}
+        </div>
+        <div className="flex shrink-0 items-center gap-2 border-t border-line px-4 py-3">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              setErr(null);
+              try {
+                await onSave(d);
+              } catch (e) {
+                setErr(e instanceof Error ? e.message : 'save failed');
+                setBusy(false);
+                return;
+              }
+              setBusy(false);
+            }}
+            className="rp-focus h-8 rounded-skin-sm px-3.5 font-mono text-[11.5px] font-semibold transition-opacity hover:opacity-90"
+            style={{ background: 'var(--rp-btn-bg)', color: 'var(--rp-btn-fg)', opacity: busy ? 0.55 : 1 }}
+          >
+            Save
+          </button>
+          <button type="button" onClick={onClose} className="h-8 rounded-skin-sm border border-line px-3 font-mono text-[11.5px] text-mid transition-colors hover:bg-hover hover:text-ink">
+            Cancel
+          </button>
+          {onDelete ? (
+            <button
+              type="button"
+              onClick={() => void onDelete()}
+              className="ml-auto rounded-skin-sm border border-line px-2.5 py-1.5 font-mono text-[11px] transition-colors hover:bg-hover"
+              style={{ color: 'var(--rp-tone-red-fg)' }}
+            >
+              delete
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

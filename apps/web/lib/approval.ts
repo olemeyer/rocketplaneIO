@@ -1,39 +1,20 @@
-// approval.ts — Guardrails: Risk-Level je Action (vom Backend klassifiziert) und
-// der pro Level EINSTELLBARE Approval-Modus. So denkt ein Admin: nicht jede
-// Action ist gleich gefährlich, also verlangt nicht jede dieselbe Freigabe.
+// approval.ts — guardrail risk levels: each action carries a risk level
+// (classified by the backend), so not every action demands the same amount
+// of human friction.
 //
-//   read        → nur beobachten, mutiert nichts
-//   reversible  → sauberer Auto-Rollback (scale-up, restart, config edits …)
-//   disruptive  → unterbricht laufende Pods, heilt sich selbst (evict, undo …)
-//   destructive → echter Blast-Radius (drain, scale-to-0, NoExecute-taint …)
+//   read        → observes only, mutates nothing
+//   reversible  → clean auto-rollback (scale-up, restart, config edits …)
+//   disruptive  → interrupts running pods, self-heals (evict, undo …)
+//   destructive → real blast radius (drain, scale-to-0, NoExecute taint …)
 //
-//   auto    → läuft ohne Nachfrage
-//   click   → ein Button-Klick
-//   confirm → Ziel-Namen eintippen (arm-to-fire)
-//   off     → diese Stufe wird nicht angeboten (dismissed)
-//
-// WICHTIG — Sicherheitsmodell: der Approval-MODUS ist eine CLIENT-seitige UX-
-// Policy darüber, wie viel Reibung der Mensch pro Stufe sieht. Die harte,
-// SERVER-seitige Grenze ist eine andere und liegt tiefer: das LLM kann nichts
-// selbst ausführen (die eigentliche Ausführung braucht eine authentifizierte
-// Freigabe über den Decision-Endpoint), und jede Mutation läuft durch die
-// Whitelist + Param-Validierung + das Namespace-Scope-Gate der Control-Plane.
-// „off"/„confirm" begrenzen also die Autonomie des Assistenten in der UI, sind
-// aber keine Autorisierungskontrolle gegen einen bereits berechtigten Nutzer.
+// IMPORTANT — security model: these levels are a CLIENT-side UX policy for
+// how much friction a human sees per level. The hard, SERVER-side boundary
+// is different and sits deeper: every mutation goes through the whitelist +
+// param validation + the namespace-scope gate of the control plane.
 
 export type RiskLevel = 'read' | 'reversible' | 'disruptive' | 'destructive';
-export type ApprovalMode = 'auto' | 'click' | 'confirm' | 'off';
-export type ApprovalPolicy = Record<RiskLevel, ApprovalMode>;
 
 export const RISK_LEVELS: RiskLevel[] = ['read', 'reversible', 'disruptive', 'destructive'];
-export const APPROVAL_MODES: ApprovalMode[] = ['auto', 'click', 'confirm', 'off'];
-
-export const DEFAULT_POLICY: ApprovalPolicy = {
-  read: 'auto',
-  reversible: 'click',
-  disruptive: 'click',
-  destructive: 'confirm',
-};
 
 export const LEVEL_META: Record<RiskLevel, { label: string; glyph: string; hint: string }> = {
   read: { label: 'read-only', glyph: '◎', hint: 'observes only, changes nothing' },
@@ -42,33 +23,15 @@ export const LEVEL_META: Record<RiskLevel, { label: string; glyph: string; hint:
   destructive: { label: 'destructive', glyph: '△', hint: 'real blast radius (drain, scale-to-0, NoExecute)' },
 };
 
-const KEY = (cluster: string) => `rp-approval-${cluster}`;
-
-export function loadApprovalPolicy(clusterId: string): ApprovalPolicy {
-  if (typeof window === 'undefined') return DEFAULT_POLICY;
-  try {
-    const raw = window.localStorage.getItem(KEY(clusterId));
-    if (!raw) return DEFAULT_POLICY;
-    const p = JSON.parse(raw) as Partial<ApprovalPolicy>;
-    return { ...DEFAULT_POLICY, ...p };
-  } catch {
-    return DEFAULT_POLICY;
-  }
-}
-
-export function saveApprovalPolicy(clusterId: string, p: ApprovalPolicy): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(KEY(clusterId), JSON.stringify(p));
-  } catch {
-    /* quota */
-  }
-}
-
-// actionLevelOf spiegelt die Backend-Klassifizierung (copilot_policy.go) für die
-// UI — inkl. der param-abhängigen Fälle (scale-to-0, node_taint NoExecute).
+// actionLevelOf mirrors the backend classification for the UI — including the
+// param-dependent cases (scale-to-0, node_taint NoExecute) and the new MCP
+// kubectl-shaped primitives (k8s_get/list/patch/apply/delete/exec, script).
 export function actionLevelOf(kind: string, params?: Record<string, unknown>): RiskLevel {
   switch (kind) {
+    // MCP kubectl primitives — read tier
+    case 'k8s_get':
+    case 'k8s_list':
+    // Legacy catalog read kinds
     case 'debug_bundle':
     case 'pod_events':
     case 'rollout_history':
@@ -81,13 +44,34 @@ export function actionLevelOf(kind: string, params?: Record<string, unknown>): R
     case 'list_events':
     case 'net_probe':
       return 'read';
+
+    // MCP kubectl primitives — reversible tier
+    case 'k8s_patch':
+    case 'k8s_apply':
+      return 'reversible';
+
+    // MCP kubectl primitives — depends on target kind
+    case 'k8s_delete': {
+      // Pod/Job deletes are disruptive (self-heal); anything else is destructive
+      const target = String(params?.targetKind ?? params?.kind ?? '');
+      return target === 'Pod' || target === 'Job' ? 'disruptive' : 'destructive';
+    }
+
+    // MCP kubectl primitives — destructive tier
+    case 'k8s_exec':
+    case 'script':
+      return 'destructive';
+
+    // Legacy catalog — param-dependent cases
     case 'scale': {
-      // fail-closed wie das Backend: nicht parsebar oder 0 → destructive
+      // fail-closed like the backend: unparseable or 0 → destructive
       const n = Number(params?.replicas ?? NaN);
       return Number.isFinite(n) && n > 0 ? 'reversible' : 'destructive';
     }
     case 'node_taint':
       return params?.effect === 'NoExecute' ? 'destructive' : 'reversible';
+
+    // Legacy catalog — destructive tier
     case 'drain':
     case 'expand_pvc':
     case 'patch_resource':
@@ -95,9 +79,11 @@ export function actionLevelOf(kind: string, params?: Record<string, unknown>): R
     case 'delete_configmap':
     case 'pvc_expand':
     case 'restore_resource':
-    case 'script':
+    case 'snapshot_restore':
     case 'run_debug_pod':
       return 'destructive';
+
+    // Legacy catalog — disruptive tier
     case 'delete_pod':
     case 'evict_pod':
     case 'rollout_undo':
@@ -107,13 +93,15 @@ export function actionLevelOf(kind: string, params?: Record<string, unknown>): R
     case 'exec_readonly':
     case 'delete_job':
       return 'disruptive';
+
     default:
-      return 'reversible';
+      // Unknown kinds default to destructive (fail-closed)
+      return 'destructive';
   }
 }
 
-// actionCategoryOf spiegelt copilot_policy.go:actionCategory — die EINE
-// Kategorie-Taxonomie für Katalog, Runs-Filter und Copilot.
+// actionCategoryOf mirrors the backend's action-category taxonomy — the ONE
+// category taxonomy for the catalog and the runs filter.
 export type ActionCategory = 'diagnose' | 'workloads' | 'scaling' | 'config' | 'network' | 'storage' | 'nodes' | 'batch' | 'cleanup' | 'workflows' | 'other';
 
 export const CATEGORY_LABEL: Record<ActionCategory, string> = {

@@ -51,7 +51,7 @@ export function Onboarding({ orgId }: { orgId?: string }) {
           Connect your first cluster.
         </h1>
         <p className="mt-3 text-[13.5px] leading-relaxed text-mid">
-          One command against your cluster — then the live service map, traces and Copilot draw themselves in,
+          One command against your cluster — then the live service map, traces and alerts draw themselves in,
           usually in under a minute.
         </p>
 

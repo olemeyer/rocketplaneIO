@@ -14,7 +14,7 @@ import { timeAgo } from '@/lib/format';
 import { EscalationManager } from '@/components/app/escalation-manager';
 import { MaintenanceManager } from '@/components/app/maintenance-manager';
 
-// Incidents — the response hub: first-class incidents that bracket alerts, Copilot
+// Incidents — the response hub: first-class incidents that bracket alerts,
 // investigations, and actions across a lifecycle (open→acknowledged→
 // mitigated→resolved). Auto-declared when an alert fires, or manually via
 // "Declare". Header shows open load + MTTA/MTTR. Live via SSE.

@@ -4,47 +4,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { cn } from '@/lib/cn';
 import { Spinner } from '@/components/ui';
-import { cancelAction, createAction, getActions, getLogs, getTraces, getWorkloadPods, setWorkloadIcon } from '@/lib/api/controlplane';
+import { getActions, getLogs, getTraces, getWorkloadPods, setWorkloadIcon } from '@/lib/api/controlplane';
 import { useClusterEvents } from '@/lib/hooks/use-cluster-events';
 import { ActionRunCard } from '@/components/actions/run-card';
 import { LogDrawer } from '@/components/logs/log-drawer';
 import { fmtMs, statusTone, TONE_CHIP } from '@/components/traces/trace-drawer';
 import { detectTech, getTechIcon, listTechIcons } from '@/lib/tech-icons';
-import type { ActionKind, ClusterAction, LogLine, MapNode, TraceRow, WorkloadPod } from '@/lib/api/types';
+import type { ClusterAction, LogLine, MapNode, TraceRow, WorkloadPod } from '@/lib/api/types';
 
-// workload-drawer.tsx — das Workload-SIDEPANEL der Service-Map: dockt rechts
-// in der Map an (KEIN Scrim — die Map bleibt les- und bedienbar), zeigt die
-// Vitals + Pods des selektierten Workloads und verbindet sie mit SAFE-ACTIONS:
-// rollout restart, scale, pod recreate. Jede Aktion ist zweistufig bestätigt
-// und zeigt ehrlich ihr kubectl-Äquivalent — der Agent führt sie im Cluster
-// aus (outbound-only) und meldet das Ergebnis in den Activity-Feed zurück.
+// workload-drawer.tsx — Workload side-panel of the Service Map: docks to the
+// right (no scrim — the map stays readable). Shows vitals, logs, traces, pods,
+// and a read-only activity feed of recent runs. Human action triggers have been
+// removed; all execution is now via external AI agents through Transactions.
 
 const POLL_MS = 2500;
 
-type Confirm =
-  | { kind: 'rollout_restart' }
-  | { kind: 'scale'; replicas: number }
-  | { kind: 'delete_pod'; pod: string }
-  | { kind: 'set_image'; image: string }
-  | { kind: 'rollout_pause' }
-  | { kind: 'rollout_resume' };
-
-// führenden Quell-Timestamp im Body trimmen (identisch zur Logs-Seite)
+// Trim leading source timestamp from log body (same as the Logs page).
 const LEADING_TS = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\s*/;
 
 const TABS = ['logs', 'traces', 'pods', 'activity'] as const;
 type Tab = (typeof TABS)[number];
-
-function kubectlOf(c: Confirm, node: MapNode): string {
-  const ns = node.namespace;
-  const ref = `${node.kind.toLowerCase()}/${node.name}`;
-  if (c.kind === 'rollout_restart') return `kubectl rollout restart ${ref} -n ${ns}`;
-  if (c.kind === 'scale') return `kubectl scale ${ref} --replicas=${c.replicas} -n ${ns}`;
-  if (c.kind === 'set_image') return `kubectl set image ${ref} *=${c.image} -n ${ns}`;
-  if (c.kind === 'rollout_pause') return `kubectl rollout pause ${ref} -n ${ns}`;
-  if (c.kind === 'rollout_resume') return `kubectl rollout resume ${ref} -n ${ns}`;
-  return `kubectl delete pod ${c.pod} -n ${ns}`;
-}
 
 export function WorkloadDrawer({
   orgId,
@@ -59,37 +38,14 @@ export function WorkloadDrawer({
 }) {
   const [pods, setPods] = useState<WorkloadPod[] | null>(null);
   const [actions, setActions] = useState<ClusterAction[] | null>(null);
-  const [confirm, setConfirm] = useState<Confirm | null>(null);
-  const [replicas, setReplicas] = useState(node.podsTotal);
-  // Image-Tag-Eingabe für set_image (vorbelegt mit dem aktuellen Image).
-  const [image, setImage] = useState(node.image ?? '');
-  const [firing, setFiring] = useState(false);
-  // Investigations-Tabs: der Klick auf einen Node beantwortet sofort
-  // „was passiert hier GERADE" — Logs, Spans, Pods, Aktionen.
+  // Investigation tabs: immediately answers "what's happening RIGHT NOW" —
+  // logs, spans, pods, read-only activity feed.
   const [tab, setTab] = useState<Tab>('logs');
   const [iconPicker, setIconPicker] = useState(false);
   const [iconQuery, setIconQuery] = useState('');
   const [logs, setLogs] = useState<LogLine[] | null>(null);
   const [traces, setTraces] = useState<TraceRow[] | null>(null);
   const [openLine, setOpenLine] = useState<LogLine | null>(null);
-
-  useEffect(() => setReplicas(node.podsTotal), [node.id, node.podsTotal]);
-  useEffect(() => setImage(node.image ?? ''), [node.id, node.image]);
-  useEffect(() => setConfirm(null), [node.id]);
-
-  // Esc schließt erst die Bestätigung, dann (Map-Handler) das Panel —
-  // capture-Phase, damit wir vor dem Map-Escape drankommen.
-  useEffect(() => {
-    if (!confirm) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        setConfirm(null);
-      }
-    }
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [confirm]);
 
   const refresh = useCallback(() => {
     getWorkloadPods(orgId, clusterId, node.namespace, node.kind, node.name)
@@ -152,68 +108,6 @@ export function WorkloadDrawer({
     return () => clearInterval(t);
   }, [refresh, live]);
 
-  const fire = useCallback(async () => {
-    if (!confirm || firing) return;
-    setFiring(true);
-    try {
-      const body =
-        confirm.kind === 'delete_pod'
-          ? {
-              kind: 'delete_pod' as ActionKind,
-              targetNamespace: node.namespace,
-              targetKind: 'Pod',
-              targetName: confirm.pod,
-            }
-          : {
-              kind: confirm.kind as ActionKind,
-              targetNamespace: node.namespace,
-              targetKind: node.kind,
-              targetName: node.name,
-              params:
-                confirm.kind === 'scale'
-                  ? { replicas: confirm.replicas }
-                  : confirm.kind === 'set_image'
-                    ? { image: confirm.image }
-                    : {},
-            };
-      await createAction(orgId, clusterId, body);
-      setConfirm(null);
-      refresh();
-    } catch {
-      // Feed zeigt den Zustand; Fehler beim Anlegen lässt die Bestätigung stehen.
-    } finally {
-      setFiring(false);
-    }
-  }, [confirm, firing, node, orgId, clusterId, refresh]);
-
-  // Read-only Investigation-Actions (debug_bundle, pod_events) mutieren nichts —
-  // sie feuern ohne Bestätigung und springen in den Activity-Tab, wo die
-  // Run-Karte die gesammelten Sektionen als Step-Details zeigt.
-  const fireReadonly = useCallback(
-    async (kind: ActionKind, targetKind: string, targetName: string) => {
-      try {
-        await createAction(orgId, clusterId, {
-          kind,
-          targetNamespace: node.namespace,
-          targetKind,
-          targetName,
-          params: {},
-        });
-        setTab('activity');
-        refresh();
-      } catch {
-        /* Feed zeigt den Zustand; ein Fehler beim Anlegen ist selbsterklärend. */
-      }
-    },
-    [orgId, clusterId, node.namespace, refresh],
-  );
-
-  const canScale = node.kind === 'Deployment' || node.kind === 'StatefulSet';
-  const canRestart = canScale || node.kind === 'DaemonSet';
-  // set_image gilt für alle Template-Workloads; pause/resume nur für Deployment.
-  const canSetImage = canRestart;
-  const canPause = node.kind === 'Deployment';
-  const imageChanged = image.trim() !== '' && image.trim() !== (node.image ?? '');
   const healthColor =
     node.health === 'critical'
       ? 'var(--rp-red)'
@@ -335,7 +229,7 @@ export function WorkloadDrawer({
                   type="button"
                   onClick={() => void pickIcon('')}
                   className="shrink-0 rounded-skin-sm border border-line px-2 py-1.5 font-mono text-[10px] text-muted transition-colors hover:text-ink"
-                  title="zurück zur Auto-Erkennung"
+                  title="reset to auto-detection"
                 >
                   auto
                 </button>
@@ -367,171 +261,8 @@ export function WorkloadDrawer({
             </div>
           </div>
         ) : null}
-        {/* ── Safe-Actions ── */}
-        <div className="rp-micro !text-[10px]">actions</div>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          {canRestart ? (
-            <button
-              type="button"
-              onClick={() => setConfirm({ kind: 'rollout_restart' })}
-              className="rp-focus rounded-skin-sm border border-line px-2.5 py-1.5 font-mono text-[11px] text-ink transition-colors hover:bg-hover"
-            >
-              ↻ rollout restart
-            </button>
-          ) : null}
-          {canScale ? (
-            <span className="flex items-center overflow-hidden rounded-skin-sm border border-line font-mono text-[11px]">
-              <button
-                type="button"
-                onClick={() => setReplicas((r) => Math.max(0, r - 1))}
-                className="px-2 py-1.5 text-muted transition-colors hover:bg-hover hover:text-ink"
-                aria-label="decrease replicas"
-              >
-                −
-              </button>
-              <span className="min-w-[54px] px-1 text-center text-ink tnum">
-                {replicas} <span className="text-faint">repl</span>
-              </span>
-              <button
-                type="button"
-                onClick={() => setReplicas((r) => Math.min(50, r + 1))}
-                className="px-2 py-1.5 text-muted transition-colors hover:bg-hover hover:text-ink"
-                aria-label="increase replicas"
-              >
-                +
-              </button>
-              <button
-                type="button"
-                disabled={replicas === node.podsTotal}
-                onClick={() => setConfirm({ kind: 'scale', replicas })}
-                className={cn(
-                  'border-l border-line px-2.5 py-1.5 transition-colors',
-                  replicas === node.podsTotal
-                    ? 'cursor-default text-faint'
-                    : 'text-ink hover:bg-hover',
-                )}
-              >
-                scale
-              </button>
-            </span>
-          ) : null}
-          {canPause ? (
-            <>
-              <button
-                type="button"
-                onClick={() => setConfirm({ kind: 'rollout_pause' })}
-                className="rp-focus rounded-skin-sm border border-line px-2.5 py-1.5 font-mono text-[11px] text-ink transition-colors hover:bg-hover"
-                title="kubectl rollout pause"
-              >
-                ⏸ pause
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirm({ kind: 'rollout_resume' })}
-                className="rp-focus rounded-skin-sm border border-line px-2.5 py-1.5 font-mono text-[11px] text-ink transition-colors hover:bg-hover"
-                title="kubectl rollout resume"
-              >
-                ▷ resume
-              </button>
-            </>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => void fireReadonly('debug_bundle', node.kind, node.name)}
-            className="rp-focus rounded-skin-sm border border-line px-2.5 py-1.5 font-mono text-[11px] text-mid transition-colors hover:bg-hover hover:text-ink"
-            title="read-only triage snapshot: rollout state + container statuses + events"
-          >
-            ⚑ debug bundle
-          </button>
-        </div>
 
-        {/* set_image: der häufigste Release-Handgriff — Tag setzen, voller
-            verifizierter Rollout. Vorbelegt mit dem aktuellen Image. */}
-        {canSetImage ? (
-          <div className="mt-2 flex items-center gap-2">
-            <input
-              value={image}
-              onChange={(e) => setImage(e.target.value)}
-              spellCheck={false}
-              placeholder="repo/image:tag"
-              className="rp-focus h-8 min-w-0 flex-1 rounded-skin-sm border border-line bg-inset px-2.5 font-mono text-[11px] text-ink placeholder:text-faint"
-            />
-            <button
-              type="button"
-              disabled={!imageChanged}
-              onClick={() => setConfirm({ kind: 'set_image', image: image.trim() })}
-              className={cn(
-                'rp-focus h-8 shrink-0 rounded-skin-sm border border-line px-2.5 font-mono text-[11px] transition-colors',
-                imageChanged ? 'text-ink hover:bg-hover' : 'cursor-default text-faint',
-              )}
-              title="kubectl set image"
-            >
-              deploy
-            </button>
-          </div>
-        ) : null}
-
-        {/* Bestätigung — Twin-Turbine-Muster: Titel, ehrliches kubectl-Äquivalent,
-            monochromer Primary (btn-Tokens — Orange ist nie CTA) */}
-        {confirm ? (
-          <div
-            className="mt-2.5 overflow-hidden rounded-skin-sm border"
-            style={{
-              borderColor: 'var(--rp-line-strong)',
-              animation: 'reveal-up var(--rp-dur-med) var(--rp-ease-enter)',
-            }}
-          >
-            <div className="flex items-center justify-between border-b border-line bg-raised px-3 py-2">
-              <span className="font-mono text-[11.5px] font-semibold text-ink">
-                {confirm.kind === 'rollout_restart'
-                  ? `Restart ${node.name}?`
-                  : confirm.kind === 'scale'
-                    ? `Scale ${node.name} to ${confirm.replicas} replica${confirm.replicas === 1 ? '' : 's'}?`
-                    : confirm.kind === 'set_image'
-                      ? `Deploy new image to ${node.name}?`
-                      : confirm.kind === 'rollout_pause'
-                        ? `Pause rollout of ${node.name}?`
-                        : confirm.kind === 'rollout_resume'
-                          ? `Resume rollout of ${node.name}?`
-                          : `Recreate pod?`}
-              </span>
-              <span className="rp-micro !text-[9px]">runs in cluster</span>
-            </div>
-            <div className="bg-inset px-3 py-2.5">
-              <code className="block break-all font-mono text-[11px] leading-relaxed text-mid">
-                <span className="text-faint">$ </span>
-                {kubectlOf(confirm, node)}
-              </code>
-            </div>
-            <div className="flex items-center gap-2 border-t border-line bg-raised px-3 py-2">
-              <button
-                type="button"
-                onClick={fire}
-                disabled={firing}
-                className="rp-focus h-8 rounded-skin-sm px-3.5 font-mono text-[11.5px] font-semibold transition-opacity hover:opacity-90"
-                style={{
-                  background: 'var(--rp-btn-bg)',
-                  color: 'var(--rp-btn-fg)',
-                  opacity: firing ? 0.55 : 1,
-                }}
-              >
-                {firing ? 'dispatching…' : 'Execute'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirm(null)}
-                className="rp-focus h-8 rounded-skin-sm border border-line px-3 font-mono text-[11.5px] text-mid transition-colors hover:bg-hover hover:text-ink"
-              >
-                Cancel
-              </button>
-              <kbd className="ml-auto rounded-skin-chip border border-line px-1.5 py-0.5 font-mono text-[9px] text-faint">
-                esc
-              </kbd>
-            </div>
-          </div>
-        ) : null}
-
-        {/* ── Investigations-Tabs: logs · traces · pods · activity ── */}
+        {/* ── Investigation tabs: logs · traces · pods · activity ── */}
         <div className="mt-4 flex items-center justify-between">
           <div className="flex items-center rounded-skin-sm border border-line p-[2px]">
             {TABS.map((t) => (
@@ -733,47 +464,37 @@ export function WorkloadDrawer({
                   <span className="max-w-[90px] shrink-0 truncate text-faint" title={p.nodeName}>
                     {p.nodeName}
                   </span>
-                  {!terminating ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => void fireReadonly('pod_events', 'Pod', p.name)}
-                        className="shrink-0 rounded-skin-chip border border-line px-1.5 py-0.5 text-[9.5px] text-muted transition-colors hover:bg-hover hover:text-ink"
-                        title="read-only: recent events of this pod"
-                      >
-                        events
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConfirm({ kind: 'delete_pod', pod: p.name })}
-                        className="shrink-0 rounded-skin-chip border border-line px-1.5 py-0.5 text-[9.5px] text-muted transition-colors hover:bg-hover hover:text-ink"
-                        title="delete pod (owner recreates it)"
-                      >
-                        recreate
-                      </button>
-                    </>
-                  ) : null}
+                  {/* Pod-level actions removed — use Transactions (MCP) for mutations. */}
                 </div>
               );
             })}
           </div>
         )}
 
-        {/* ── ACTIVITY: Aktionen + Ergebnis vom Agenten (gemeinsame Karte) ── */}
+        {/* ── ACTIVITY: read-only feed of recent runs on this workload ── */}
         {tab === 'activity' ? (
-          activity.length === 0 ? (
-            <div className="mt-2 font-mono text-[11px] text-faint">no actions yet</div>
-          ) : (
-            <div className="mt-2 space-y-1.5">
-              {activity.map((a) => (
-                <ActionRunCard
-                  key={a.id}
-                  action={a}
-                  onCancel={(id) => void cancelAction(orgId, clusterId, id).catch(() => {})}
-                />
-              ))}
+          <div className="mt-2">
+            <div className="mb-2 flex items-center justify-between">
+              <Link
+                href={`/clusters/${clusterId}/transactions`}
+                className="rp-focus font-mono text-[10px] text-muted transition-colors hover:text-ink"
+              >
+                view transactions →
+              </Link>
             </div>
-          )
+            {activity.length === 0 ? (
+              <div className="font-mono text-[11px] text-faint">no recent runs</div>
+            ) : (
+              <div className="space-y-1.5">
+                {activity.map((a) => (
+                  <ActionRunCard
+                    key={a.id}
+                    action={a}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
         ) : null}
       </div>
 

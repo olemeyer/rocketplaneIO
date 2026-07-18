@@ -354,7 +354,8 @@ export type ActionKind =
   | 'net_probe'
   | 'run_debug_pod'
   | 'script';
-export type ActionStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+/** 'awaiting_approval' = parked by the MCP approval gate until a human decides. */
+export type ActionStatus = 'pending' | 'awaiting_approval' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface ClusterAction {
   id: string;
@@ -383,7 +384,6 @@ export interface ClusterAction {
    *  is a group of one). groupSeq orders the run within the group's trace. */
   groupId?: string;
   groupSeq?: number;
-  investigationNodeId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -555,6 +555,7 @@ export interface AlertEvent {
 
 export type IncidentSeverity = 'critical' | 'high' | 'medium' | 'low';
 export type IncidentStatus = 'open' | 'acknowledged' | 'mitigated' | 'resolved';
+/** 'copilot' only appears on historical rows (the feature was removed) — render it neutrally. */
 export type IncidentSource = 'manual' | 'alert' | 'copilot';
 
 /** Incident — the umbrella over an event (alerts + investigations + actions). */
@@ -612,6 +613,7 @@ export interface IncidentEvent {
     | 'note'
     | 'alert'
     | 'alert_cleared'
+    // 'investigation' only appears on historical timelines (feature removed).
     | 'investigation'
     | 'action'
     | 'escalated'
@@ -645,6 +647,61 @@ export interface MaintenanceWindow {
   createdByName?: string;
   createdAt: string;
   status: 'active' | 'scheduled' | 'ended';
+}
+
+/* ── MCP transactions (external AI agents) ───────────────────────────────── */
+
+/** open → committed | cancelling → rolled_back | rollback_failed */
+export type MCPTransactionStatus = 'open' | 'committed' | 'cancelling' | 'rolled_back' | 'rollback_failed';
+
+/**
+ * MCPTransaction — the envelope an external AI agent (Claude Code etc.) opens
+ * over the remote MCP endpoint before mutating anything. Every read/action is
+ * logged under it; commit keeps the changes, cancel or deadline expiry rolls
+ * everything back from snapshots.
+ */
+export interface MCPTransaction {
+  id: string;
+  orgId: string;
+  clusterId: string;
+  tokenId?: string;
+  tokenName?: string;
+  requestedBy: string;
+  incidentId?: string;
+  title: string;
+  status: MCPTransactionStatus;
+  closeReason?: 'commit' | 'cancel' | 'expired';
+  deadline: string;
+  rollbackActionId?: string;
+  createdAt: string;
+  closedAt?: string;
+  updatedAt: string;
+  /** Member runs — only populated on the detail endpoint. */
+  actions?: ClusterAction[];
+}
+
+/**
+ * One append-only timeline entry of a transaction. Types:
+ * opened | read | action_created | action_result | approval_requested |
+ * approval_decided | committed | cancel_requested | rollback_started |
+ * rollback_done | rollback_failed | expired
+ */
+export interface MCPTransactionEvent {
+  seq: number;
+  txnId: string;
+  type: string;
+  tool?: string;
+  actionId?: string;
+  payload?: Record<string, unknown>;
+  at: string;
+}
+
+/** Org-level MCP policy (defaults are fail-closed: disruptive+destructive gated). */
+export interface MCPPolicy {
+  approvalLevels: string[];
+  defaultTtlSeconds: number;
+  maxTtlSeconds: number;
+  notifyProviderIds?: string[];
 }
 
 /** Derived metric: logs/spans → named time series (Better Stack pattern). */

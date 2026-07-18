@@ -1,7 +1,6 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { cn } from '@/lib/cn';
 import { Spinner } from '@/components/ui';
@@ -9,8 +8,8 @@ import { useMe } from '@/components/app/me-context';
 import { PageHeader } from '@/components/app/page-header';
 import { useInfra } from '@/lib/hooks/use-infra';
 import { Gauge, fmtBytes, fmtCores, usageTone } from '@/components/infra/gauge';
-import { createAction } from '@/lib/api/controlplane';
-import type { ActionKind, InfraNode } from '@/lib/api/types';
+import Link from 'next/link';
+import type { InfraNode } from '@/lib/api/types';
 
 // Nodes — die Hardware-Wahrheit des Clusters, live (kubelet stats/summary
 // über den Agenten, SSE-getrieben). ADAPTIV: wenige Nodes = große
@@ -132,7 +131,7 @@ export default function NodesPage() {
           </div>
           {focused ? (
             <div className="mt-3">
-              <NodeCard node={focused} orgId={orgId} clusterId={clusterId} />
+              <NodeCard node={focused} clusterId={clusterId} />
             </div>
           ) : null}
         </>
@@ -140,7 +139,7 @@ export default function NodesPage() {
         /* Wenige Nodes: volle Instrumenten-Karten */
         <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
           {nodes.map((n) => (
-            <NodeCard key={n.name} node={n} orgId={orgId} clusterId={clusterId} />
+            <NodeCard key={n.name} node={n} clusterId={clusterId} />
           ))}
         </div>
       )}
@@ -178,38 +177,12 @@ function MiniBar({ frac }: { frac: number }) {
 
 function NodeCard({
   node: n,
-  orgId,
   clusterId,
 }: {
   node: InfraNode;
-  orgId?: string;
   clusterId: string;
 }) {
   const pressures = n.pressure ? n.pressure.split(',') : [];
-  // Node-Wartung direkt an der Karte — zweistufig mit kubectl-Äquivalent,
-  // ausgeführt als verifizierte Agent-Pipeline (drain: Eviction-API, PDB-aware).
-  const [confirm, setConfirm] = useState<'cordon' | 'uncordon' | 'drain' | null>(null);
-  const [firing, setFiring] = useState(false);
-  const fire = async () => {
-    if (!confirm || !orgId || firing) return;
-    setFiring(true);
-    try {
-      await createAction(orgId, clusterId, {
-        kind: confirm as ActionKind,
-        targetNamespace: '-',
-        targetKind: 'Node',
-        targetName: n.name,
-        params: {},
-      });
-      setConfirm(null);
-    } finally {
-      setFiring(false);
-    }
-  };
-  const kubectlEq =
-    confirm === 'drain'
-      ? `kubectl drain ${n.name} --ignore-daemonsets --delete-emptydir-data`
-      : `kubectl ${confirm} ${n.name}`;
   return (
     <div className="rounded-skin border border-line bg-raised p-4" style={{ boxShadow: 'var(--rp-rim)' }}>
       <div className="flex items-center gap-2 border-b border-line-strong pb-2.5">
@@ -262,68 +235,16 @@ function NodeCard({
         </span>
       </div>
 
-      {/* Node-Wartung — dieselben verifizierten Pipelines wie im Actions-Tab */}
-      {orgId ? (
-        <div className="mt-2.5 flex items-center gap-2 border-t border-line pt-2.5">
-          <button
-            type="button"
-            onClick={() => setConfirm(n.unschedulable ? 'uncordon' : 'cordon')}
-            className="rp-focus rounded-skin-sm border border-line px-2.5 py-1 font-mono text-[10.5px] text-ink transition-colors hover:bg-hover"
-          >
-            {n.unschedulable ? '▷ uncordon' : '⊘ cordon'}
-          </button>
-          <button
-            type="button"
-            onClick={() => setConfirm('drain')}
-            className="rp-focus rounded-skin-sm border border-line px-2.5 py-1 font-mono text-[10.5px] text-ink transition-colors hover:bg-hover"
-          >
-            ⇊ drain
-          </button>
-          <Link
-            href={`/clusters/${clusterId}/actions`}
-            className="ml-auto font-mono text-[10px] text-muted transition-colors hover:text-ink"
-          >
-            runs →
-          </Link>
-        </div>
-      ) : null}
-
-      {confirm ? (
-        <div
-          className="mt-2 overflow-hidden rounded-skin-sm border"
-          style={{ borderColor: 'var(--rp-line-strong)', animation: 'reveal-up var(--rp-dur-med) var(--rp-ease-enter)' }}
+      {/* Node operations (cordon/drain) are now performed by external agents via
+          Transactions — see the Transactions page for the audit trail. */}
+      <div className="mt-2 border-t border-line pt-2">
+        <Link
+          href={`/clusters/${clusterId}/transactions`}
+          className="font-mono text-[10px] text-muted transition-colors hover:text-ink"
         >
-          <div className="bg-inset px-3 py-2">
-            <code className="block break-all font-mono text-[10.5px] leading-relaxed text-mid">
-              <span className="text-faint">$ </span>
-              {kubectlEq}
-            </code>
-            {confirm === 'drain' ? (
-              <p className="mt-1 font-mono text-[9.5px] leading-relaxed" style={{ color: 'var(--rp-tone-yellow-fg)' }}>
-                ◆ evicts every pod (PDB-aware, keeps daemonsets) — cancel re-uncordons
-              </p>
-            ) : null}
-          </div>
-          <div className="flex items-center gap-2 border-t border-line bg-raised px-3 py-2">
-            <button
-              type="button"
-              onClick={fire}
-              disabled={firing}
-              className="rp-focus h-7 rounded-skin-sm px-3 font-mono text-[11px] font-semibold transition-opacity hover:opacity-90"
-              style={{ background: 'var(--rp-btn-bg)', color: 'var(--rp-btn-fg)', opacity: firing ? 0.55 : 1 }}
-            >
-              {firing ? 'dispatching…' : 'Execute'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirm(null)}
-              className="h-7 rounded-skin-sm border border-line px-2.5 font-mono text-[11px] text-mid transition-colors hover:bg-hover hover:text-ink"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : null}
+          view transactions →
+        </Link>
+      </div>
     </div>
   );
 }

@@ -5,7 +5,6 @@ import { CommandPalette, CommandTrigger } from './command-palette';
 import { ScopeSelector } from './scope-selector';
 import { UserMenu } from './user-menu';
 import { useNav } from './sidebar';
-import { CopilotButton } from './copilot';
 
 // Global top bar — the instrument bezel: h-52, translucent + backdrop-blur, ONE
 // 1px hairline at the bottom (no hard rule). On mobile the left holds the nav
@@ -36,11 +35,8 @@ export function Topbar() {
         <ScopeSelector />
       </div>
       <div className="flex items-center gap-1.5 sm:gap-2">
-        {/* Primary feature — the AI Copilot, kept prominent at every width. */}
-        <CopilotButton />
         {/* Search only appears at lg+; on tablet the 236px sidebar leaves too
-            little room, so it would collide with the scope + Copilot. */}
-        <span className="mx-0.5 hidden h-4 w-px bg-line lg:block" aria-hidden />
+            little room, so it would collide with the scope breadcrumb. */}
         <div className="hidden lg:block">
           <CommandTrigger />
         </div>

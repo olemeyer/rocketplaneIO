@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { cn } from '@/lib/cn';
 import { Spinner } from '@/components/ui';
@@ -11,12 +12,14 @@ import {
   assignIncident,
   getIncident,
   listMembers,
+  listTransactions,
   setIncidentPostmortem,
   setIncidentStatus,
   updateIncident,
 } from '@/lib/api/controlplane';
-import type { Incident, IncidentEvent, IncidentStatus, Member } from '@/lib/api/types';
+import type { Incident, IncidentEvent, IncidentStatus, MCPTransaction, Member } from '@/lib/api/types';
 import { SEVERITY, STATUS, SEVERITY_ORDER, fmtDuration, durationBetween } from '@/lib/incidents';
+import { txnChip } from '@/lib/transactions';
 import { timeAgo } from '@/lib/format';
 
 // Incident detail — the response console: lifecycle controls
@@ -91,6 +94,7 @@ export default function IncidentDetailPage() {
   const [incident, setIncident] = useState<Incident | null>(null);
   const [timeline, setTimeline] = useState<IncidentEvent[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
+  const [txns, setTxns] = useState<MCPTransaction[]>([]);
   const [notFound, setNotFound] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -104,9 +108,24 @@ export default function IncidentDetailPage() {
       .catch(() => setNotFound(true));
   }, [orgId, clusterId, incidentId]);
 
+  // External-agent (MCP) transactions opened against this incident.
+  const loadTxns = useCallback(() => {
+    if (!orgId) return;
+    listTransactions(orgId, clusterId, 100)
+      .then((list) => setTxns(list.filter((t) => t.incidentId === incidentId)))
+      .catch(() => {});
+  }, [orgId, clusterId, incidentId]);
+
   const loadRef = useRef(load);
   loadRef.current = load;
-  const { live } = useClusterEvents(orgId, clusterId, { incidents: () => loadRef.current() });
+  const loadTxnsRef = useRef(loadTxns);
+  loadTxnsRef.current = loadTxns;
+  const { live } = useClusterEvents(orgId, clusterId, {
+    incidents: () => loadRef.current(),
+    transactions: () => loadTxnsRef.current(),
+  });
+
+  useEffect(() => { loadTxns(); }, [loadTxns]);
 
   useEffect(() => {
     load();
@@ -209,6 +228,35 @@ export default function IncidentDetailPage() {
             />
           </section>
 
+          {/* External-agent transactions linked to this incident (the former
+              copilot entry point): each one is a full MCP audit trail. */}
+          {txns.length > 0 ? (
+            <section>
+              <div className="rp-micro pb-2 text-faint">agent transactions · {txns.length}</div>
+              <div className="divide-y divide-line overflow-hidden rounded-skin border border-line">
+                {txns.map((t) => {
+                  const chip = txnChip(t.status);
+                  return (
+                    <Link
+                      key={t.id}
+                      href={`/clusters/${clusterId}/transactions/${t.id}`}
+                      className="rp-focus flex items-center gap-2.5 bg-raised px-3 py-2 font-mono text-[11px] transition-colors hover:bg-hover"
+                    >
+                      <span className="flex w-[112px] shrink-0 items-center gap-1.5">
+                        <span className={chip.pulse ? 'rp-breath' : ''} style={{ color: chip.fg }} aria-hidden>{chip.glyph}</span>
+                        <span className="text-[9px] uppercase tracking-[0.06em]" style={{ color: chip.fg }}>{chip.label}</span>
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-ink">{t.title}</span>
+                      {t.tokenName ? <span className="hidden shrink-0 text-[10px] text-muted sm:block">{t.tokenName}</span> : null}
+                      <span className="shrink-0 text-[10px] tabular-nums text-faint">{timeAgo(t.createdAt)}</span>
+                      <span className="shrink-0 text-faint" aria-hidden>›</span>
+                    </Link>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
+
           <Postmortem
             value={incident.postmortem}
             onSave={(text) => act(() => setIncidentPostmortem(orgId!, clusterId, incidentId, text))}
@@ -222,7 +270,6 @@ export default function IncidentDetailPage() {
             members={members}
             onSeverity={(sev) => act(() => updateIncident(orgId!, clusterId, incidentId, { severity: sev }))}
             onAssign={(userId) => act(() => assignIncident(orgId!, clusterId, incidentId, userId))}
-            onOpenCopilot={() => router.push(`/clusters/${clusterId}/copilot`)}
             live={live}
           />
         </aside>
@@ -437,14 +484,12 @@ function MetaCard({
   members,
   onSeverity,
   onAssign,
-  onOpenCopilot,
   live,
 }: {
   incident: Incident;
   members: Member[];
   onSeverity: (sev: string) => void;
   onAssign: (userId: string | null) => void;
-  onOpenCopilot: () => void;
   live: boolean;
 }) {
   const mtta = incident.acknowledgedAt ? durationBetween(incident.createdAt, incident.acknowledgedAt) : 0;
@@ -493,7 +538,8 @@ function MetaCard({
       </Row>
 
       <Row label="Source">
-        <span className="font-mono text-[10.5px] text-mid">{incident.source}</span>
+        {/* Historical rows may still carry source='copilot' — show a neutral label. */}
+        <span className="font-mono text-[10.5px] text-mid">{incident.source === 'copilot' ? 'assistant' : incident.source}</span>
       </Row>
       <Row label="Declared">
         <span className="font-mono text-[10.5px] tabular-nums text-mid">{timeAgo(incident.createdAt)}</span>
@@ -511,17 +557,6 @@ function MetaCard({
           {incident.status === 'resolved' ? (mttr ? fmtDuration(mttr) : '—') : fmtDuration(openFor)}
         </span>
       </Row>
-
-      <button
-        type="button"
-        onClick={onOpenCopilot}
-        className="rp-focus mt-3.5 flex h-8 w-full items-center justify-center gap-1.5 rounded-skin-sm border border-line font-mono text-[11px] text-ink transition-colors hover:bg-hover"
-      >
-        <span aria-hidden style={{ color: 'var(--rp-tone-blue-fg)' }}>
-          ✦
-        </span>
-        Investigate with Copilot
-      </button>
     </div>
   );
 }

@@ -366,6 +366,97 @@ export function checkWorkflow(
   });
 }
 
+/* ── MCP transactions (external AI agents) ────────────────────────────────── */
+
+type MCPTransactionT = import('./types').MCPTransaction;
+type MCPTransactionEventT = import('./types').MCPTransactionEvent;
+type MCPPolicyT = import('./types').MCPPolicy;
+
+function txnBase(orgId: string, clusterId: string): string {
+  return `/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/transactions`;
+}
+
+export function listTransactions(
+  orgId: string,
+  clusterId: string,
+  limit = 100,
+): Promise<MCPTransactionT[]> {
+  return apiFetch(`${txnBase(orgId, clusterId)}?limit=${limit}`);
+}
+
+/** Detail includes the member action runs (`actions`). */
+export function getTransaction(
+  orgId: string,
+  clusterId: string,
+  txnId: string,
+): Promise<MCPTransactionT> {
+  return apiFetch(`${txnBase(orgId, clusterId)}/${enc(txnId)}`);
+}
+
+/** `from` = last seen seq (exclusive) — the UI resumes the timeline with it. */
+export function listTransactionEvents(
+  orgId: string,
+  clusterId: string,
+  txnId: string,
+  from = 0,
+): Promise<MCPTransactionEventT[]> {
+  return apiFetch(`${txnBase(orgId, clusterId)}/${enc(txnId)}/events?from=${from}`);
+}
+
+/** Human kill switch (admin): closes the agent's transaction and rolls back. */
+export function cancelTransaction(
+  orgId: string,
+  clusterId: string,
+  txnId: string,
+): Promise<MCPTransactionT> {
+  return apiFetch(`${txnBase(orgId, clusterId)}/${enc(txnId)}/cancel`, { method: 'POST', body: '{}' });
+}
+
+/**
+ * Revert a committed transaction (admin only): enqueues a new revert-transaction
+ * that undoes all durable mutations via snapshot restore. Returns the newly
+ * created revert-transaction so the UI can navigate directly to its detail page.
+ */
+export function revertTransaction(
+  orgId: string,
+  clusterId: string,
+  txnId: string,
+): Promise<MCPTransactionT> {
+  return apiFetch(`${txnBase(orgId, clusterId)}/${enc(txnId)}/revert`, { method: 'POST', body: '{}' });
+}
+
+/** Release an awaiting_approval run (admin, interactive session only). */
+export function approveAction(
+  orgId: string,
+  clusterId: string,
+  actionId: string,
+): Promise<{ actionId: string; decision: string }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/actions/${enc(actionId)}/approve`, {
+    method: 'POST',
+    body: '{}',
+  });
+}
+
+/** Reject an awaiting_approval run (admin, interactive session only). */
+export function rejectAction(
+  orgId: string,
+  clusterId: string,
+  actionId: string,
+): Promise<{ actionId: string; decision: string }> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/clusters/${enc(clusterId)}/actions/${enc(actionId)}/reject`, {
+    method: 'POST',
+    body: '{}',
+  });
+}
+
+export function getMCPPolicy(orgId: string): Promise<MCPPolicyT> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/settings/mcp`);
+}
+
+export function setMCPPolicy(orgId: string, policy: MCPPolicyT): Promise<MCPPolicyT> {
+  return apiFetch(`/api/orgs/${enc(orgId)}/settings/mcp`, { method: 'PUT', body: JSON.stringify(policy) });
+}
+
 export function getInfra(
   orgId: string,
   clusterId: string,
@@ -561,18 +652,6 @@ export function setIncidentPostmortem(
   return apiFetch(`${incBase(orgId, clusterId)}/${enc(id)}/postmortem`, {
     method: 'PUT',
     body: JSON.stringify({ text }),
-  });
-}
-
-export function linkInvestigation(
-  orgId: string,
-  clusterId: string,
-  id: string,
-  chatId: string,
-): Promise<{ timeline: IncidentEventT[] }> {
-  return apiFetch(`${incBase(orgId, clusterId)}/${enc(id)}/link-investigation`, {
-    method: 'POST',
-    body: JSON.stringify({ chatId }),
   });
 }
 

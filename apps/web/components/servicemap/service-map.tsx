@@ -228,6 +228,8 @@ function actionsByNode(actions: ClusterAction[], nodes: MapNode[]): Map<string, 
   // actions kommen neueste zuerst; erste Zuordnung je Node gewinnt, außer eine
   // laufende überschreibt ein Ergebnis.
   for (const a of actions) {
+    // Parked runs (MCP approval gate) execute nothing — keep the map calm.
+    if (a.status === 'awaiting_approval') continue;
     const running = a.status === 'pending' || a.status === 'running';
     if (!running && new Date(a.updatedAt).getTime() < cutoff) continue;
     const node = nodes.find((n) => {

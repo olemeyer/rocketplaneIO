@@ -2,14 +2,14 @@
 
 // step-timeline.tsx — the ONE canonical step timeline: connected nodes on a
 // vertical rail, live-pulsing on the running step. Rendered everywhere an action
-// appears — the Actions tab, the workload panel, the Runs page AND inline in the
-// copilot chat — so the trace looks and reads identically wherever you meet it.
+// appears — the Actions tab, the workload panel and the Runs page — so the
+// trace looks and reads identically wherever you meet it.
 
 export type TimelineStep = { name: string; status: string; detail?: string };
 
-// normalizeSteps accepts the loosely-typed steps that flow through the copilot
-// store (unknown) or the strict ActionStep[] from the API and returns a clean
-// list, so a single component serves both callers.
+// normalizeSteps accepts loosely-typed steps (unknown) or the strict
+// ActionStep[] from the API and returns a clean list, so a single component
+// serves both callers.
 export function normalizeSteps(raw: unknown): TimelineStep[] {
   if (!Array.isArray(raw)) return [];
   const out: TimelineStep[] = [];

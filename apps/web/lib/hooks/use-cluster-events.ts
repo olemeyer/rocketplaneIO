@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from 'react';
 // FALLBACK (robustness against proxy problems); EventSource itself
 // reconnects automatically.
 
-export type ClusterEventType = 'topology' | 'actions' | 'logs' | 'namespaces' | 'alerts' | 'incidents';
+export type ClusterEventType = 'topology' | 'actions' | 'logs' | 'namespaces' | 'alerts' | 'incidents' | 'transactions';
 
 export function useClusterEvents(
   orgId: string | undefined,
@@ -39,6 +39,7 @@ export function useClusterEvents(
       ['namespaces', on('namespaces')],
       ['alerts', on('alerts')],
       ['incidents', on('incidents')],
+      ['transactions', on('transactions')],
     ];
     for (const [type, fn] of listeners) es.addEventListener(type, fn);
     es.onerror = () => setLive(false); // EventSource reconnects on its own

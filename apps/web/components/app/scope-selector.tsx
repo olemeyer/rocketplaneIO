@@ -216,7 +216,7 @@ export function ScopeSelector() {
       {/* Mobile + tablet: ONE integrated collector button (org / cluster /
           namespace all inside). At md+ the 236px sidebar leaves the top bar too
           little room for three inline pills, so this keeps everything selectable
-          without crowding the Copilot button. */}
+          without crowding the top bar. */}
       <div className="flex min-w-0 items-center lg:hidden">
         <ScopeCollector />
       </div>

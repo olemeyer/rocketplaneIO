@@ -115,13 +115,6 @@ function StorageIcon() {
   );
 }
 
-function ActionsIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d="M8.8 1.8 3.2 9h4l-.9 5.2L11.9 7h-4l.9-5.2Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-    </svg>
-  );
-}
 
 function ResourcesIcon() {
   return (
@@ -134,13 +127,16 @@ function ResourcesIcon() {
   );
 }
 
-function RunsIcon() {
+function TransactionsIcon() {
+  // Two opposing arrows: act ⇄ roll back — the transaction contract.
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d="M2.5 12.5V9M6 12.5V5.5M9.5 12.5V7.5M13 12.5V3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M2.5 5h10M10 2.5 12.8 5 10 7.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M13.5 11h-10M6 8.5 3.2 11 6 13.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
+
 
 // Ein Nav-Eintrag (geteilt zwischen Desktop-Sidebar und Mobile-Drawer). Mobil
 // etwas höher (Touch-Target), Desktop kompakt.
@@ -221,8 +217,7 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
       label: 'Respond',
       items: [
         { label: 'Incidents', href: `${base}/incidents`, icon: <IncidentsIcon /> },
-        { label: 'Actions', href: `${base}/actions`, icon: <ActionsIcon /> },
-        { label: 'Runs', href: `${base}/runs`, icon: <RunsIcon /> },
+        { label: 'Transactions', href: `${base}/transactions`, icon: <TransactionsIcon /> },
       ],
     },
   ];
