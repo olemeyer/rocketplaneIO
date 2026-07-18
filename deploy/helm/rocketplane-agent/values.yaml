@@ -47,8 +47,9 @@ rbac:
   # -- Create the enumerated ClusterRole + binding. Disable if RBAC is managed
   # out-of-band.
   create: true
-  # -- Grant the ACT verbs safe actions need (patch on workload controllers,
-  # pod delete, node patch, evictions). Set false for observe-only.
+  # -- Grant the broad ACT access the generic operation set needs (any kind
+  # incl. CRDs, exec, evictions). Guardrails are enforced by the control plane
+  # (transactions, classification, approvals, rollback). false = observe-only.
   actions: true
 
 # -- Number of agent replicas. A Kubernetes Lease elects exactly ONE leader that

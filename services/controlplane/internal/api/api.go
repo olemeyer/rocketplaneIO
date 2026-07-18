@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/alerts"
 	"github.com/rocketplaneio/rocketplane/services/controlplane/internal/auth"
@@ -37,6 +38,13 @@ type Server struct {
 	// Restart bis zum Shutdown-Timeout (Agenten reconnecten ohnehin).
 	shutdownCh   chan struct{}
 	shutdownOnce sync.Once
+
+	// MCP: the tool server is built once (mcpOnce/mcpSrv); apiMux is the routed
+	// mux so MCP read tools can dispatch in-process against the same handlers,
+	// validation and RBAC the browser uses.
+	mcpOnce sync.Once
+	mcpSrv  *mcp.Server
+	apiMux  *http.ServeMux
 }
 
 // New builds the API server.
@@ -145,7 +153,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/incidents/{incident}/assign", sess(http.HandlerFunc(s.handleAssignIncident)))
 	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/incidents/{incident}/notes", sess(http.HandlerFunc(s.handleIncidentNote)))
 	mux.Handle("PUT /api/orgs/{org}/clusters/{cluster}/incidents/{incident}/postmortem", sess(http.HandlerFunc(s.handleIncidentPostmortem)))
-	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/incidents/{incident}/link-investigation", sess(http.HandlerFunc(s.handleLinkInvestigation)))
 	// Escalation policies (org-scoped) + per-cluster default (Round 3).
 	mux.Handle("GET /api/orgs/{org}/escalation-policies", sess(http.HandlerFunc(s.handleListEscalationPolicies)))
 	mux.Handle("POST /api/orgs/{org}/escalation-policies", sess(http.HandlerFunc(s.handleCreateEscalationPolicy)))
@@ -162,17 +169,20 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/traces/{traceId}", sess(http.HandlerFunc(s.handleTraceDetail)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/span-stats", sess(http.HandlerFunc(s.handleSpanStats)))
 	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/reconnect", sess(http.HandlerFunc(s.handleReconnect)))
-	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/copilot/chat", sess(http.HandlerFunc(s.handleCopilotChat)))
-	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/copilot/action", sess(http.HandlerFunc(s.handleCopilotActionDecision)))
-	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/copilot/chats", sess(http.HandlerFunc(s.handleListCopilotChats)))
-	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/copilot/chats/{chat}", sess(http.HandlerFunc(s.handleGetCopilotChat)))
-	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/copilot/chats/{chat}/graph", sess(http.HandlerFunc(s.handleGetInvestigationGraph)))
-	mux.Handle("PUT /api/orgs/{org}/clusters/{cluster}/copilot/chats/{chat}", sess(http.HandlerFunc(s.handleUpsertCopilotChat)))
-	mux.Handle("DELETE /api/orgs/{org}/clusters/{cluster}/copilot/chats/{chat}", sess(http.HandlerFunc(s.handleDeleteCopilotChat)))
 	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/actions", sess(http.HandlerFunc(s.handleCreateAction)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/actions", sess(http.HandlerFunc(s.handleListActions)))
 	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/actions/{action}/cancel", sess(http.HandlerFunc(s.handleCancelAction)))
 	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/actions/{action}/revert", sess(http.HandlerFunc(s.handleRevertAction)))
+	// MCP approval gate + transactions (list/timeline/kill switch) + org policy.
+	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/actions/{action}/approve", sess(http.HandlerFunc(s.handleApproveAction)))
+	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/actions/{action}/reject", sess(http.HandlerFunc(s.handleRejectAction)))
+	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/transactions", sess(http.HandlerFunc(s.handleListTransactions)))
+	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/transactions/{txn}", sess(http.HandlerFunc(s.handleGetTransaction)))
+	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/transactions/{txn}/events", sess(http.HandlerFunc(s.handleListTransactionEvents)))
+	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/transactions/{txn}/cancel", sess(http.HandlerFunc(s.handleCancelTransaction)))
+	mux.Handle("POST /api/orgs/{org}/clusters/{cluster}/transactions/{txn}/revert", sess(http.HandlerFunc(s.handleRevertTransaction)))
+	mux.Handle("GET /api/orgs/{org}/settings/mcp", sess(http.HandlerFunc(s.handleGetMCPPolicy)))
+	mux.Handle("PUT /api/orgs/{org}/settings/mcp", sess(http.HandlerFunc(s.handleSetMCPPolicy)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/workload-pods", sess(http.HandlerFunc(s.handleWorkloadPods)))
 	mux.Handle("GET /api/orgs/{org}/clusters/{cluster}/inventory", sess(http.HandlerFunc(s.handleListInventory)))
 	mux.Handle("GET /api/orgs/{org}/action-definitions", sess(http.HandlerFunc(s.handleListActionDefs)))
@@ -197,6 +207,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/agent/actions/{action}/result", agent(http.HandlerFunc(s.handleAgentActionResult)))
 	mux.Handle("POST /api/agent/inventory", agent(http.HandlerFunc(s.handleAgentInventory)))
 
+	// ── MCP: remote interface for external AI agents (Streamable HTTP) ──
+	// Method-less pattern: the MCP transport uses POST (JSON-RPC), GET (SSE)
+	// and DELETE (session teardown) on the same URL. Bearer-token-only auth.
+	mux.Handle("/mcp/orgs/{org}/clusters/{cluster}", s.mcpHTTPHandler())
+
+	// Read tools dispatch in-process against this mux (same handlers/RBAC as
+	// the browser) — keep the reference before wrapping middleware.
+	s.apiMux = mux
 	return logRequests(mux)
 }
 
@@ -285,6 +303,15 @@ func (s *Server) StartBackground(ctx context.Context) {
 					log.Printf("action reaper: %v", err)
 				} else if n > 0 {
 					log.Printf("action reaper: finalized %d stuck action(s)", n)
+				}
+				// MCP transactions: expire overdue ones, drive pending rollbacks
+				// (cancel running runs → enqueue the combined snapshot restore →
+				// finalize). The agent's own cancel does a fast first pass; this
+				// loop guarantees convergence even if the agent vanished.
+				if signals, err := s.store.ReapTransactions(leadCtx); err != nil {
+					log.Printf("transaction reaper: %v", err)
+				} else {
+					s.publishTxnSignals(signals)
 				}
 			}
 		}

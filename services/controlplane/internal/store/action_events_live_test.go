@@ -31,8 +31,8 @@ func TestActionEventsLive(t *testing.T) {
 	u, _ := st.UpsertUserFromOIDC(ctx, "sub-"+uuid.NewString(), uuid.NewString()+"@ev.local", "Ev", "")
 	org, _ := st.CreateOrg(ctx, "ev-"+uuid.NewString()[:8], u.ID)
 	cl, _, _ := st.CreateClusterWithEnrollToken(ctx, org.ID, "ev-cluster", u.ID)
-	g, _ := st.CreateGroup(ctx, cl.ID, u.ID, "manual_batch", "trace", nil, nil, nil, "", "", "")
-	a, _ := st.AppendAction(ctx, g.ID, nil, cl.ID, u.ID, "scale", "shop", "Deployment", "checkout", "builtin", json.RawMessage(`{}`))
+	g, _ := st.CreateGroup(ctx, cl.ID, u.ID, "manual_batch", "trace", nil, "", "")
+	a, _ := st.AppendAction(ctx, g.ID, cl.ID, u.ID, "scale", "shop", "Deployment", "checkout", "builtin", json.RawMessage(`{}`))
 
 	// UpsertStep idempotent: same (action,seq) twice → one row, status updated.
 	s0 := model.ActionStep{ActionID: a.ID, GroupID: g.ID, Seq: 0, Name: "trigger", Kind: "mutate", EffectClass: "reversible", Status: "running"}

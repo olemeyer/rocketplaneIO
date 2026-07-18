@@ -110,7 +110,7 @@ func (s *Store) ReapCrashedSnapshotRuns(ctx context.Context) (int64, error) {
 			continue
 		}
 		params, _ := json.Marshal(map[string]any{"snapshots": json.RawMessage(c.snapshots)})
-		if _, err := s.AppendAction(ctx, c.groupID, nil, c.clusterID, *c.requestedBy,
+		if _, err := s.AppendAction(ctx, c.groupID, c.clusterID, *c.requestedBy,
 			"snapshot_restore", "-", "-", "restore", "builtin", params); err != nil {
 			return n, fmt.Errorf("enqueue snapshot restore: %w", err)
 		}

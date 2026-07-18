@@ -30,8 +30,13 @@ func TestActionSnapshotsLive(t *testing.T) {
 	u, _ := st.UpsertUserFromOIDC(ctx, "sub-"+uuid.NewString(), uuid.NewString()+"@sn.local", "Sn", "")
 	org, _ := st.CreateOrg(ctx, "sn-"+uuid.NewString()[:8], u.ID)
 	cl, _, _ := st.CreateClusterWithEnrollToken(ctx, org.ID, "sn-cluster", u.ID)
-	g, _ := st.CreateGroup(ctx, cl.ID, u.ID, "manual_single", "snap", nil, nil, nil, "", "", "")
-	a, _ := st.AppendAction(ctx, g.ID, nil, cl.ID, u.ID, "scale", "shop", "Deployment", "checkout", "builtin", json.RawMessage(`{}`))
+	g, _ := st.CreateGroup(ctx, cl.ID, u.ID, "manual_single", "snap", nil, "", "")
+	a, _ := st.AppendAction(ctx, g.ID, cl.ID, u.ID, "scale", "shop", "Deployment", "checkout", "builtin", json.RawMessage(`{}`))
+	// Snapshots are only appendable while the run is executing (the agent
+	// reports them as mutations commit) — claim the run like the agent would.
+	if _, err := pool.Exec(ctx, `UPDATE cluster_actions SET status='running' WHERE id=$1`, a.ID); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
 
 	// two append batches — order must be preserved across them.
 	b1 := json.RawMessage(`[{"seq":0,"kind":"Deployment","name":"checkout","scope":"object"}]`)

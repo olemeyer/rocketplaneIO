@@ -52,6 +52,13 @@ kind: ClusterRole
 metadata:
   name: rocketplane-agent
 rules:
+  # Generic operation set (k8s_get/list/patch/apply/delete on ANY kind incl.
+  # CRDs): the agent needs broad access — the guardrails live in the control
+  # plane (transaction requirement, risk classification, approval gate, durable
+  # snapshot rollback, full audit), not in a resource whitelist.
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["namespaces", "pods", "services", "nodes", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch"]

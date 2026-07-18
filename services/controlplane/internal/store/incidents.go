@@ -15,7 +15,7 @@ import (
 )
 
 // incidents.go — persistence for the incident lifecycle. An incident brackets
-// alerts, Copilot investigations and actions across open→acknowledged→mitigated→
+// alerts and actions across open→acknowledged→mitigated→
 // resolved. The timeline (incident_events) is the canonical chronicle; alert
 // firing/clearing, status changes, notes and linked investigations/actions
 // each write an entry. The alert evaluator deduplicates open auto-incidents
@@ -522,29 +522,6 @@ func (s *Store) SetIncidentPostmortem(ctx context.Context, clusterID, id uuid.UU
 		return nil, err
 	}
 	return s.GetIncident(ctx, clusterID, id)
-}
-
-// LinkInvestigationToIncident links a Copilot investigation (via its chat ID)
-// to an incident and writes a timeline entry.
-func (s *Store) LinkInvestigationToIncident(ctx context.Context, clusterID, incidentID, chatID uuid.UUID, actorID *uuid.UUID, actorEmail string) error {
-	if _, err := s.GetIncident(ctx, clusterID, incidentID); err != nil {
-		return err
-	}
-	// Enforce cluster scope: the investigation MUST belong to the same cluster
-	// as the incident — otherwise a foreign chat_id could attach an investigation
-	// from another org/cluster to an incident (IDOR).
-	tag, err := s.pool.Exec(ctx, `
-		UPDATE copilot_investigations SET incident_id=$1 WHERE chat_id=$2 AND cluster_id=$3`,
-		incidentID, chatID, clusterID)
-	if err != nil {
-		return fmt.Errorf("link investigation: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	meta := []byte(fmt.Sprintf(`{"chatId":%q}`, chatID.String()))
-	return writeIncidentEvent(ctx, s.pool, incidentID, "investigation", actorID, actorEmail,
-		"Copilot investigation linked", "chat", &chatID, meta)
 }
 
 // AttachActionToIncident links an executed action to an incident.

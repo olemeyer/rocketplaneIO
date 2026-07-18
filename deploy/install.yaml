@@ -11,8 +11,12 @@
 #   kubectl apply -f install.yaml
 #
 # The agent connects OUTBOUND only. Its RBAC is split into two blocks below:
-# OBSERVE (read-only sync) and ACT (the enumerated write verbs safe actions
-# need). Delete the ACT block to run a strictly observe-only agent.
+# OBSERVE (read-only sync) and ACT (broad write access for the generic
+# operation set — arbitrary kinds incl. CRDs). The guardrails live in the
+# control plane, not in this file: every mutation requires an MCP transaction,
+# is risk-classified, may require human approval, is snapshotted before it
+# commits and rolls back on cancel/expiry — fully audited. Delete the ACT
+# block to run a strictly observe-only agent.
 # ---------------------------------------------------------------------------
 apiVersion: v1
 kind: Namespace
@@ -31,8 +35,10 @@ metadata:
     app.kubernetes.io/part-of: rocketplane
 automountServiceAccountToken: true
 ---
-# Enumerated ClusterRole — every verb the agent holds, nothing more.
-# No cluster-admin, no wildcard, no access to Secrets or ConfigMap contents.
+# ClusterRole — OBSERVE is enumerated read-only; ACT grants the broad write
+# access the generic operation set needs (any kind, incl. CRDs). Safety is
+# enforced upstream: transaction requirement, risk classification, approval
+# gate, durable snapshot rollback, full audit trail.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -75,34 +81,21 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
     verbs: ["get", "list", "watch"]
-  # ── ACT (safe actions) ──
-  - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets", "daemonsets"]
-    verbs: ["patch"]
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["delete", "patch"]
-  - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["patch"]
+  # ── ACT (generic operation set) ──
+  # Broad by design: external AI agents operate through kubectl-shaped
+  # primitives (get/list/patch/apply/delete/exec) on ANY kind incl. CRDs.
+  # The control plane classifies each operation, gates hard ones behind human
+  # approval, captures the before-state durably and rolls back on
+  # cancel/expiry. Delete this block for an observe-only agent.
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["pods/eviction"]
     verbs: ["create"]
-  - apiGroups: ["autoscaling"]
-    resources: ["horizontalpodautoscalers"]
-    verbs: ["patch"]
-  - apiGroups: ["batch"]
-    resources: ["cronjobs"]
-    verbs: ["patch"]
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["create", "delete"]
   - apiGroups: [""]
-    resources: ["configmaps", "namespaces", "services", "persistentvolumeclaims"]
-    verbs: ["patch"]
-  - apiGroups: ["policy"]
-    resources: ["poddisruptionbudgets"]
-    verbs: ["patch"]
+    resources: ["pods/exec"]
+    verbs: ["create"]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1

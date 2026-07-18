@@ -354,12 +354,18 @@ func (e *Evaluator) dispatchRemediation(ctx context.Context, r *model.AlertRule,
 		"args":           args,
 		"timeoutSeconds": def.TimeoutSeconds,
 	})
-	if _, err := e.store.CreateSystemAction(ctx, r.ClusterID, "script", "-", "Script", def.Name, params); err != nil {
+	// The remediation run lives in its own (auto-committed) system transaction
+	// so it shows up on the Transactions page with everything else; its
+	// snapshots stay available for manual revert there.
+	if _, _, err := e.store.CreateSystemTransactionWithAction(ctx, r.ClusterID, nil,
+		"alert remediation: "+r.Name, "alert_remediation",
+		"script", "-", "Script", def.Name, params); err != nil {
 		log.Printf("alerts: dispatch remediation %s: %v", def.Name, err)
 		return
 	}
 	_, _ = e.store.InsertAlertEvent(ctx, r.ID, r.ClusterID, "firing", "firing", value,
 		fmt.Sprintf("auto-remediation dispatched: workflow %q", def.Name))
 	e.broker.Publish(r.ClusterID, "actions", 0)
+	e.broker.Publish(r.ClusterID, "transactions", 0)
 	log.Printf("alerts: %s firing → dispatched workflow %q", r.Name, def.Name)
 }

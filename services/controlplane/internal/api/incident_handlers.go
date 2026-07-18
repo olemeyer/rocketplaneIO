@@ -274,38 +274,6 @@ func (s *Server) handleIncidentPostmortem(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, inc)
 }
 
-// handleLinkInvestigation — POST …/incidents/{id}/link-investigation {chatId}
-func (s *Server) handleLinkInvestigation(w http.ResponseWriter, r *http.Request) {
-	orgID, clusterID, ok := s.requireClusterRole(w, r, "member")
-	if !ok {
-		return
-	}
-	id, ok := parseIncidentID(w, r)
-	if !ok {
-		return
-	}
-	var req struct {
-		ChatID string `json:"chatId"`
-	}
-	if !decode(w, r, &req) {
-		return
-	}
-	chatID, err := uuid.Parse(req.ChatID)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid chatId")
-		return
-	}
-	actorID, email := s.actor(r)
-	if err := s.store.LinkInvestigationToIncident(r.Context(), clusterID, id, chatID, actorID, email); err != nil {
-		writeIncidentErr(w, err)
-		return
-	}
-	s.audit(r, &orgID, "incident.link_investigation", "incident", id.String(), req.ChatID, nil)
-	s.broker.Publish(clusterID, "incidents", 0)
-	events, _ := s.store.ListIncidentEvents(r.Context(), id)
-	writeJSON(w, http.StatusOK, map[string]any{"timeline": events})
-}
-
 func parseIncidentID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue("incident"))
 	if err != nil {

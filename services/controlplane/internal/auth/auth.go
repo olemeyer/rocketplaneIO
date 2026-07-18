@@ -264,6 +264,34 @@ func (a *Auth) WithSessionOrToken(next http.Handler) http.Handler {
 	})
 }
 
+// WithAPIToken accepts ONLY an API bearer token (`rp_…`) — no session-cookie
+// fallback. The MCP endpoint uses this: every MCP caller is a token, so a
+// transaction always carries a meaningful token identity, and the endpoint can
+// be exposed without any cookie/CSRF surface.
+func (a *Auth) WithAPIToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tok := bearerToken(r)
+		if !strings.HasPrefix(tok, "rp_") {
+			writeErr(w, http.StatusUnauthorized, "an api token (Authorization: Bearer rp_…) is required")
+			return
+		}
+		princ, err := a.store.ResolveAPIToken(r.Context(), tok)
+		if err != nil {
+			writeErr(w, http.StatusUnauthorized, "invalid or expired api token")
+			return
+		}
+		user, err := a.store.GetUser(r.Context(), princ.CreatedBy)
+		if err != nil || user.SuspendedAt != nil {
+			writeErr(w, http.StatusUnauthorized, "api token owner is not active")
+			return
+		}
+		ctx := context.WithValue(r.Context(), ctxUser, user)
+		ctx = context.WithValue(ctx, ctxOrgID, princ.OrgID)
+		ctx = WithTokenPrincipal(ctx, &TokenPrincipal{TokenID: princ.TokenID, OrgID: princ.OrgID, Role: princ.Role})
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // unauthorized clears any stale session cookie and returns 401. Clearing the
 // cookie is what breaks the /login ⇄ / redirect loop the browser hits when a
 // signed-but-invalid cookie is present (expired session, or user/DB gone): once

@@ -53,39 +53,20 @@ rules:
     resources: ["leases"]
     verbs: ["get", "create", "update"]
   {{- if .Values.rbac.actions }}
-  # ── ACT (safe actions) ──
-  # scale/restart/set-image/set-env/set-resources/rollout-*/partition = patch controllers
-  - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets", "daemonsets"]
-    verbs: ["patch"]
-  # delete_pod / cleanup_pods; annotate a pod = patch
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["delete", "patch"]
-  # cordon/uncordon/taint/set-label-on-node = patch node; drain = PDB-respecting evictions
-  - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["patch"]
+  # ── ACT (generic operation set) ──
+  # Broad by design: external AI agents operate through kubectl-shaped
+  # primitives (get/list/patch/apply/delete/exec) on ANY kind incl. CRDs. The
+  # control plane enforces the guardrails: transaction requirement, risk
+  # classification, human approval for hard operations, durable snapshot
+  # rollback and a full audit trail. Set rbac.actions=false for observe-only.
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["pods/eviction"]
     verbs: ["create"]
-  # hpa_set / hpa_toggle
-  - apiGroups: ["autoscaling"]
-    resources: ["horizontalpodautoscalers"]
-    verbs: ["patch"]
-  # cronjob_suspend/resume/trigger + cleanup_jobs
-  - apiGroups: ["batch"]
-    resources: ["cronjobs"]
-    verbs: ["patch"]
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["create", "delete"]
-  # patch_configmap; set_label/annotate on namespace; annotate on service/PVC/PDB
   - apiGroups: [""]
-    resources: ["configmaps", "namespaces", "services", "persistentvolumeclaims"]
-    verbs: ["patch"]
-  - apiGroups: ["policy"]
-    resources: ["poddisruptionbudgets"]
-    verbs: ["patch"]
+    resources: ["pods/exec"]
+    verbs: ["create"]
   {{- end }}
 {{- end }}

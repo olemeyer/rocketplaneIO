@@ -238,20 +238,3 @@ func (s *Store) GetActionDefinitionForCluster(ctx context.Context, clusterID, de
 		WHERE c.id=$1 AND d.id=$2`, clusterID, defID))
 }
 
-// CreateSystemAction creates an action without a user (auto-remediation).
-func (s *Store) CreateSystemAction(ctx context.Context, clusterID uuid.UUID, kind, ns, targetKind, targetName string, params json.RawMessage) (*model.Action, error) {
-	if len(params) == 0 {
-		params = json.RawMessage(`{}`)
-	}
-	var a model.Action
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO cluster_actions (cluster_id, requested_by, kind, target_namespace, target_kind, target_name, params)
-		VALUES ($1, NULL, $2, $3, $4, $5, $6)
-		RETURNING id, cluster_id, kind, target_namespace, target_kind, target_name, params, status, result, progress, steps, cancel_requested, created_at, updated_at`,
-		clusterID, kind, ns, targetKind, targetName, params,
-	).Scan(&a.ID, &a.ClusterID, &a.Kind, &a.TargetNamespace, &a.TargetKind, &a.TargetName, &a.Params, &a.Status, &a.Result, &a.Progress, &a.Steps, &a.CancelRequested, &a.CreatedAt, &a.UpdatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("insert system action: %w", err)
-	}
-	return &a, nil
-}

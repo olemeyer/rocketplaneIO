@@ -21,7 +21,7 @@ import (
 // CreateGroup opens a fresh ActionGroup. org_id is derived from the cluster so
 // callers only need cluster + user. Runs are appended via AppendAction.
 func (s *Store) CreateGroup(ctx context.Context, clusterID, userID uuid.UUID, origin, title string,
-	chatID, investigationID, incidentID *uuid.UUID, turnID, atomicity, onFailure string) (*model.ActionGroup, error) {
+	incidentID *uuid.UUID, atomicity, onFailure string) (*model.ActionGroup, error) {
 	if origin == "" {
 		origin = "manual_single"
 	}
@@ -33,39 +33,20 @@ func (s *Store) CreateGroup(ctx context.Context, clusterID, userID uuid.UUID, or
 	}
 	var g model.ActionGroup
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO action_groups (cluster_id, org_id, origin, chat_id, investigation_id, incident_id, turn_id, title, requested_by, atomicity, on_failure)
-		VALUES ($1, (SELECT org_id FROM clusters WHERE id=$1), $2,$3,$4,$5,NULLIF($6,''),$7,$8,$9,$10)
-		RETURNING id, cluster_id, org_id, origin, chat_id, investigation_id, incident_id, COALESCE(turn_id,''), title, atomicity, on_failure, status, revert_status, created_at, updated_at`,
-		clusterID, origin, chatID, investigationID, incidentID, turnID, title, userID, atomicity, onFailure,
-	).Scan(&g.ID, &g.ClusterID, &g.OrgID, &g.Origin, &g.ChatID, &g.InvestigationID, &g.IncidentID, &g.TurnID, &g.Title, &g.Atomicity, &g.OnFailure, &g.Status, &g.RevertStatus, &g.CreatedAt, &g.UpdatedAt)
+		INSERT INTO action_groups (cluster_id, org_id, origin, incident_id, title, requested_by, atomicity, on_failure)
+		VALUES ($1, (SELECT org_id FROM clusters WHERE id=$1), $2,$3,$4,$5,$6,$7)
+		RETURNING id, cluster_id, org_id, origin, incident_id, title, atomicity, on_failure, status, revert_status, created_at, updated_at`,
+		clusterID, origin, incidentID, title, userID, atomicity, onFailure,
+	).Scan(&g.ID, &g.ClusterID, &g.OrgID, &g.Origin, &g.IncidentID, &g.Title, &g.Atomicity, &g.OnFailure, &g.Status, &g.RevertStatus, &g.CreatedAt, &g.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("create action group: %w", err)
 	}
 	return &g, nil
 }
 
-// GetOrCreateTurnGroup returns the one group for a (chat, turn) pair, creating it
-// if absent — idempotent on Copilot resume via the uq_action_groups_turn index.
-func (s *Store) GetOrCreateTurnGroup(ctx context.Context, clusterID, userID uuid.UUID, chatID, investigationID *uuid.UUID, turnID, title string) (*model.ActionGroup, error) {
-	var g model.ActionGroup
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO action_groups (cluster_id, org_id, origin, chat_id, investigation_id, turn_id, title, requested_by)
-		VALUES ($1, (SELECT org_id FROM clusters WHERE id=$1), 'copilot_turn', $2, $3, $4, $5, $6)
-		ON CONFLICT (chat_id, turn_id) WHERE chat_id IS NOT NULL AND turn_id IS NOT NULL
-		DO UPDATE SET updated_at = now()
-		RETURNING id, cluster_id, org_id, origin, chat_id, investigation_id, incident_id, COALESCE(turn_id,''), title, atomicity, on_failure, status, revert_status, created_at, updated_at`,
-		clusterID, chatID, investigationID, turnID, title, userID,
-	).Scan(&g.ID, &g.ClusterID, &g.OrgID, &g.Origin, &g.ChatID, &g.InvestigationID, &g.IncidentID, &g.TurnID, &g.Title, &g.Atomicity, &g.OnFailure, &g.Status, &g.RevertStatus, &g.CreatedAt, &g.UpdatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("get-or-create turn group: %w", err)
-	}
-	return &g, nil
-}
-
 // AppendAction adds a pending run to a group with the next group_seq (max+1
-// within the group, assigned atomically). investigationNodeID + sourceKind are
-// stamped for the bidirectional link + builtin/script classification.
-func (s *Store) AppendAction(ctx context.Context, groupID uuid.UUID, investigationNodeID *uuid.UUID,
+// within the group, assigned atomically). sourceKind classifies builtin/script.
+func (s *Store) AppendAction(ctx context.Context, groupID uuid.UUID,
 	clusterID, userID uuid.UUID, kind, ns, targetKind, targetName, sourceKind string, params json.RawMessage) (*model.Action, error) {
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
@@ -76,15 +57,15 @@ func (s *Store) AppendAction(ctx context.Context, groupID uuid.UUID, investigati
 	var a model.Action
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO cluster_actions (cluster_id, requested_by, kind, target_namespace, target_kind, target_name, params,
-		                             group_id, group_seq, investigation_node_id, source_kind)
+		                             group_id, group_seq, source_kind)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,
 		        (SELECT COALESCE(MAX(group_seq)+1,0) FROM cluster_actions WHERE group_id=$8),
-		        $9,$10)
+		        $9)
 		RETURNING id, cluster_id, kind, target_namespace, target_kind, target_name, params, status, result, progress, steps,
-		          group_id, group_seq, investigation_node_id, created_at, updated_at`,
-		clusterID, userID, kind, ns, targetKind, targetName, params, groupID, investigationNodeID, sourceKind,
+		          group_id, group_seq, created_at, updated_at`,
+		clusterID, userID, kind, ns, targetKind, targetName, params, groupID, sourceKind,
 	).Scan(&a.ID, &a.ClusterID, &a.Kind, &a.TargetNamespace, &a.TargetKind, &a.TargetName, &a.Params, &a.Status, &a.Result, &a.Progress, &a.Steps,
-		&a.GroupID, &a.GroupSeq, &a.InvestigationNodeID, &a.CreatedAt, &a.UpdatedAt)
+		&a.GroupID, &a.GroupSeq, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("append action to group: %w", err)
 	}
@@ -99,11 +80,11 @@ func (s *Store) CreateAction(ctx context.Context, clusterID, userID uuid.UUID, k
 	if targetName != "" {
 		title = kind + " " + targetName
 	}
-	g, err := s.CreateGroup(ctx, clusterID, userID, "manual_single", title, nil, nil, nil, "", "", "")
+	g, err := s.CreateGroup(ctx, clusterID, userID, "manual_single", title, nil, "", "")
 	if err != nil {
 		return nil, err
 	}
-	return s.AppendAction(ctx, g.ID, nil, clusterID, userID, kind, ns, targetKind, targetName, "builtin", params)
+	return s.AppendAction(ctx, g.ID, clusterID, userID, kind, ns, targetKind, targetName, "builtin", params)
 }
 
 // ListActions liefert die jüngsten Aktionen eines Clusters (optional nur für
@@ -116,7 +97,7 @@ func (s *Store) ListActions(ctx context.Context, clusterID uuid.UUID, ns, target
 	rows, err := s.pool.Query(ctx, `
 		SELECT a.id, a.cluster_id, COALESCE(u.email, ''), a.kind, a.target_namespace, a.target_kind, a.target_name,
 		       a.params, a.status, a.result, a.progress, a.steps, a.revert, a.snapshot, a.cancel_requested,
-		       a.group_id, a.group_seq, a.investigation_node_id, a.created_at, a.updated_at,
+		       a.group_id, a.group_seq, a.created_at, a.updated_at,
 		       (a.revert IS NOT NULL OR a.snapshots <> '[]'::jsonb) AS revertible
 		FROM cluster_actions a
 		LEFT JOIN users u ON u.id = a.requested_by
@@ -134,7 +115,7 @@ func (s *Store) ListActions(ctx context.Context, clusterID uuid.UUID, ns, target
 		var a model.Action
 		if err := rows.Scan(&a.ID, &a.ClusterID, &a.RequestedBy, &a.Kind, &a.TargetNamespace, &a.TargetKind, &a.TargetName,
 			&a.Params, &a.Status, &a.Result, &a.Progress, &a.Steps, &a.Revert, &a.Snapshot, &a.CancelRequested,
-			&a.GroupID, &a.GroupSeq, &a.InvestigationNodeID, &a.CreatedAt, &a.UpdatedAt, &a.Revertible); err != nil {
+			&a.GroupID, &a.GroupSeq, &a.CreatedAt, &a.UpdatedAt, &a.Revertible); err != nil {
 			return nil, fmt.Errorf("scan action: %w", err)
 		}
 		out = append(out, a)
@@ -382,7 +363,7 @@ func (s *Store) ReapCrashedAgents(ctx context.Context) (int64, error) {
 		if c.requestedBy == nil {
 			continue // no owner to attribute the inverse to — marked failed, not auto-reverted
 		}
-		if _, err := s.AppendAction(ctx, c.groupID, nil, c.clusterID, *c.requestedBy,
+		if _, err := s.AppendAction(ctx, c.groupID, c.clusterID, *c.requestedBy,
 			spec.Kind, ns, spec.TargetKind, spec.TargetName, "builtin", spec.Params); err != nil {
 			return n, fmt.Errorf("enqueue inverse: %w", err)
 		}

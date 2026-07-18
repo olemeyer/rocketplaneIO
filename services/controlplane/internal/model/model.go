@@ -283,44 +283,31 @@ type Action struct {
 	// Safe Actions v2 grouping: every run belongs to exactly one ActionGroup
 	// (a lone action is a group of one). GroupSeq orders the run within the
 	// group's trace and drives reverse-order (LIFO) group revert.
-	GroupID             *uuid.UUID `json:"groupId,omitempty"`
-	GroupSeq            int        `json:"groupSeq"`
-	InvestigationNodeID *uuid.UUID `json:"investigationNodeId,omitempty"`
-	CreatedAt           time.Time  `json:"createdAt"`
-	UpdatedAt           time.Time  `json:"updatedAt"`
+	GroupID   *uuid.UUID `json:"groupId,omitempty"`
+	GroupSeq  int        `json:"groupSeq"`
+	CreatedAt time.Time  `json:"createdAt"`
+	UpdatedAt time.Time  `json:"updatedAt"`
 }
 
 // ActionGroup is the "belong together" + revert-together unit for Safe Actions
-// v2: one per Copilot turn / Investigation / alert remediation / manual batch,
-// or a group-of-one for a lone action. The Runs view renders a group as one
-// trace of its member runs.
+// v2: one per alert remediation / manual batch / MCP transaction step, or a
+// group-of-one for a lone action. The Runs view renders a group as one trace
+// of its member runs.
 type ActionGroup struct {
-	ID              uuid.UUID  `json:"id"`
-	ClusterID       uuid.UUID  `json:"clusterId"`
-	OrgID           uuid.UUID  `json:"orgId"`
-	Origin          string     `json:"origin"`
-	ChatID          *uuid.UUID `json:"chatId,omitempty"`
-	InvestigationID *uuid.UUID `json:"investigationId,omitempty"`
-	IncidentID      *uuid.UUID `json:"incidentId,omitempty"`
-	TurnID          string     `json:"turnId,omitempty"`
-	Title           string     `json:"title"`
-	RequestedBy     string     `json:"requestedBy"`
-	Atomicity       string     `json:"atomicity"`
-	OnFailure       string     `json:"onFailure"`
-	Status          string     `json:"status"`
-	RevertStatus    string     `json:"revertStatus"`
-	CreatedAt       time.Time  `json:"createdAt"`
-	UpdatedAt       time.Time  `json:"updatedAt"`
-	Actions         []Action   `json:"actions,omitempty"` // ordered member runs (by group_seq)
-}
-
-// ActionVerdictPayload back-references the action run a Copilot investigation
-// node spawned (bidirectional group ↔ investigation link), typed + validated.
-type ActionVerdictPayload struct {
-	ActionID uuid.UUID `json:"actionId"`
-	GroupID  uuid.UUID `json:"groupId"`
-	Kind     string    `json:"kind"`
-	Status   string    `json:"status,omitempty"`
+	ID           uuid.UUID  `json:"id"`
+	ClusterID    uuid.UUID  `json:"clusterId"`
+	OrgID        uuid.UUID  `json:"orgId"`
+	Origin       string     `json:"origin"`
+	IncidentID   *uuid.UUID `json:"incidentId,omitempty"`
+	Title        string     `json:"title"`
+	RequestedBy  string     `json:"requestedBy"`
+	Atomicity    string     `json:"atomicity"`
+	OnFailure    string     `json:"onFailure"`
+	Status       string     `json:"status"`
+	RevertStatus string     `json:"revertStatus"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
+	Actions      []Action   `json:"actions,omitempty"` // ordered member runs (by group_seq)
 }
 
 // ActionStep is a durable, timestamped step of a run (Safe Actions v2) — a span
@@ -396,37 +383,52 @@ type Dashboard struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
-// CopilotChat is a saved Copilot session (conversation). Data holds
-// the full render state (chat history + tool activities) as JSON.
-type CopilotChat struct {
-	ID        uuid.UUID       `json:"id"`
-	ClusterID uuid.UUID       `json:"clusterId"`
-	UserID    uuid.UUID       `json:"userId"`
-	Title     string          `json:"title"`
-	Summary   string          `json:"summary"`
-	Data      json.RawMessage `json:"data,omitempty"`
-	CreatedAt time.Time       `json:"createdAt"`
-	UpdatedAt time.Time       `json:"updatedAt"`
+// ── MCP transactions ───────────────────────────────────────────────────────
+
+// MCPTransaction is the envelope an external AI agent opens over MCP before
+// mutating anything. All reads/actions are logged under it; mutations run over
+// the snapshot substrate, so the transaction is the rollback unit: commit keeps
+// the changes, cancel or deadline expiry restores every capture LIFO.
+type MCPTransaction struct {
+	ID          uuid.UUID  `json:"id"`
+	OrgID       uuid.UUID  `json:"orgId"`
+	ClusterID   uuid.UUID  `json:"clusterId"`
+	TokenID     *uuid.UUID `json:"tokenId,omitempty"`
+	TokenName   string     `json:"tokenName,omitempty"` // resolved for display
+	RequestedBy string     `json:"requestedBy"`         // token creator email (resolved)
+	IncidentID  *uuid.UUID `json:"incidentId,omitempty"`
+	Title       string     `json:"title"`
+	// open → committed | cancelling → rolled_back | rollback_failed
+	Status           string     `json:"status"`
+	CloseReason      string     `json:"closeReason,omitempty"` // commit | cancel | expired
+	Deadline         time.Time  `json:"deadline"`
+	RollbackActionID *uuid.UUID `json:"rollbackActionId,omitempty"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	ClosedAt         *time.Time `json:"closedAt,omitempty"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
+	Actions          []Action   `json:"actions,omitempty"` // member runs (via action_groups.transaction_id)
 }
 
-// InvestigationNode is a node in the Copilot orchestrator's investigation
-// graph: a hypothesis (task JSON for the investigator) and its
-// verdict. Branching = parent_id points to an older node.
-type InvestigationNode struct {
-	ID              uuid.UUID       `json:"id"`
-	InvestigationID uuid.UUID       `json:"investigationId"`
-	ParentID        *uuid.UUID      `json:"parentId,omitempty"`
-	Seq             int             `json:"seq"`
-	Kind            string          `json:"kind"` // hypothesis | action | question | conclusion
-	Hypothesis      string          `json:"hypothesis"`
-	Task            json.RawMessage `json:"task,omitempty"`
-	Verdict         json.RawMessage `json:"verdict,omitempty"`
-	Status          string          `json:"status"` // pending|running|done|failed|abandoned
-	Confidence      *float32        `json:"confidence,omitempty"`
-	TokensIn        int             `json:"tokensIn"`
-	TokensOut       int             `json:"tokensOut"`
-	CreatedAt       time.Time       `json:"createdAt"`
-	FinishedAt      *time.Time      `json:"finishedAt,omitempty"`
+// MCPTransactionEvent is one append-only timeline entry of a transaction:
+// tool calls (incl. pure reads), action refs, approval decisions, lifecycle
+// transitions. Seq is globally monotonic for SSE-resume (?from=seq).
+type MCPTransactionEvent struct {
+	Seq      int64           `json:"seq"`
+	TxnID    uuid.UUID       `json:"txnId"`
+	Type     string          `json:"type"`
+	Tool     string          `json:"tool,omitempty"`
+	ActionID *uuid.UUID      `json:"actionId,omitempty"`
+	Payload  json.RawMessage `json:"payload,omitempty"`
+	At       time.Time       `json:"at"`
+}
+
+// MCPPolicy is the org-level MCP policy (org_settings key 'mcp'). Defaults are
+// fail-closed: disruptive+destructive actions need human approval.
+type MCPPolicy struct {
+	ApprovalLevels    []string    `json:"approvalLevels"`
+	DefaultTTLSeconds int         `json:"defaultTtlSeconds"`
+	MaxTTLSeconds     int         `json:"maxTtlSeconds"`
+	NotifyProviderIDs []uuid.UUID `json:"notifyProviderIds,omitempty"`
 }
 
 // ── Infrastructure (Nodes + PVCs) ──────────────────────────────────────────
@@ -523,7 +525,7 @@ type AlertEvent struct {
 
 // ── Incidents ──────────────────────────────────────────────────────────────
 
-// Incident is the umbrella over a single event: it ties together alerts, Copilot
+// Incident is the umbrella over a single event: it ties together alerts,
 // investigations and actions across a lifecycle (open→acknowledged→
 // mitigated→resolved). MTTA/MTTR are derivable from the timestamps.
 type Incident struct {
