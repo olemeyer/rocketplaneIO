@@ -82,10 +82,22 @@ its end.</sub></div>
 
 ## Quick start
 
-The whole platform runs from published images ([ghcr.io](https://github.com/olemeyer?tab=packages&repo_name=rocketplaneIO)).
 You need Docker and a Kubernetes cluster to point it at (minikube is fine).
 
-**1 — run the platform**
+**1 — run the platform** (one command)
+
+```bash
+curl -fsSL https://rocketplane.io/install.sh | sh
+```
+
+That's the whole install: it downloads the compose bundle, generates real secrets,
+pulls the [published images](https://github.com/olemeyer?tab=packages&repo_name=rocketplaneIO)
+and starts everything. The UI comes up on **http://localhost:4173** (create the owner
+account there), the control plane on `:8090`. Re-running the same command later **is**
+the update path — secrets are kept, images are bumped to the newest release.
+
+<details>
+<summary>Prefer to see every step? The manual compose variant.</summary>
 
 ```bash
 curl -O https://raw.githubusercontent.com/olemeyer/rocketplaneIO/main/deploy/compose/docker-compose.prod.yml
@@ -97,20 +109,17 @@ echo "RP_SESSION_SECRET=$(openssl rand -hex 32)" >> .env
 docker compose --env-file .env -f docker-compose.prod.yml up -d
 ```
 
-The UI comes up on **http://localhost:4173**, the control plane on `:8090`. It runs
-in production mode by default (no anonymous login) — you create the first account in
-step 2. For a throwaway localhost trial you can add `RP_ENV=dev` to `.env` to skip
-account setup.
+Production mode by default (no anonymous login). For a throwaway localhost trial add
+`RP_ENV=dev` to `.env` to skip account setup.
+</details>
 
 **2 — connect your cluster**
 
-Open the UI, create the owner account, hit **Connect cluster** — it hands you one copy-paste
-command that installs the agent and the Beyla DaemonSet (a rendered `kubectl apply`, or Helm).
-When the service map draws your namespaces and spans appear under Traces, you're live — without
-touching a line of your code.
-
-> Local minikube note: your cluster reaches the control plane at `http://host.minikube.internal:8090`,
-> not `localhost` — set `RP_AGENT_CONTROLPLANE_URL` to that in `.env` before connecting.
+Open the UI, hit **Connect cluster** — it hands you one copy-paste command that installs the
+agent and the Beyla DaemonSet (a rendered `kubectl apply`, or Helm). When the service map draws
+your namespaces and spans appear under Traces, you're live — without touching a line of your
+code. The installer auto-detects a LAN address your cluster can dial back to; for a local
+minikube that is `http://host.minikube.internal:8090`.
 
 **3 — connect your AI agent**
 
