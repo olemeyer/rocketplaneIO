@@ -37,6 +37,12 @@ var kindGVR = map[string]schema.GroupVersionResource{
 	"HorizontalPodAutoscaler": {Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers"},
 	"CronJob":                 {Group: "batch", Version: "v1", Resource: "cronjobs"},
 	"Job":                     {Group: "batch", Version: "v1", Resource: "jobs"},
+	"Event":                   {Group: "", Version: "v1", Resource: "events"},
+	"Endpoints":               {Group: "", Version: "v1", Resource: "endpoints"},
+	"PersistentVolume":        {Group: "", Version: "v1", Resource: "persistentvolumes"},
+	"ReplicaSet":              {Group: "apps", Version: "v1", Resource: "replicasets"},
+	"StorageClass":            {Group: "storage.k8s.io", Version: "v1", Resource: "storageclasses"},
+	"EndpointSlice":           {Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"},
 }
 
 func clusterScopedKind(kind string) bool {

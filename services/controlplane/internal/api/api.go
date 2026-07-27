@@ -260,22 +260,51 @@ func (s *statusWriter) Flush() {
 	}
 }
 
+// ensureTelemetrySchema creates the ClickHouse tables the control plane owns,
+// retrying with backoff until they exist or ctx ends. Every step is idempotent
+// (CREATE/ALTER … IF NOT EXISTS), so re-running costs nothing.
+func (s *Server) ensureTelemetrySchema(ctx context.Context) {
+	steps := []struct {
+		name string
+		fn   func(context.Context) error
+	}{
+		{"infra metrics schema", s.tele.EnsureInfraSchema},
+		// Container logs: the CP owns otel_logs (its own schema with ClusterId +
+		// workload columns). The OTel collector must NOT create otel_logs.
+		{"logs schema", s.tele.EnsureLogsSchema},
+		// Skip indexes for regex/token/fuzzy search on Body (idempotent).
+		{"logs indexes", s.tele.EnsureLogsIndexes},
+	}
+	delay := 2 * time.Second
+	for _, st := range steps {
+		for {
+			err := st.fn(ctx)
+			if err == nil {
+				break
+			}
+			log.Printf("%s: %v — retrying in %s", st.name, err, delay)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			if delay < 60*time.Second {
+				delay *= 2
+			}
+		}
+		delay = 2 * time.Second
+	}
+}
+
 // StartBackground startet Schema-Sicherung + Alert-Evaluator (bis ctx endet).
 func (s *Server) StartBackground(ctx context.Context) {
 	// Configured emails become platform admins (RP_PLATFORM_ADMINS).
 	s.ensurePlatformAdmins(ctx)
-	if err := s.tele.EnsureInfraSchema(ctx); err != nil {
-		log.Printf("infra metrics schema: %v", err)
-	}
-	// Container-Logs: die CP besitzt otel_logs (eigenes Schema mit ClusterId +
-	// Workload-Spalten). Der OTel-Collector darf otel_logs NICHT anlegen.
-	if err := s.tele.EnsureLogsSchema(ctx); err != nil {
-		log.Printf("logs schema: %v", err)
-	}
-	// Skip-Indizes für Regex-/Token-/Fuzzy-Suche auf Body (idempotent).
-	if err := s.tele.EnsureLogsIndexes(ctx); err != nil {
-		log.Printf("logs indexes: %v", err)
-	}
+	// Schema bootstrap RETRIES: ClickHouse routinely outlives its readiness
+	// probe by a few seconds, and a single attempt at boot means a control plane
+	// that lost the race answers every log write with 500 until someone restarts
+	// it by hand — the tables are never created afterwards.
+	go s.ensureTelemetrySchema(ctx)
 
 	// Cross-Replica-Eventverteilung: der LISTEN-Loop stellt NOTIFYs an die
 	// lokalen SSE-Subscriber zu (Publish geht bei jeder Replica über NOTIFY).

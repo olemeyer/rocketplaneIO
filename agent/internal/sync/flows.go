@@ -3,6 +3,7 @@ package sync
 import (
 	"log"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/ti-mo/conntrack"
 )
@@ -36,6 +37,18 @@ type edgeItem struct {
 	ConnCount     int64  `json:"connCount"`
 }
 
+// flowsDisabled latches once conntrack turns out to be unreadable (no
+// NET_ADMIN / no hostNetwork): the service map simply has no flow edges, which
+// is the documented behaviour of the non-privileged install.
+var flowsDisabled atomic.Bool
+
+func disableFlows(what string, err error) {
+	if flowsDisabled.CompareAndSwap(false, true) {
+		log.Printf("flows: %s: %v — flow discovery disabled "+
+			"(needs NET_ADMIN + hostNetwork; the service map will have no edges)", what, err)
+	}
+}
+
 // conntrackAvailable meldet, ob die Conntrack-Tabelle per Netlink lesbar ist.
 func conntrackAvailable() bool {
 	c, err := conntrack.Dial(nil)
@@ -51,16 +64,23 @@ func conntrackAvailable() bool {
 // Verbindungen zu gerichteten Kanten. Selbst-Verbindungen und unbekannte Endpunkte
 // werden verworfen.
 func readFlowEdges(ipToWorkload map[string]workloadRef) []edgeItem {
+	// Flow discovery needs NET_ADMIN + hostNetwork; the hardened Deployment has
+	// neither. Log the loss of capability ONCE instead of every sync tick — the
+	// permission cannot appear at runtime, so repeating it is pure noise in the
+	// logs the operator is trying to read.
+	if flowsDisabled.Load() {
+		return nil
+	}
 	c, err := conntrack.Dial(nil)
 	if err != nil {
-		log.Printf("flows: conntrack dial failed: %v", err)
+		disableFlows("conntrack dial failed", err)
 		return nil
 	}
 	defer c.Close()
 
 	flows, err := c.Dump(nil)
 	if err != nil {
-		log.Printf("flows: conntrack dump failed: %v", err)
+		disableFlows("conntrack dump failed", err)
 		return nil
 	}
 

@@ -33,6 +33,13 @@ func rawGVR(apiVersion, kind, resourceOverride string) (schema.GroupVersionResou
 		// conservative plural heuristic as a convenience — set resource= for edge cases.
 		res = strings.ToLower(kind) + "s"
 	}
+	if gv.Version == "" {
+		// An empty apiVersion yields an empty GroupVersion, and the dynamic client
+		// then builds /api//namespaces/<ns>/<res> — the API server reads the path
+		// shifted and rejects it with a confusing "cannot get resource <namespace>".
+		// Core v1 is the only sane default for a kind we could not map.
+		gv.Version = "v1"
+	}
 	return gv.WithResource(res), nil
 }
 

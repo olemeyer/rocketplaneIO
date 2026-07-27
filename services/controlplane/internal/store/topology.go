@@ -214,7 +214,15 @@ func (s *Store) ServiceMap(ctx context.Context, clusterID uuid.UUID) (model.Serv
 		       COALESCE((SELECT max(image) FROM pods p
 		                 WHERE p.cluster_id=w.cluster_id AND p.namespace=w.namespace
 		                   AND p.workload_kind=w.kind AND p.workload_name=w.name), '') AS image,
-		       w.icon
+		       w.icon,
+		       COALESCE((SELECT count(*) FROM pods p
+		                 WHERE p.cluster_id=w.cluster_id AND p.namespace=w.namespace
+		                   AND p.workload_kind=w.kind AND p.workload_name=w.name
+		                   AND p.phase='Succeeded'), 0) AS succeeded,
+		       COALESCE((SELECT count(*) FROM pods p
+		                 WHERE p.cluster_id=w.cluster_id AND p.namespace=w.namespace
+		                   AND p.workload_kind=w.kind AND p.workload_name=w.name
+		                   AND p.phase='Failed'), 0) AS failed
 		FROM workloads w WHERE cluster_id=$1
 		ORDER BY namespace, name`, clusterID)
 	if err != nil {
@@ -225,13 +233,14 @@ func (s *Store) ServiceMap(ctx context.Context, clusterID uuid.UUID) (model.Serv
 	nsSet := map[string]bool{}
 	for rows.Next() {
 		var n model.MapNode
-		var restarts int
-		if err := rows.Scan(&n.Namespace, &n.Kind, &n.Name, &n.PodsTotal, &n.PodsReady, &restarts, &n.Image, &n.Icon); err != nil {
+		var restarts, succeeded, failed int
+		if err := rows.Scan(&n.Namespace, &n.Kind, &n.Name, &n.PodsTotal, &n.PodsReady, &restarts, &n.Image, &n.Icon,
+			&succeeded, &failed); err != nil {
 			return out, fmt.Errorf("scan node: %w", err)
 		}
 		n.ID = n.Namespace + "/" + n.Kind + "/" + n.Name
 		n.Restarts = restarts
-		n.Health = deriveHealth(n.PodsReady, n.PodsTotal, restarts)
+		n.Health = deriveHealth(n.Kind, n.PodsReady, n.PodsTotal, restarts, succeeded, failed)
 		out.Nodes = append(out.Nodes, n)
 		nsSet[n.Namespace] = true
 	}
@@ -266,7 +275,23 @@ func (s *Store) ServiceMap(ctx context.Context, clusterID uuid.UUID) (model.Serv
 }
 
 // deriveHealth klassifiziert einen Workload aus Ready-Verhältnis + Restarts.
-func deriveHealth(ready, total, restarts int) string {
+//
+// Run-to-completion kinds are judged on outcome, not on readiness: a finished
+// Job has zero ready pods forever, and reporting that as "critical" drowns the
+// health signal on any cluster that runs CronJobs (every completed run shows up
+// as an outage that never clears).
+func deriveHealth(kind string, ready, total, restarts, succeeded, failed int) string {
+	if kind == "Job" || kind == "CronJob" {
+		switch {
+		case failed > 0:
+			return "critical"
+		case ready > 0:
+			return "healthy" // still running
+		case succeeded > 0:
+			return "healthy" // completed
+		}
+		return "unknown"
+	}
 	if total == 0 {
 		return "unknown"
 	}

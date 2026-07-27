@@ -15,7 +15,9 @@ type: Opaque
 stringData:
   RP_SESSION_SECRET: "__SESSION_SECRET__"
   POSTGRES_PASSWORD: "__PG_PASS__"
-  DATABASE_URL: "postgres://rocketplane:__PG_PASS__@rocketplane-pg-rw:5432/rocketplane?sslmode=disable"
+  # Host = the bundled StatefulSet's Service in THIS file. Switch it to
+  # rocketplane-pg-rw only when you also apply cnpg-postgres.yaml.
+  DATABASE_URL: "postgres://rocketplane:__PG_PASS__@postgres:5432/rocketplane?sslmode=disable"
 ---
 # ---------- Postgres ----------
 apiVersion: v1

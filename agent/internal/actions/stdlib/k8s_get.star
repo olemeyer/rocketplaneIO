@@ -16,4 +16,6 @@ step("get %s/%s" % (kind, name))
 obj = k8s.get(api_ver, kind, ns, name, resource=res)
 if not obj:
     fail("%s/%s not found" % (kind, name))
-report(str(obj.get("spec", obj.get("data", obj))))
+# JSON, not str(): str() emits the Starlark repr (True, single quotes), which no
+# consumer of the step detail — UI or MCP client — can parse.
+report(json.encode(obj))
