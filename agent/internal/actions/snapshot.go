@@ -81,6 +81,20 @@ func (r *Runner) getUnstructured(ctx context.Context, apiVersion, kind, namespac
 }
 
 // stripForSnapshot entfernt Server-Rausch, damit der Snapshot re-applybar ist.
+// stripForRead is the read-path variant: same noise removal, but status STAYS.
+// A snapshot must not carry status (it is not restorable), while a read without
+// status is undiagnosable — pod phase, conditions, container states and event
+// messages all live there.
+func stripForRead(u *unstructured.Unstructured) map[string]any {
+	obj := u.DeepCopy().Object
+	status := obj["status"]
+	out := stripForSnapshot(u)
+	if status != nil {
+		out["status"] = status
+	}
+	return out
+}
+
 func stripForSnapshot(u *unstructured.Unstructured) map[string]any {
 	obj := u.DeepCopy().Object
 	delete(obj, "status")

@@ -25,8 +25,18 @@ for obj in items:
     meta = obj.get("metadata", {})
     if count <= 20:
         report(json.encode(obj))
-    else:
-        report(json.encode({
-            "namespace": meta.get("namespace", ns),
-            "name": meta.get("name", "?"),
-        }))
+        continue
+    # Above the full-object threshold, keep the fields that carry the diagnosis
+    # instead of the name alone — a 50-event list of bare names answers nothing.
+    st = obj.get("status", {})
+    summary = {
+        "namespace": meta.get("namespace", ns),
+        "name": meta.get("name", "?"),
+    }
+    for key in ["reason", "message", "type", "count", "lastTimestamp"]:
+        if key in obj:
+            summary[key] = obj[key]
+    for key in ["phase", "reason", "message"]:
+        if key in st:
+            summary[key] = st[key]
+    report(json.encode(summary))

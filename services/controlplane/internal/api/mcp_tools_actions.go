@@ -287,7 +287,7 @@ func (s *Server) mcpRunOperation(ctx context.Context, sc *mcpScope, tool string,
 					map[string]any{"status": st, "result": truncateForEvent(result)})
 				s.broker.Publish(sc.clusterID, "transactions", 0)
 			}
-			return mcpJSON(actionResultView(a, coreLevel, s.mcpStepOutput(ctx, a.ID))), nil, nil
+			return mcpJSON(actionResultView(a, coreLevel, s.mcpStepOutput(ctx, sc.clusterID, a.ID))), nil, nil
 		}
 		if time.Now().After(deadline) {
 			a.Status = st
@@ -311,9 +311,17 @@ func (s *Server) mcpRunOperation(ctx context.Context, sc *mcpScope, tool string,
 // only consumer this interface has.
 //
 // Capped: an MCP response is a model context window, not a log sink.
-func (s *Server) mcpStepOutput(ctx context.Context, actionID uuid.UUID) map[string]any {
-	steps, err := s.store.ListActionSteps(ctx, actionID)
-	if err != nil || len(steps) == 0 {
+func (s *Server) mcpStepOutput(ctx context.Context, clusterID, actionID uuid.UUID) map[string]any {
+	raw, err := s.store.ActionStepsJSON(ctx, clusterID, actionID)
+	if err != nil || len(raw) == 0 {
+		return nil
+	}
+	var steps []struct {
+		Name   string `json:"name"`
+		Status string `json:"status"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(raw, &steps); err != nil {
 		return nil
 	}
 	var b strings.Builder

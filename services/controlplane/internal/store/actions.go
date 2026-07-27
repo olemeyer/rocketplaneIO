@@ -396,6 +396,19 @@ func (s *Store) CompleteAction(ctx context.Context, clusterID, actionID uuid.UUI
 
 // SetActionSnapshot persistiert den generischen Before-Snapshot (gestripptes
 // Zielobjekt) einer abgeschlossenen Mutation — Audit + restore_resource-Basis.
+// ActionStepsJSON returns the steps blob CompleteAction persisted on the action
+// row ([{name,status,detail}]). Written in the same statement as the final
+// status, so a caller that just saw the action finish always sees the steps.
+func (s *Store) ActionStepsJSON(ctx context.Context, clusterID, actionID uuid.UUID) (json.RawMessage, error) {
+	var steps json.RawMessage
+	err := s.pool.QueryRow(ctx, `
+		SELECT steps FROM cluster_actions WHERE id=$2 AND cluster_id=$1`, clusterID, actionID).Scan(&steps)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return steps, err
+}
+
 func (s *Store) SetActionSnapshot(ctx context.Context, clusterID, actionID uuid.UUID, snapshot json.RawMessage) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE cluster_actions SET snapshot = $3, updated_at = now()

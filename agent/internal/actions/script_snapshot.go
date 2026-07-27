@@ -342,7 +342,7 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		if err != nil {
 			return nil, err
 		}
-		obj := stripForSnapshot(u)
+		obj := stripForRead(u)
 		if kind == "Secret" {
 			redactSecretData(obj)
 		}
@@ -365,7 +365,7 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		}
 		out := make([]starlark.Value, 0, len(list.Items))
 		for i := range list.Items {
-			obj := stripForSnapshot(&list.Items[i])
+			obj := stripForRead(&list.Items[i])
 			if kind == "Secret" {
 				redactSecretData(obj)
 			}
