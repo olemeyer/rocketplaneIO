@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -72,21 +73,31 @@ func (s *Server) registerMCPReadTools(srv *mcp.Server) {
 		return mcpText(out), nil, nil
 	})
 
+	// Filters exist because the whole map does not fit: a 600-pod cluster
+	// serialises to well over the response cap, and an agent asking "what is
+	// unhealthy" wants a handful of nodes, not the inventory.
+	type mapIn struct {
+		Namespace string `json:"namespace,omitempty" jsonschema:"only workloads in this namespace"`
+		Health    string `json:"health,omitempty" jsonschema:"only workloads with this health: healthy, degraded, critical or unknown"`
+	}
+
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "get_service_map",
-		Description: "Read the live service map: workloads, health (healthy/degraded/critical), and flow " +
-			"edges between them. The topology at a glance.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
+		Description: "Read the live service map: workloads, health (healthy/degraded/critical/unknown), and " +
+			"flow edges between them. The topology at a glance. Filter by namespace or health — the " +
+			"unfiltered map of a real cluster exceeds the response cap.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in mapIn) (*mcp.CallToolResult, any, error) {
 		sc, err := mcpScopeFrom(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
-		out, err := s.mcpInternalCall(ctx, sc, http.MethodGet, "/service-map", nil, nil)
+		out, err := s.mcpInternalCallRaw(ctx, sc, http.MethodGet, "/service-map", nil, nil)
 		if err != nil {
 			return nil, nil, err
 		}
-		s.mcpLogRead(ctx, sc, "get_service_map", nil)
-		return mcpText(out), nil, nil
+		out = filterServiceMap(out, in.Namespace, in.Health)
+		s.mcpLogRead(ctx, sc, "get_service_map", in)
+		return mcpText(capResult(out)), nil, nil
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -201,4 +212,58 @@ func (s *Server) registerMCPReadTools(srv *mcp.Server) {
 		return mcpText(out), nil, nil
 	})
 
+}
+
+// filterServiceMap narrows a /service-map payload to the requested namespace
+// and/or health before it reaches the caller. Edges follow their nodes: an edge
+// whose endpoints were filtered out would dangle.
+//
+// Returns the input unchanged when nothing is requested or the payload does not
+// parse — a filter must never be the reason a read fails.
+func filterServiceMap(payload, namespace, health string) string {
+	if namespace == "" && health == "" {
+		return payload
+	}
+	var m struct {
+		Namespaces []string         `json:"namespaces"`
+		Nodes      []map[string]any `json:"nodes"`
+		Edges      []map[string]any `json:"edges"`
+	}
+	if err := json.Unmarshal([]byte(payload), &m); err != nil {
+		return payload
+	}
+	keep := map[string]bool{}
+	nodes := make([]map[string]any, 0, len(m.Nodes))
+	for _, n := range m.Nodes {
+		if namespace != "" && n["namespace"] != namespace {
+			continue
+		}
+		if health != "" && n["health"] != health {
+			continue
+		}
+		if id, ok := n["id"].(string); ok {
+			keep[id] = true
+		}
+		nodes = append(nodes, n)
+	}
+	edges := make([]map[string]any, 0, len(m.Edges))
+	for _, e := range m.Edges {
+		from, _ := e["from"].(string)
+		to, _ := e["to"].(string)
+		if keep[from] && keep[to] {
+			edges = append(edges, e)
+		}
+	}
+	out, err := json.Marshal(map[string]any{
+		"namespaces": m.Namespaces,
+		"nodes":      nodes,
+		"edges":      edges,
+		"filtered":   map[string]string{"namespace": namespace, "health": health},
+		"matched":    len(nodes),
+		"totalNodes": len(m.Nodes),
+	})
+	if err != nil {
+		return payload
+	}
+	return string(out)
 }
