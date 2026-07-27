@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -62,11 +63,21 @@ func (s *Server) handleQueryTraces(w http.ResponseWriter, r *http.Request) {
 
 	traces, err := s.tele.QueryTraces(r.Context(), q)
 	if err != nil {
+		// Beyla is optional; a cluster without it has no trace tables at all.
+		// Say so instead of returning a bare 500 the caller has to guess at.
+		if errors.Is(err, telemetry.ErrTelemetryUnavailable) {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "trace query failed")
 		return
 	}
 	red, err := s.tele.QueryRED(r.Context(), q)
 	if err != nil {
+		if errors.Is(err, telemetry.ErrTelemetryUnavailable) {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "red query failed")
 		return
 	}
