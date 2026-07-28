@@ -130,6 +130,11 @@ beyla:
   # Empty => falls back to the top-level `.Values.clusterName`. Set only to give
   # Beyla a different cluster identity than the agent.
   clusterName: ""
+  # -- Node selector for the Beyla pods only. Empty => falls back to
+  # `.Values.nodeSelector`. eBPF cannot instrument sandboxed runtimes
+  # (gVisor/Kata intercept the syscalls), so exclude those pools here while the
+  # log collector keeps running on them.
+  nodeSelector: {}
   # -- Resources for each Beyla pod. Heavier than the agent — eBPF processing.
   resources:
     requests:
