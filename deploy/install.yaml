@@ -342,7 +342,9 @@ spec:
             privileged: true
           env:
             - name: BEYLA_OPEN_PORT
-              value: "80,443,3000,3001,4173,5000,5678,8000,8080,8090,8443,9000,3306,5432,6379,27017"
+              # No 9000: instrumented ClickHouse fails its own executable
+              # checksum (Code: 246) on its next restart.
+              value: "80,443,3000,3001,4173,5000,5678,8000,8080,8090,8443,3306,5432,6379,27017"
             - name: BEYLA_SKIP_GO_SPECIFIC_TRACERS
               value: "true"
             - name: BEYLA_KUBE_METADATA_ENABLE

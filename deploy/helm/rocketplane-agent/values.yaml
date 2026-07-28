@@ -110,7 +110,11 @@ beyla:
     pullPolicy: IfNotPresent
   # -- Ports Beyla instruments (BEYLA_OPEN_PORT). Common HTTP/gRPC app ports plus
   # DB ports (Beyla parses SQL/Redis/Mongo to draw app<->db edges in the map).
-  openPorts: "80,443,3000,3001,4173,5000,5678,8000,8080,8090,8443,9000,3306,5432,6379,27017"
+  #
+  # 9000 (ClickHouse native) is omitted: uprobes patch the target's text pages,
+  # ClickHouse checksums its own executable at startup and aborts (Code: 246).
+  # Latent — it dies on the next restart, not when Beyla starts.
+  openPorts: "80,443,3000,3001,4173,5000,5678,8000,8080,8090,8443,3306,5432,6379,27017"
   # -- OTLP endpoint Beyla exports to (OTEL_EXPORTER_OTLP_ENDPOINT). Defaults to
   # the in-cluster collector Service. Override to point at your own collector,
   # e.g. --set beyla.otlpEndpoint=http://my-collector.observability:4318 .
