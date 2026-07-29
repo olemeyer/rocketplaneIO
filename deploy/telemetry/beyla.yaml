@@ -68,7 +68,9 @@ spec:
             # Breite Abdeckung: gängige HTTP/gRPC-App-Ports UND DB-Ports
             # (Beyla erkennt SQL/Redis → App↔DB-Kanten in der Map).
             - name: BEYLA_OPEN_PORT
-              value: "80,443,3000,3001,4173,5000,5678,8000,8080,8090,8443,9000,3306,5432,6379,27017"
+              # No 9000: instrumented ClickHouse fails its own executable
+              # checksum (Code: 246) on its next restart.
+              value: "80,443,3000,3001,4173,5000,5678,8000,8080,8090,8443,3306,5432,6379,27017"
             # Go-Apps (pgx, clickhouse-go) machen DB-I/O OHNE database/sql —
             # Beylas Go-Uprobes sehen davon nichts (0 Client-Spans trotz Last).
             # Generische kprobe-Instrumentierung erfasst das Postgres-Protokoll
