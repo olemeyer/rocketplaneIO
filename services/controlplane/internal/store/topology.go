@@ -214,9 +214,22 @@ func (s *Store) ServiceMap(ctx context.Context, clusterID uuid.UUID) (model.Serv
 		       COALESCE((SELECT max(image) FROM pods p
 		                 WHERE p.cluster_id=w.cluster_id AND p.namespace=w.namespace
 		                   AND p.workload_kind=w.kind AND p.workload_name=w.name), '') AS image,
-		       w.icon
+		       w.icon,
+		       COALESCE((SELECT count(*) FROM pods p
+		                 WHERE p.cluster_id=w.cluster_id AND p.namespace=w.namespace
+		                   AND p.workload_kind=w.kind AND p.workload_name=w.name
+		                   AND p.phase='Succeeded'), 0) AS succeeded,
+		       COALESCE((SELECT count(*) FROM pods p
+		                 WHERE p.cluster_id=w.cluster_id AND p.namespace=w.namespace
+		                   AND p.workload_kind=w.kind AND p.workload_name=w.name
+		                   AND p.phase='Failed'), 0) AS failed,
+		       COALESCE((SELECT count(*) FROM pods p
+		                 WHERE p.cluster_id=w.cluster_id AND p.namespace=w.namespace
+		                   AND p.workload_kind=w.kind AND p.workload_name=w.name
+		                   AND p.phase='Pending'
+		                   AND p.first_seen_at < now() - $2::interval), 0) AS stuck
 		FROM workloads w WHERE cluster_id=$1
-		ORDER BY namespace, name`, clusterID)
+		ORDER BY namespace, name`, clusterID, stuckPodGrace)
 	if err != nil {
 		return out, fmt.Errorf("map nodes: %w", err)
 	}
@@ -225,13 +238,14 @@ func (s *Store) ServiceMap(ctx context.Context, clusterID uuid.UUID) (model.Serv
 	nsSet := map[string]bool{}
 	for rows.Next() {
 		var n model.MapNode
-		var restarts int
-		if err := rows.Scan(&n.Namespace, &n.Kind, &n.Name, &n.PodsTotal, &n.PodsReady, &restarts, &n.Image, &n.Icon); err != nil {
+		var restarts, succeeded, failed, stuck int
+		if err := rows.Scan(&n.Namespace, &n.Kind, &n.Name, &n.PodsTotal, &n.PodsReady, &restarts, &n.Image, &n.Icon,
+			&succeeded, &failed, &stuck); err != nil {
 			return out, fmt.Errorf("scan node: %w", err)
 		}
 		n.ID = n.Namespace + "/" + n.Kind + "/" + n.Name
 		n.Restarts = restarts
-		n.Health = deriveHealth(n.PodsReady, n.PodsTotal, restarts)
+		n.Health = deriveHealth(n.Kind, n.PodsReady, n.PodsTotal, restarts, succeeded, failed, stuck)
 		out.Nodes = append(out.Nodes, n)
 		nsSet[n.Namespace] = true
 	}
@@ -266,18 +280,43 @@ func (s *Store) ServiceMap(ctx context.Context, clusterID uuid.UUID) (model.Serv
 }
 
 // deriveHealth klassifiziert einen Workload aus Ready-Verhältnis + Restarts.
-func deriveHealth(ready, total, restarts int) string {
+//
+// Run-to-completion kinds are judged on outcome, not on readiness: a finished
+// Job has zero ready pods forever, and reporting that as "critical" drowns the
+// health signal on any cluster that runs CronJobs (every completed run shows up
+// as an outage that never clears).
+func deriveHealth(kind string, ready, total, restarts, succeeded, failed, stuck int) string {
+	if kind == "Job" || kind == "CronJob" {
+		switch {
+		case failed > 0:
+			return "critical"
+		case ready > 0:
+			return "healthy" // still running
+		case succeeded > 0:
+			return "healthy" // completed
+		}
+		return "unknown"
+	}
 	if total == 0 {
 		return "unknown"
 	}
 	if ready == 0 {
 		return "critical"
 	}
-	if ready < total || restarts >= 5 {
+	// A stalled rollout keeps serving from the previous ReplicaSet, so
+	// readyReplicas stays at the desired count while the new pod sits Pending
+	// forever. Readiness alone reports that as healthy — we saw a pod wedged for
+	// four days on a missing ConfigMap behind a green workload.
+	if stuck > 0 || ready < total || restarts >= 5 {
 		return "degraded"
 	}
 	return "healthy"
 }
+
+// stuckPodGrace is how long a pod may stay Pending before it counts against its
+// workload's health. Long enough to ignore a normal rollout or a scale-up
+// waiting on a node, short enough to catch a wedged one the same shift.
+const stuckPodGrace = "15 minutes"
 
 // SetWorkloadIcon persistiert den manuellen Icon-Override eines Workloads.
 func (s *Store) SetWorkloadIcon(ctx context.Context, clusterID uuid.UUID, ns, kind, name, icon string) error {

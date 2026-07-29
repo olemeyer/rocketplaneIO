@@ -16,15 +16,27 @@ sel     = args.get("selector", "")
 step("list %s" % kind)
 items = k8s.list(api_ver, kind, ns, selector=sel, resource=res)
 count = len(items)
-report("%d %s object(s)" % (count, kind))
 
-# For large lists report a brief summary per item instead of the full objects,
-# so the step detail stays within the 64 KB report cap.
-if count <= 20:
-    for obj in items:
-        meta = obj.get("metadata", {})
-        report("  %s/%s" % (meta.get("namespace", ns), meta.get("name", "?")))
-else:
-    for obj in items:
-        meta = obj.get("metadata", {})
-        report("  %s" % meta.get("name", "?"))
+# One JSON document per report line so the consumer (UI or MCP client) can parse
+# it. Small lists carry the full objects; large ones degrade to identity only,
+# keeping the step detail under the report cap.
+report(json.encode({"kind": kind, "namespace": ns, "count": count}))
+for obj in items:
+    meta = obj.get("metadata", {})
+    if count <= 20:
+        report(json.encode(obj))
+        continue
+    # Above the full-object threshold, keep the fields that carry the diagnosis
+    # instead of the name alone — a 50-event list of bare names answers nothing.
+    st = obj.get("status", {})
+    summary = {
+        "namespace": meta.get("namespace", ns),
+        "name": meta.get("name", "?"),
+    }
+    for key in ["reason", "message", "type", "count", "lastTimestamp"]:
+        if key in obj:
+            summary[key] = obj[key]
+    for key in ["phase", "reason", "message"]:
+        if key in st:
+            summary[key] = st[key]
+    report(json.encode(summary))

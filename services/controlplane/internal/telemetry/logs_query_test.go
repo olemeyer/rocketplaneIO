@@ -80,3 +80,19 @@ func TestSearchCondsEmpty(t *testing.T) {
 		t.Fatalf("empty query should set no params, got %v", params)
 	}
 }
+
+// A missing table means "the optional eBPF pipeline was never installed", not
+// "the query is broken" — the distinction is what an agent acts on.
+func TestMissingTableDetection(t *testing.T) {
+	ch := "Code: 60. DB::Exception: Unknown table expression identifier 'otel.otel_metrics_gauge' in scope SELECT"
+	tbl, ok := missingTable(ch)
+	if !ok || tbl != "otel.otel_metrics_gauge" {
+		t.Fatalf("got %q, %v", tbl, ok)
+	}
+	if _, ok := missingTable("Code: 62. Syntax error"); ok {
+		t.Fatal("syntax errors must not be reported as a missing pipeline")
+	}
+	if tbl, ok := missingTable("Code: 60. UNKNOWN_TABLE"); !ok || tbl != "unknown table" {
+		t.Fatalf("unnamed table: got %q, %v", tbl, ok)
+	}
+}

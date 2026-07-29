@@ -163,9 +163,20 @@ func bearerFromRequest(r *http.Request) string {
 const mcpResultCap = 60 * 1024 // keep tool results model-friendly
 
 // mcpInternalCall dispatches an in-process request against the API mux using
-// the caller's bearer token. Returns the response body (capped) or an error
-// carrying the API's error message.
+// the caller's bearer token and caps the result. Callers that post-process the
+// payload (filtering, projection) must use mcpInternalCallRaw and cap the
+// result themselves — capping first would hand them the truncation envelope
+// instead of the data.
 func (s *Server) mcpInternalCall(ctx context.Context, sc *mcpScope, method, path string, q url.Values, body any) (string, error) {
+	out, err := s.mcpInternalCallRaw(ctx, sc, method, path, q, body)
+	if err != nil {
+		return "", err
+	}
+	return capResult(out), nil
+}
+
+// mcpInternalCallRaw is the same dispatch without the response cap.
+func (s *Server) mcpInternalCallRaw(ctx context.Context, sc *mcpScope, method, path string, q url.Values, body any) (string, error) {
 	if s.apiMux == nil {
 		return "", errors.New("internal: api mux not initialised")
 	}
@@ -198,10 +209,30 @@ func (s *Server) mcpInternalCall(ctx context.Context, sc *mcpScope, method, path
 		}
 		return "", fmt.Errorf("api %d: %s", rec.Code, msg)
 	}
-	if len(out) > mcpResultCap {
-		out = out[:mcpResultCap] + fmt.Sprintf("\n… truncated (%d bytes total) — narrow the query (namespace/limit/minutes)", len(out))
-	}
 	return out, nil
+}
+
+// capResult bounds a tool result without handing the caller broken data.
+// Slicing bytes off a JSON document leaves an unparseable fragment — worse
+// than an error, because a model will try to interpret it. When the payload is
+// JSON we return a valid envelope instead, with the prefix as an escaped
+// string, so the caller can always parse the response and see what happened.
+func capResult(out string) string {
+	if len(out) <= mcpResultCap {
+		return out
+	}
+	if json.Valid([]byte(out)) {
+		env, err := json.Marshal(map[string]any{
+			"truncated":  true,
+			"totalBytes": len(out),
+			"hint":       "result exceeds the response cap — narrow the query (namespace/limit/minutes/health) and call again",
+			"preview":    out[:mcpResultCap],
+		})
+		if err == nil {
+			return string(env)
+		}
+	}
+	return out[:mcpResultCap] + fmt.Sprintf("\n… truncated (%d bytes total) — narrow the query (namespace/limit/minutes)", len(out))
 }
 
 // mcpLogRead best-effort logs a read tool call into the token's open

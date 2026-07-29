@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -286,7 +287,7 @@ func (s *Server) mcpRunOperation(ctx context.Context, sc *mcpScope, tool string,
 					map[string]any{"status": st, "result": truncateForEvent(result)})
 				s.broker.Publish(sc.clusterID, "transactions", 0)
 			}
-			return mcpJSON(actionResultView(a, coreLevel, nil)), nil, nil
+			return mcpJSON(actionResultView(a, coreLevel, s.mcpStepOutput(ctx, sc.clusterID, a.ID))), nil, nil
 		}
 		if time.Now().After(deadline) {
 			a.Status = st
@@ -302,6 +303,53 @@ func (s *Server) mcpRunOperation(ctx context.Context, sc *mcpScope, tool string,
 		}
 	}
 }
+
+// mcpStepOutput lifts the step details of a finished action into the tool
+// response. Without it every read tool answers `{"result":"workflow
+// completed"}` and the object the caller asked for is only reachable through a
+// second list_actions round-trip — unusable for an external agent, which is the
+// only consumer this interface has.
+//
+// Capped: an MCP response is a model context window, not a log sink.
+func (s *Server) mcpStepOutput(ctx context.Context, clusterID, actionID uuid.UUID) map[string]any {
+	raw, err := s.store.ActionStepsJSON(ctx, clusterID, actionID)
+	if err != nil || len(raw) == 0 {
+		return nil
+	}
+	var steps []struct {
+		Name   string `json:"name"`
+		Status string `json:"status"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(raw, &steps); err != nil {
+		return nil
+	}
+	var b strings.Builder
+	for _, st := range steps {
+		if st.Detail == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(st.Detail)
+	}
+	if b.Len() == 0 {
+		return nil
+	}
+	out := b.String()
+	extra := map[string]any{}
+	if len(out) > mcpOutputCap {
+		out = out[:mcpOutputCap]
+		extra["outputTruncated"] = true
+		extra["note"] = "output truncated — narrow the query (namespace/selector) or use list_actions for the full step trace"
+	}
+	extra["output"] = out
+	return extra
+}
+
+// mcpOutputCap bounds the step output copied into an MCP tool response.
+const mcpOutputCap = 48 * 1024
 
 // truncateForEvent keeps timeline payloads small; the full result lives on the
 // action row.

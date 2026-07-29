@@ -342,7 +342,7 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		if err != nil {
 			return nil, err
 		}
-		obj := stripForSnapshot(u)
+		obj := stripForRead(u)
 		if kind == "Secret" {
 			redactSecretData(obj)
 		}
@@ -365,7 +365,7 @@ func (r *Runner) snapshotGlobals(ctx context.Context, log *CaptureLog, report fu
 		}
 		out := make([]starlark.Value, 0, len(list.Items))
 		for i := range list.Items {
-			obj := stripForSnapshot(&list.Items[i])
+			obj := stripForRead(&list.Items[i])
 			if kind == "Secret" {
 				redactSecretData(obj)
 			}
@@ -743,9 +743,24 @@ func (t *stepTracker) step(name string) {
 	t.cur = len(t.states) - 1
 }
 
+// report appends to the current step's detail. Overwriting instead of appending
+// silently threw away every line but the last, which made multi-line read
+// scripts (k8s_list) report a single object. Capped at readOutputCap so the
+// step JSON stays under the control plane's report limit.
 func (t *stepTracker) report(msg string) {
-	if t.cur >= 0 {
-		t.states[t.cur].Detail = msg
+	if t.cur < 0 {
+		return
+	}
+	d := &t.states[t.cur].Detail
+	if *d == "" {
+		*d = msg
+	} else if len(*d) < readOutputCap {
+		*d += "\n" + msg
+	} else {
+		return
+	}
+	if len(*d) > readOutputCap {
+		*d = (*d)[:readOutputCap] + "\n… (truncated)"
 	}
 }
 

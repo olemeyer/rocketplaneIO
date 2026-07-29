@@ -460,9 +460,35 @@ func (s *Store) get(ctx context.Context, params url.Values) ([]byte, error) {
 		return nil, err
 	}
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("clickhouse %d: %s", resp.StatusCode, strings.TrimSpace(string(body[:min(len(body), 4096)])))
+		msg := strings.TrimSpace(string(body[:min(len(body), 4096)]))
+		if tbl, missing := missingTable(msg); missing {
+			return nil, fmt.Errorf("%w: %s — this table is written by Beyla + the OTel collector "+
+				"(deploy/telemetry/); without them this cluster has no traces or RED metrics", ErrTelemetryUnavailable, tbl)
+		}
+		return nil, fmt.Errorf("clickhouse %d: %s", resp.StatusCode, msg)
 	}
 	return body, nil
+}
+
+// ErrTelemetryUnavailable marks "the telemetry pipeline was never installed"
+// as distinct from "the query failed". The eBPF pipeline is optional, so the
+// tables it owns are routinely absent — and an agent handed a raw
+// "clickhouse 404: Code: 60 …" will guess at the cause instead of reporting it.
+var ErrTelemetryUnavailable = errors.New("telemetry pipeline not installed")
+
+// missingTable recognises ClickHouse's UNKNOWN_TABLE (code 60) and returns the
+// identifier it names.
+func missingTable(msg string) (string, bool) {
+	if !strings.Contains(msg, "Code: 60") && !strings.Contains(msg, "UNKNOWN_TABLE") {
+		return "", false
+	}
+	if i := strings.Index(msg, "identifier '"); i >= 0 {
+		rest := msg[i+len("identifier '"):]
+		if j := strings.Index(rest, "'"); j > 0 {
+			return rest[:j], true
+		}
+	}
+	return "unknown table", true
 }
 
 func (s *Store) auth(req *http.Request) {

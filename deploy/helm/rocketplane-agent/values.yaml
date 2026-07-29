@@ -26,14 +26,18 @@ image:
 # -- Optional image pull secrets for private registries.
 imagePullSecrets: []
 
-# Slim defaults — the agent is a lightweight watcher, not a workload.
+# The agent is a watcher, but its informer cache holds every pod, service and
+# workload in the cluster — so memory scales with cluster size, not with load.
+# 128Mi OOM-killed the agent in a crashloop on a 63-namespace / 672-pod cluster,
+# and the only symptom in the UI was a cluster that stayed empty. These defaults
+# cover a few thousand pods; raise memory further for anything larger.
 resources:
   requests:
     cpu: 50m
-    memory: 64Mi
-  limits:
-    cpu: 200m
     memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
 
 serviceAccount:
   # -- Create the ServiceAccount. Disable to reuse an existing one.

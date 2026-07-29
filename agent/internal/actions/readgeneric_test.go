@@ -2,6 +2,7 @@ package actions
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -85,7 +86,9 @@ func TestK8sGetNotFound(t *testing.T) {
 	}
 }
 
-// k8s_list returns a count line and item names.
+// k8s_list reports a JSON header line plus one JSON document per item — and
+// every line survives, which is the point: report() used to overwrite, so a
+// list of N objects arrived as one.
 func TestK8sListConfigMaps(t *testing.T) {
 	r := snapRunner(t,
 		cm("ns", "cm1", map[string]any{"a": "1"}),
@@ -97,9 +100,65 @@ func TestK8sListConfigMaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "2 ConfigMap") {
-		t.Fatalf("expected count in output, got %q", out)
+	var header struct {
+		Kind      string `json:"kind"`
+		Namespace string `json:"namespace"`
+		Count     int    `json:"count"`
 	}
+	lines := jsonLines(t, out)
+	if len(lines) != 3 {
+		t.Fatalf("expected header + 2 items, got %d lines: %q", len(lines), out)
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &header); err != nil {
+		t.Fatalf("header not JSON: %v (%q)", err, lines[0])
+	}
+	if header.Count != 2 || header.Kind != "ConfigMap" || header.Namespace != "ns" {
+		t.Fatalf("unexpected header: %+v", header)
+	}
+	for _, name := range []string{"cm1", "cm2"} {
+		if !strings.Contains(out, `"name":"`+name+`"`) {
+			t.Fatalf("item %s missing from output: %q", name, out)
+		}
+	}
+}
+
+// k8s_get reports the object as JSON, not as a Starlark repr — an MCP client
+// has to be able to parse it.
+func TestK8sGetReportsJSON(t *testing.T) {
+	r := snapRunner(t, cm("ns", "cm1", map[string]any{"a": "1"}))
+	out, err := runStdlib(t, r, "k8s_get", map[string]string{
+		"namespace": "ns", "kind": "ConfigMap", "name": "cm1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := jsonLines(t, out)
+	if len(lines) != 1 {
+		t.Fatalf("expected one JSON line, got %d: %q", len(lines), out)
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &obj); err != nil {
+		t.Fatalf("object not JSON: %v (%q)", err, lines[0])
+	}
+	data, _ := obj["data"].(map[string]any)
+	if obj["kind"] != "ConfigMap" || data["a"] != "1" {
+		t.Fatalf("unexpected payload: %+v", obj)
+	}
+}
+
+// jsonLines strips the "step: …" prefix line the harness emits and returns the
+// remaining report lines.
+func jsonLines(t *testing.T, out string) []string {
+	t.Helper()
+	var lines []string
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "step:") {
+			continue
+		}
+		lines = append(lines, l)
+	}
+	return lines
 }
 
 // redactSecretData replaces every value with a {len, sha256} marker in place.
