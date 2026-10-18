@@ -297,6 +297,10 @@ docker build -t rocketplaneio/agent        -f agent/Dockerfile .
 | Transaction timeline, revert at run and transaction level | |
 | Published multi-arch images (`edge`) + agent install.yaml | |
 
+## ☁️ One-Click Deploy
+
+[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/RocketplaneIO/)
+
 ## Contributing
 
 Reports from real clusters are the contribution we want most —
